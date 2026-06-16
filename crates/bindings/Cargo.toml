@@ -18,7 +18,7 @@ adriane-graph-runtime = { path = "../graph-runtime" }
 adriane-agents-core = { path = "../agents-core" }
 adriane-components = { path = "../components" }
 adriane-llm-gateway = { path = "../llm-gateway" }
-napi = { version = "2", default-features = false, features = ["napi8", "async", "tokio_rt"] }
+napi = { version = "3", default-features = false, features = ["napi8", "async", "tokio_rt"] }
 napi-derive = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
