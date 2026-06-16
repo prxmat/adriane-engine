@@ -1,0 +1,47 @@
+name: rust
+
+# Rust engine check (fmt + clippy -D warnings + cargo test --locked).
+# Self-contained: scoped with native `on.paths` so it runs only when the Rust
+# workspace or its build scripts change, plus on main / nightly / manual dispatch.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "scripts/rust-check.sh"
+      - "scripts/build-napi.sh"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "scripts/rust-check.sh"
+      - "scripts/build-napi.sh"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+  schedule:
+    - cron: "0 3 * * *" # nightly safety net
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      - name: rust fmt, clippy, test
+        run: bash scripts/rust-check.sh

@@ -1,0 +1,30 @@
+{
+  "name": "@adriane/graph-runtime",
+  "private": true,
+  "license": "Apache-2.0",
+  "version": "0.0.1",
+  "description": "[DEPRECATED — execution moved to the Rust engine in crates/; the TS engine remains only as a fallback when the @adriane/napi native addon is absent] Stateful, resumable graph execution engine: registries, checkpointer, event bus, suspend/resume. Superseded by the crates/graph-runtime Rust crate.",
+  "type": "module",
+  "main": "./dist/packages/graph-runtime/src/index.js",
+  "types": "./dist/packages/graph-runtime/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/packages/graph-runtime/src/index.d.ts",
+      "default": "./dist/packages/graph-runtime/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@adriane/agents-core": "workspace:*",
+    "@adriane/graph-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

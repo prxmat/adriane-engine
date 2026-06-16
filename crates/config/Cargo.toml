@@ -1,0 +1,9 @@
+[package]
+name = "adriane-config"
+description = "Rust port of @adriane/config."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

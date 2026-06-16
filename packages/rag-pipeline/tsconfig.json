@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*",
+    "../runnable/src/**/*",
+    "../llm-gateway/src/**/*"
+  ]
+}

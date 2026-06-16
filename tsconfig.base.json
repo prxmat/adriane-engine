@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@adriane/graph-core": ["packages/graph-core/src/index.ts"],
+      "@adriane/graph-runtime": ["packages/graph-runtime/src/index.ts"],
+      "@adriane/graph-sdk": ["packages/graph-sdk/src/index.ts"],
+      "@adriane/agents-core": ["packages/agents-core/src/index.ts"],
+      "@adriane/llm-gateway": ["packages/llm-gateway/src/index.ts"],
+      "@adriane/artifact-store": ["packages/artifact-store/src/index.ts"],
+      "@adriane/approval-engine": ["packages/approval-engine/src/index.ts"],
+      "@adriane/observability": ["packages/observability/src/index.ts"],
+      "@adriane/lang-adriane": ["packages/lang-adriane/src/index.ts"],
+      "@adriane/graph-adriane": ["packages/graph-adriane/src/index.ts"],
+      "@adriane/adriane-cli": ["packages/adriane-cli/src/cli.ts"],
+      "@adriane/contracts": ["packages/contracts/src/index.ts"],
+      "@adriane/config": ["packages/config/src/index.ts"]
+    }
+  }
+}

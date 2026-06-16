@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*",
+    "../artifact-store/src/**/*",
+    "../graph-core/src/index.ts",
+    "../graph-core/src/types.ts",
+    "../graph-core/src/messages.ts",
+    "../graph-core/src/schemas.ts",
+    "../graph-core/src/errors.ts",
+    "../graph-core/src/validator.ts",
+    "../callbacks/src/**/*",
+    "../llm-gateway/src/**/*",
+    "../graph-runtime/src/**/*",
+    "../memory-store/src/**/*",
+    "../config/src/index.ts",
+    "../config/src/errors.ts",
+    "../config/src/env.ts",
+    "../config/src/feature-flags.ts"
+  ]
+}

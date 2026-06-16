@@ -1,0 +1,18 @@
+[package]
+name = "adriane-agents-core"
+description = "Agent patterns over the runtime — ReAct loop, tools, approval gating (Rust port of @adriane/agents-core)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adriane-graph-core = { path = "../graph-core" }
+adriane-graph-runtime = { path = "../graph-runtime" }
+adriane-llm-gateway = { path = "../llm-gateway" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }

@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*",
+    "examples/**/*",
+    "../graph-core/src/**/*",
+    "../graph-runtime/src/**/*",
+    "../memory-store/src/**/*",
+    "../llm-gateway/src/**/*",
+    "../agents-core/src/**/*",
+    "../approval-engine/src/**/*",
+    "../artifact-store/src/**/*",
+    "../callbacks/src/**/*",
+    "../config/src/**/*"
+  ]
+}

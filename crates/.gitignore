@@ -1,0 +1,7 @@
+/target
+Cargo.lock
+*.node
+# napi-rs regenerates a JS loader + d.ts on every `napi build`; we ship the
+# hand-written bindings/index.js + index.d.ts instead, so the generated ones
+# are throwaway.
+bindings/napi-generated.*

@@ -1,0 +1,26 @@
+{
+  "name": "@adriane/rag-pipeline",
+  "private": true,
+  "license": "Apache-2.0",
+  "version": "0.0.1",
+  "description": "[DEPRECATED — execution moved to the Rust engine in crates/; the TS engine remains only as a fallback when the @adriane/napi native addon is absent] RAG building blocks: loaders, splitters, embeddings, vector store, retriever, reranker. Superseded by the crates/rag-pipeline Rust crate.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

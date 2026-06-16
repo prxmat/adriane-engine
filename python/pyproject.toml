@@ -1,0 +1,40 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "adriane"
+version = "0.0.1"
+description = "Python SDK for the Adriane agentic graph runtime — one Rust engine, thin per-language SDKs."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Adriane" }]
+keywords = ["agents", "graph", "llm", "workflow", "agentic", "orchestration", "rust"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Rust",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Libraries"
+]
+
+[project.urls]
+Homepage = "https://github.com/prxmat/adriane-engine"
+Repository = "https://github.com/prxmat/adriane-engine"
+Issues = "https://github.com/prxmat/adriane-engine/issues"
+
+[tool.maturin]
+# The pyo3 extension crate lives in the Cargo workspace; build it by manifest.
+manifest-path = "../crates/py-bindings/Cargo.toml"
+# Place the compiled cdylib as the `adriane.adriane` submodule, matching the
+# `#[pymodule] fn adriane` (PyInit_adriane) that `python/adriane/__init__.py`
+# imports via `from . import adriane as _native`.
+module-name = "adriane.adriane"
+# The pure-Python wrapper package (python/adriane/) is the Python source root.
+python-source = "."
+# abi3-py39 (set in the crate) yields ONE cp39-abi3 wheel that runs on 3.9+.
+features = ["pyo3/extension-module"]

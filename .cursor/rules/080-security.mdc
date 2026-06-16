@@ -1,0 +1,41 @@
+---
+description: Security rules for the monorepo
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# 080 — Security
+
+## Code execution
+
+- `eval` is forbidden everywhere.
+- `new Function` is forbidden everywhere.
+- No dynamic `require` or `import()` of user-supplied strings.
+- Conditions in graph definitions are named strings resolved by `ConditionRegistry` — never evaluated as code.
+
+## Secrets
+
+- No secrets, API keys, or credentials in source code, graph definitions, prompts, artifacts, or logs.
+- Secrets are injected via environment variables only.
+- `.env` files are gitignored.
+
+## Tool permissions
+
+- Every tool must declare its required permissions in its definition.
+- Tools requesting sensitive permissions (file write, network, external API) require explicit allow-listing.
+
+## Human approval
+
+- Any action classified as sensitive (data deletion, external publish, financial, legal) must go through an approval gate.
+- Agents cannot approve their own outputs.
+
+## Logging
+
+- Logs must never contain PII, secrets, or full LLM prompt/completion payloads.
+- Audit events are emitted for: run created, node executed, approval requested, approval granted/rejected, artifact written.
+
+## Prompt injection
+
+- LLM inputs must be sanitized before sending to `llm-gateway`.
+- User-supplied content must be clearly delimited from system instructions in prompts.

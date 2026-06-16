@@ -1,0 +1,4 @@
+packages:
+  - "packages/*"
+  - "crates/bindings"
+  - "plugin/mcp"

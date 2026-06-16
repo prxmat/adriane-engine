@@ -1,0 +1,24 @@
+{
+  "name": "@adriane/napi-linux-x64-gnu",
+  "version": "0.0.1",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "adriane_napi.linux-x64-gnu.node",
+  "files": [
+    "adriane_napi.linux-x64-gnu.node",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "description": "Node bindings to the Adriane Rust engine (graph validation, DSL compile, run/resume/approve).",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "libc": [
+    "glibc"
+  ]
+}

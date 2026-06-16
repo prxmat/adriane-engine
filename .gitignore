@@ -1,0 +1,35 @@
+node_modules
+.pnpm-store
+dist
+.turbo
+.next
+coverage
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Rust / native build artifacts
+target
+*.node
+*.so
+*.dylib
+
+# TS build cache
+*.tsbuildinfo
+
+# Editor / Obsidian local config
+.obsidian/
+
+# Obsidian-only symlinks inside the memory vault (local navigation convenience, not source)
+.claude/memory/docs
+.claude/memory/marketing
+.claude/memory/README.md
+.claude/memory/AGENTS.md
+.claude/memory/CLAUDE.md
+
+# scratch screenshots at repo root
+/run-*.png
+/phase2-*.png
+competitor-profiles/
+.claude/memory/competitor-profiles

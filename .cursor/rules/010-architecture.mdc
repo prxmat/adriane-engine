@@ -1,0 +1,34 @@
+---
+description: Architecture layer rules and allowed dependency directions
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# 010 — Architecture
+
+## Layers
+
+1. **Rust engine** — `crates/*`: the graph execution engine.
+2. **Framework packages** — `packages/*`: the TypeScript/Python SDKs and supporting
+   packages (`graph-core`, `graph-runtime`, `graph-sdk`, `agents-core`, `llm-gateway`,
+   `artifact-store`, `approval-engine`, `observability`, …).
+
+The supported public surface is `@adriane/graph-sdk`. A hosted commercial control
+plane (Adriane Studio) is built on top of this framework in a separate repository
+and is **not** part of this one.
+
+## Allowed dependency directions
+
+- The dependency rule is one-directional: nothing in the framework depends on a
+  consumer of it. Engine packages may depend on other engine packages only.
+- `graph-core` has zero dependencies on any other internal package.
+- `graph-runtime` may depend on `graph-core`, `observability`, `artifact-store`.
+- No circular dependencies between packages.
+
+## Hard rules
+
+- `graph-core` must remain pure: no framework, no React, no DB, no HTTP, no LLM.
+- `graph-runtime` must remain framework-agnostic: no decorators, no React.
+- Consume the engine through `@adriane/graph-sdk`, never a package's internals.
+- ADR required for any decision that changes inter-package dependencies.

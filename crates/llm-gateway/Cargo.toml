@@ -1,0 +1,16 @@
+[package]
+name = "adriane-llm-gateway"
+description = "The only crate allowed to talk to LLM providers (Rust port of @adriane/llm-gateway)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

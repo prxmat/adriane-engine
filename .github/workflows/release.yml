@@ -1,0 +1,184 @@
+# Multi-platform release pipeline — runs on a `v*` tag (PR/branch CI stays in ci.yml).
+#
+# Publishes, in order:
+#   1. @adriane/napi-<triple> per-platform native packages + @adriane/napi  (npm)
+#   2. @adriane/graph-sdk self-contained bundle                              (npm)
+#   3. abi3 Python wheels (one cp39-abi3 per platform)                       (PyPI)
+#
+# Required repository secrets:
+#   NPM_TOKEN        — npm automation token (publish access to the @adriane scope)
+#   PYPI_API_TOKEN   — PyPI API token for the `adriane` project
+#
+# NOTE: the per-step build commands (`napi build --platform --release`,
+# `maturin build --release`) are the same ones validated locally on darwin-arm64.
+# The GitHub Actions orchestration (cross-targets, napi prepublish, artifact
+# plumbing) has NOT run yet — validate it against a pre-release tag first, e.g.
+# `git tag v0.0.1-rc.1 && git push origin v0.0.1-rc.1`. See RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # 0. Fail fast if the tag does not match the version pinned in the manifests, so a
+  #    forgotten lockstep bump aborts the release instead of silently publishing 0.0.1.
+  guard:
+    name: verify tag matches manifest versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert tag == manifest versions
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Not a v* tag (manual dispatch) — skipping version guard."
+            exit 0
+          fi
+          TAG="${GITHUB_REF_NAME#v}"
+          fail=0
+          for f in packages/graph-sdk/package.json crates/bindings/package.json; do
+            v=$(node -p "require('./$f').version")
+            if [[ "$v" != "$TAG" ]]; then echo "::error::$f version $v != tag $TAG"; fail=1; fi
+          done
+          pyv=$(grep -E '^version = ' python/pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [[ "$pyv" != "$TAG" ]]; then echo "::error::python/pyproject.toml version $pyv != tag $TAG"; fail=1; fi
+          exit $fail
+
+  # 1a. Build the native addon for every target → upload each .node as an artifact.
+  napi-build:
+    name: napi · ${{ matrix.target }}
+    needs: guard
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: macos-latest, target: aarch64-apple-darwin }
+          - { host: macos-13, target: x86_64-apple-darwin }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu, zig: true }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: ${{ matrix.target }}
+      - if: ${{ matrix.zig }}
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+      - run: pnpm install --frozen-lockfile
+      - name: napi build (release, per-platform)
+        working-directory: crates/bindings
+        run: >
+          pnpm exec napi build --platform --release
+          --target ${{ matrix.target }}
+          ${{ matrix.zig && '--zig' || '' }}
+          --js napi-generated.js --dts napi-generated.d.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.target }}
+          path: crates/bindings/*.node
+          if-no-files-found: error
+
+  # 1b. + 2. Assemble the per-platform packages, publish @adriane/napi, then the
+  #          self-contained @adriane/graph-sdk bundle (which references napi optionally).
+  npm-publish:
+    name: publish npm
+    needs: napi-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          path: crates/bindings/artifacts-dl
+          pattern: napi-*
+          merge-multiple: false
+      - name: Distribute .node into the per-platform npm/ dirs
+        working-directory: crates/bindings
+        run: pnpm exec napi artifacts -d artifacts-dl
+      - name: Publish @adriane/napi-<triple> packages + update optionalDependencies
+        working-directory: crates/bindings
+        run: pnpm exec napi prepublish -t npm --skip-gh-release
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish @adriane/napi (main package)
+        run: pnpm --filter @adriane/napi publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Build + publish @adriane/graph-sdk bundle
+        run: |
+          pnpm --filter @adriane/graph-sdk build
+          pnpm --filter @adriane/graph-sdk publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # 3a. Build one abi3 wheel per platform (cp39-abi3 covers CPython 3.9+).
+  python-wheels:
+    name: wheels · ${{ matrix.target }}
+    needs: guard
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: macos-latest, target: aarch64-apple-darwin }
+          - { host: macos-13, target: x86_64-apple-darwin }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - name: maturin build (release, abi3)
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          target: ${{ matrix.target }}
+          manylinux: auto
+          working-directory: python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: python/dist/*.whl
+          if-no-files-found: error
+
+  # 3b. Upload the wheels to PyPI. Wheels-only (no sdist): the pyo3 crate's path
+  #     dependencies live outside the pyproject dir (crates/*), which `maturin sdist`
+  #     cannot package into a rebuildable source tarball — the wheel matrix above
+  #     covers the supported platforms instead.
+  pypi-publish:
+    name: publish PyPI
+    needs: python-wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install --upgrade twine
+      - name: Upload wheels to PyPI
+        run: twine upload --skip-existing dist/*.whl
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}

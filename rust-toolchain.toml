@@ -1,0 +1,6 @@
+[toolchain]
+# Pin the exact toolchain so local dev, CI lint/test, and release native builds all
+# use the same Rust. Per-target cross-compilation targets are added by the release
+# workflow per matrix job (not here), so local dev only needs the host target.
+channel = "1.96.0"
+components = ["clippy", "rustfmt"]

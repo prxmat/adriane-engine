@@ -1,0 +1,43 @@
+{
+  "name": "@adriane/napi",
+  "version": "0.0.1",
+  "license": "Apache-2.0",
+  "description": "Node bindings to the Adriane Rust engine (graph validation, DSL compile, run/resume/approve).",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "adriane_napi.*.node",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "napi": {
+    "name": "adriane_napi",
+    "package": {
+      "name": "@adriane/napi"
+    },
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
+  "scripts": {
+    "build:napi": "napi build --platform --release --js napi-generated.js --dts napi-generated.d.ts",
+    "build:napi:debug": "napi build --platform --js napi-generated.js --dts napi-generated.d.ts",
+    "artifacts": "napi artifacts",
+    "prepublish:napi": "napi prepublish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  }
+}

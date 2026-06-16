@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["graph-core", "graph-runtime", "approval-engine", "llm-gateway", "agents-core", "components", "graph-adriane", "memory-store", "artifact-store", "callbacks", "lang-adriane", "observability", "runnable", "config", "rag-pipeline", "adriane-cli", "py-bindings", "bindings"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

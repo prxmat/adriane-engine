@@ -1,0 +1,34 @@
+{
+  "name": "adriane",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@10.11.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "rust:check": "bash scripts/rust-check.sh",
+    "rust:build": "bash scripts/rust-check.sh build",
+    "rust:test": "bash scripts/rust-check.sh test",
+    "rust:lint": "bash scripts/rust-check.sh lint",
+    "rust:fmt": "bash scripts/rust-check.sh fmt",
+    "oss:reserve-names": "bash scripts/reserve-oss-names.sh",
+    "napi:build": "bash scripts/build-napi.sh",
+    "py:build": "bash scripts/build-py.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.18",
+    "@typescript-eslint/eslint-plugin": "^8.33.1",
+    "@typescript-eslint/parser": "^8.33.1",
+    "eslint": "^9.26.0",
+    "eslint-config-prettier": "^10.1.2",
+    "prettier": "^3.5.3",
+    "turbo": "^2.5.2",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

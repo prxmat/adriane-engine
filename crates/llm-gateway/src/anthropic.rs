@@ -1,0 +1,831 @@
+//! Anthropic provider adapter — the Rust port of `@adriane/llm-gateway`'s
+//! `anthropic-adapter.ts`, behavior-for-behavior.
+//!
+//! The adapter talks to the Messages API through a single seam, [`AnthropicPort`],
+//! so the cache + accounting logic is fully covered by tests without a network
+//! call or an API key. [`HttpAnthropicPort`] is the real reqwest-based
+//! implementation behind the same trait.
+//!
+//! Request assembly mirrors the TS adapter exactly:
+//! - the cacheable prefix is `tools` then `system` (Anthropic render order); a
+//!   breakpoint on the **last** tool caches the whole deterministic tool list and
+//!   one on the single system block caches the system prefix,
+//! - `req.system` plus any system-role messages are folded into one system block
+//!   (joined with a blank line), and system-role messages are removed from the
+//!   message list,
+//! - a model not starting with `claude-` resolves to the default model,
+//! - sampling params (`temperature`, …) are intentionally dropped — recent Opus
+//!   models reject them.
+//!
+//! Deviation from TS (deferred, by design): the Rust [`LlmMessage`] content is a
+//! plain `String` today, so structured content blocks (`tool_use` / `tool_result`
+//! turns) and streaming are not ported yet. They land when the shared types grow
+//! content blocks.
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+
+use crate::error::LlmError;
+use crate::gateway::LlmProviderAdapter;
+use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage};
+
+/// Model used when the request does not name a Claude model.
+pub const DEFAULT_MODEL: &str = "claude-opus-4-8";
+/// Default `max_tokens` for non-streaming completions (mirrors the TS adapter).
+pub const DEFAULT_MAX_TOKENS: u32 = 16000;
+
+const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+// ---------------------------------------------------------------------------
+// Provider-shaped request (the cache seam)
+// ---------------------------------------------------------------------------
+
+/// One system text block. `cacheable: true` becomes a `cache_control`
+/// breakpoint on the wire.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemBlock {
+    pub text: String,
+    pub cacheable: bool,
+}
+
+/// One tool definition. Only the last tool in the list carries
+/// `cacheable: true` — that single breakpoint caches the whole tool list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolParam {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub input_schema: Value,
+    pub cacheable: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnthropicRole {
+    User,
+    Assistant,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AnthropicMessage {
+    pub role: AnthropicRole,
+    pub content: String,
+}
+
+/// Provider-shaped request the adapter assembles. This is the cache seam: the
+/// `system` and `tools` blocks carry the cache breakpoints and must stay
+/// byte-stable across calls. The HTTP port translates it into the wire body;
+/// tests fake the port and assert on this shape directly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnthropicCreateParams {
+    pub model: String,
+    pub max_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<Vec<SystemBlock>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolParam>>,
+    pub messages: Vec<AnthropicMessage>,
+}
+
+// ---------------------------------------------------------------------------
+// Raw wire response (snake_case, matches Anthropic's real JSON)
+// ---------------------------------------------------------------------------
+
+/// One content block of the raw Messages API response. Only the fields the
+/// adapter reads; everything is optional except the discriminant.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct ContentBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub input: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct AnthropicUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u32>,
+}
+
+/// Structural subset of the Messages API response the adapter actually reads.
+/// Deserializes straight from Anthropic's wire JSON (snake_case).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct AnthropicRawResponse {
+    pub content: Vec<ContentBlock>,
+    #[serde(default)]
+    pub stop_reason: Option<String>,
+    pub usage: AnthropicUsage,
+}
+
+// ---------------------------------------------------------------------------
+// Port seam
+// ---------------------------------------------------------------------------
+
+/// The only seam onto the real Anthropic API. Production uses
+/// [`HttpAnthropicPort`]; tests supply a fake so no network is ever touched.
+#[async_trait]
+pub trait AnthropicPort: Send + Sync {
+    async fn create(&self, params: AnthropicCreateParams)
+        -> Result<AnthropicRawResponse, LlmError>;
+}
+
+// ---------------------------------------------------------------------------
+// Adapter
+// ---------------------------------------------------------------------------
+
+pub struct AnthropicAdapter {
+    port: Box<dyn AnthropicPort>,
+    default_model: String,
+}
+
+impl AnthropicAdapter {
+    /// Build an adapter over the given port with the standard default model.
+    pub fn new(port: Box<dyn AnthropicPort>) -> Self {
+        Self::with_default_model(port, DEFAULT_MODEL)
+    }
+
+    /// Build an adapter over the given port, overriding the fallback model used
+    /// when a request names a non-Claude model.
+    pub fn with_default_model(
+        port: Box<dyn AnthropicPort>,
+        default_model: impl Into<String>,
+    ) -> Self {
+        AnthropicAdapter {
+            port,
+            default_model: default_model.into(),
+        }
+    }
+
+    /// Convenience constructor wiring the real HTTP port from
+    /// `ANTHROPIC_API_KEY`. Errors when the variable is unset.
+    pub fn from_env() -> Result<Self, LlmError> {
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .map_err(|_| LlmError::Provider("ANTHROPIC_API_KEY is not set".to_owned()))?;
+        Ok(Self::new(Box::new(HttpAnthropicPort::new(api_key))))
+    }
+
+    /// Assemble the provider request. See the module docs for the cache layout.
+    /// Sampling params are intentionally dropped; no date/timestamp is added.
+    fn build_params(&self, req: &LlmRequest) -> AnthropicCreateParams {
+        let system_text = collect_system(req);
+
+        let messages = req
+            .messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .map(|m| AnthropicMessage {
+                role: if m.role == "assistant" {
+                    AnthropicRole::Assistant
+                } else {
+                    AnthropicRole::User
+                },
+                content: m.content.clone(),
+            })
+            .collect();
+
+        let system = if system_text.is_empty() {
+            None
+        } else {
+            Some(vec![SystemBlock {
+                text: system_text,
+                cacheable: true,
+            }])
+        };
+
+        let tools = match &req.tools {
+            Some(tools) if !tools.is_empty() => {
+                let last = tools.len() - 1;
+                Some(
+                    tools
+                        .iter()
+                        .enumerate()
+                        .map(|(index, tool)| ToolParam {
+                            name: tool.name.clone(),
+                            description: tool.description.clone(),
+                            input_schema: tool.input_schema.clone(),
+                            // Breakpoint on the last tool caches the whole list.
+                            cacheable: index == last,
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        };
+
+        AnthropicCreateParams {
+            model: self.resolve_model(&req.model),
+            max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            system,
+            tools,
+            messages,
+        }
+    }
+
+    fn resolve_model(&self, model: &str) -> String {
+        if model.starts_with("claude-") {
+            model.to_owned()
+        } else {
+            self.default_model.clone()
+        }
+    }
+}
+
+/// `req.system` plus any system-role messages, joined with a blank line.
+fn collect_system(req: &LlmRequest) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(system) = &req.system {
+        if !system.is_empty() {
+            parts.push(system);
+        }
+    }
+    for message in &req.messages {
+        if message.role == "system" {
+            parts.push(&message.content);
+        }
+    }
+    parts.join("\n\n")
+}
+
+fn to_response(request: &LlmRequest, model: String, raw: AnthropicRawResponse) -> LlmResponse {
+    let content: String = raw
+        .content
+        .iter()
+        .filter(|block| block.block_type == "text")
+        .map(|block| block.text.clone().unwrap_or_default())
+        .collect();
+
+    let tool_calls: Vec<LlmToolCall> = raw
+        .content
+        .into_iter()
+        .filter(|block| block.block_type == "tool_use")
+        .map(|block| LlmToolCall {
+            id: block.id.unwrap_or_default(),
+            name: block.name.unwrap_or_default(),
+            input: block.input.unwrap_or_else(|| Value::Object(Map::new())),
+        })
+        .collect();
+
+    LlmResponse {
+        content,
+        tool_calls: if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        },
+        stop_reason: raw.stop_reason,
+        usage: LlmUsage {
+            prompt_tokens: raw.usage.input_tokens,
+            completion_tokens: raw.usage.output_tokens,
+            cache_read_tokens: Some(raw.usage.cache_read_input_tokens.unwrap_or(0)),
+            cache_write_tokens: Some(raw.usage.cache_creation_input_tokens.unwrap_or(0)),
+        },
+        model,
+        provider: request.provider,
+    }
+}
+
+#[async_trait]
+impl LlmProviderAdapter for AnthropicAdapter {
+    fn provider(&self) -> LlmProvider {
+        LlmProvider::Anthropic
+    }
+
+    async fn complete(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        let params = self.build_params(&request);
+        let model = params.model.clone();
+        let raw = self.port.create(params).await?;
+        Ok(to_response(&request, model, raw))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP port (the only code that touches the network)
+// ---------------------------------------------------------------------------
+
+/// Real [`AnthropicPort`] over `POST /v1/messages`. Never exercised in tests —
+/// the pure [`build_request_body`] carries the wire-shape logic and is
+/// unit-tested instead.
+pub struct HttpAnthropicPort {
+    client: reqwest::Client,
+    api_key: String,
+    base_url: String,
+}
+
+impl HttpAnthropicPort {
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_base_url(api_key, ANTHROPIC_BASE_URL)
+    }
+
+    /// Override the API host (e.g. a local stub during manual testing).
+    pub fn with_base_url(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
+        HttpAnthropicPort {
+            client: reqwest::Client::new(),
+            api_key: api_key.into(),
+            base_url: base_url.into(),
+        }
+    }
+}
+
+/// Build the Messages API request body. `cacheable: true` becomes
+/// `"cache_control": {"type": "ephemeral"}` on that block; tool `input_schema`
+/// is emitted with `"type": "object"` merged in (schema keys win), exactly like
+/// the TS port.
+pub fn build_request_body(params: &AnthropicCreateParams) -> Value {
+    let mut body = Map::new();
+    body.insert("model".to_owned(), json!(params.model));
+    body.insert("max_tokens".to_owned(), json!(params.max_tokens));
+    body.insert(
+        "messages".to_owned(),
+        Value::Array(
+            params
+                .messages
+                .iter()
+                .map(|m| json!({ "role": m.role, "content": m.content }))
+                .collect(),
+        ),
+    );
+
+    if let Some(system) = &params.system {
+        body.insert(
+            "system".to_owned(),
+            Value::Array(
+                system
+                    .iter()
+                    .map(|block| {
+                        let mut wire = Map::new();
+                        wire.insert("type".to_owned(), json!("text"));
+                        wire.insert("text".to_owned(), json!(block.text));
+                        if block.cacheable {
+                            wire.insert("cache_control".to_owned(), json!({ "type": "ephemeral" }));
+                        }
+                        Value::Object(wire)
+                    })
+                    .collect(),
+            ),
+        );
+    }
+
+    if let Some(tools) = &params.tools {
+        body.insert(
+            "tools".to_owned(),
+            Value::Array(
+                tools
+                    .iter()
+                    .map(|tool| {
+                        let mut schema = Map::new();
+                        schema.insert("type".to_owned(), json!("object"));
+                        if let Value::Object(map) = &tool.input_schema {
+                            for (key, value) in map {
+                                schema.insert(key.clone(), value.clone());
+                            }
+                        }
+                        let mut wire = Map::new();
+                        wire.insert("name".to_owned(), json!(tool.name));
+                        if let Some(description) = &tool.description {
+                            wire.insert("description".to_owned(), json!(description));
+                        }
+                        wire.insert("input_schema".to_owned(), Value::Object(schema));
+                        if tool.cacheable {
+                            wire.insert("cache_control".to_owned(), json!({ "type": "ephemeral" }));
+                        }
+                        Value::Object(wire)
+                    })
+                    .collect(),
+            ),
+        );
+    }
+
+    Value::Object(body)
+}
+
+#[async_trait]
+impl AnthropicPort for HttpAnthropicPort {
+    async fn create(
+        &self,
+        params: AnthropicCreateParams,
+    ) -> Result<AnthropicRawResponse, LlmError> {
+        let body = build_request_body(&params);
+        let response = self
+            .client
+            .post(format!("{}/v1/messages", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| LlmError::Provider(format!("anthropic request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider(format!(
+                "anthropic returned {status}: {text}"
+            )));
+        }
+
+        response
+            .json::<AnthropicRawResponse>()
+            .await
+            .map_err(|err| LlmError::Provider(format!("anthropic response decode failed: {err}")))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests (mirror the TS suite — no network, fake recording port)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::gateway::{DefaultLlmGateway, LlmGateway};
+    use crate::types::{LlmMessage, LlmToolDef};
+
+    struct RecordingPort {
+        calls: Arc<Mutex<Vec<AnthropicCreateParams>>>,
+        response: AnthropicRawResponse,
+    }
+
+    #[async_trait]
+    impl AnthropicPort for RecordingPort {
+        async fn create(
+            &self,
+            params: AnthropicCreateParams,
+        ) -> Result<AnthropicRawResponse, LlmError> {
+            self.calls.lock().unwrap().push(params);
+            Ok(self.response.clone())
+        }
+    }
+
+    /// Captures the params the adapter builds and returns a canned response.
+    fn recording_port(
+        response: AnthropicRawResponse,
+    ) -> (
+        Box<dyn AnthropicPort>,
+        Arc<Mutex<Vec<AnthropicCreateParams>>>,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let port = RecordingPort {
+            calls: Arc::clone(&calls),
+            response,
+        };
+        (Box::new(port), calls)
+    }
+
+    fn text_response() -> AnthropicRawResponse {
+        AnthropicRawResponse {
+            content: vec![ContentBlock {
+                block_type: "text".to_owned(),
+                text: Some("hello".to_owned()),
+                ..ContentBlock::default()
+            }],
+            stop_reason: None,
+            usage: AnthropicUsage {
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_read_input_tokens: Some(0),
+                cache_creation_input_tokens: Some(0),
+            },
+        }
+    }
+
+    fn base_request() -> LlmRequest {
+        LlmRequest {
+            provider: LlmProvider::Anthropic,
+            model: "claude-opus-4-8".to_owned(),
+            messages: vec![LlmMessage {
+                role: "user".to_owned(),
+                content: "Hi".to_owned(),
+            }],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn marks_the_system_block_and_the_last_tool_as_cacheable() {
+        let (port, calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::new(port);
+
+        let request = LlmRequest {
+            system: Some("You are a helpful agent.".to_owned()),
+            tools: Some(vec![
+                LlmToolDef {
+                    name: "search".to_owned(),
+                    description: None,
+                    input_schema: json!({ "query": { "type": "string" } }),
+                },
+                LlmToolDef {
+                    name: "fetch".to_owned(),
+                    description: None,
+                    input_schema: json!({ "url": { "type": "string" } }),
+                },
+            ]),
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        let params = &calls[0];
+        let system = params.system.as_ref().unwrap();
+        assert!(system[0].cacheable);
+        // Only the last tool carries the breakpoint — it caches the whole list.
+        let flags: Vec<bool> = params
+            .tools
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|t| t.cacheable)
+            .collect();
+        assert_eq!(flags, vec![false, true]);
+    }
+
+    #[tokio::test]
+    async fn maps_usage_including_cache_read_and_write_tokens() {
+        let (port, _calls) = recording_port(AnthropicRawResponse {
+            usage: AnthropicUsage {
+                input_tokens: 12,
+                output_tokens: 8,
+                cache_read_input_tokens: Some(2048),
+                cache_creation_input_tokens: Some(512),
+            },
+            ..text_response()
+        });
+        let adapter = AnthropicAdapter::new(port);
+
+        let result = adapter.complete(base_request()).await.unwrap();
+
+        assert_eq!(
+            result.usage,
+            LlmUsage {
+                prompt_tokens: 12,
+                completion_tokens: 8,
+                cache_read_tokens: Some(2048),
+                cache_write_tokens: Some(512),
+            }
+        );
+        assert_eq!(result.content, "hello");
+        assert_eq!(result.provider, LlmProvider::Anthropic);
+    }
+
+    #[tokio::test]
+    async fn treats_missing_cache_usage_as_zero() {
+        let (port, _calls) = recording_port(AnthropicRawResponse {
+            usage: AnthropicUsage {
+                input_tokens: 5,
+                output_tokens: 5,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
+            ..text_response()
+        });
+        let adapter = AnthropicAdapter::new(port);
+
+        let result = adapter.complete(base_request()).await.unwrap();
+
+        assert_eq!(result.usage.cache_read_tokens, Some(0));
+        assert_eq!(result.usage.cache_write_tokens, Some(0));
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_the_default_model_when_the_request_model_is_a_placeholder() {
+        let (port, calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::with_default_model(port, "claude-opus-4-8");
+
+        let request = LlmRequest {
+            model: "react-agent".to_owned(),
+            ..base_request()
+        };
+        let result = adapter.complete(request).await.unwrap();
+
+        assert_eq!(calls.lock().unwrap()[0].model, "claude-opus-4-8");
+        assert_eq!(result.model, "claude-opus-4-8");
+    }
+
+    #[tokio::test]
+    async fn keeps_an_explicit_claude_model_and_folds_system_messages_into_the_system_prefix() {
+        let (port, calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::new(port);
+
+        let request = LlmRequest {
+            model: "claude-haiku-4-5".to_owned(),
+            system: Some("Base.".to_owned()),
+            messages: vec![
+                LlmMessage {
+                    role: "system".to_owned(),
+                    content: "Extra rule.".to_owned(),
+                },
+                LlmMessage {
+                    role: "user".to_owned(),
+                    content: "Go".to_owned(),
+                },
+            ],
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        let params = &calls[0];
+        assert_eq!(params.model, "claude-haiku-4-5");
+        assert_eq!(
+            params.system.as_ref().unwrap()[0].text,
+            "Base.\n\nExtra rule."
+        );
+        // System-role messages are pulled out of the message list.
+        assert_eq!(
+            params.messages,
+            vec![AnthropicMessage {
+                role: AnthropicRole::User,
+                content: "Go".to_owned(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn surfaces_tool_use_blocks_as_structured_tool_calls_and_the_stop_reason() {
+        let (port, _calls) = recording_port(AnthropicRawResponse {
+            stop_reason: Some("tool_use".to_owned()),
+            content: vec![
+                ContentBlock {
+                    block_type: "text".to_owned(),
+                    text: Some("Let me search.".to_owned()),
+                    ..ContentBlock::default()
+                },
+                ContentBlock {
+                    block_type: "tool_use".to_owned(),
+                    id: Some("tu_1".to_owned()),
+                    name: Some("search".to_owned()),
+                    input: Some(json!({ "query": "adriane" })),
+                    ..ContentBlock::default()
+                },
+            ],
+            ..text_response()
+        });
+        let adapter = AnthropicAdapter::new(port);
+
+        let response = adapter.complete(base_request()).await.unwrap();
+
+        assert_eq!(response.content, "Let me search.");
+        assert_eq!(response.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(
+            response.tool_calls,
+            Some(vec![LlmToolCall {
+                id: "tu_1".to_owned(),
+                name: "search".to_owned(),
+                input: json!({ "query": "adriane" }),
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn omits_tool_calls_when_the_model_returns_only_text() {
+        let (port, _calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::new(port);
+
+        let response = adapter.complete(base_request()).await.unwrap();
+
+        assert_eq!(response.tool_calls, None);
+    }
+
+    #[tokio::test]
+    async fn uses_the_default_max_tokens_unless_the_request_overrides_it() {
+        let (port, calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::new(port);
+
+        adapter.complete(base_request()).await.unwrap();
+        let request = LlmRequest {
+            max_tokens: Some(512),
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls[0].max_tokens, DEFAULT_MAX_TOKENS);
+        assert_eq!(calls[1].max_tokens, 512);
+    }
+
+    #[tokio::test]
+    async fn integrates_through_the_default_gateway_routing() {
+        let (port, _calls) = recording_port(text_response());
+        let mut gateway = DefaultLlmGateway::new();
+        gateway.register_adapter(Box::new(AnthropicAdapter::new(port)));
+
+        let result = gateway.complete(base_request()).await.unwrap();
+
+        assert_eq!(result.content, "hello");
+        assert_eq!(result.provider, LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn deserializes_the_real_wire_response_shape() {
+        let raw: AnthropicRawResponse = serde_json::from_str(
+            r#"{
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [
+                    {"type": "text", "text": "Hi there."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "x"}}
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 4,
+                    "cache_read_input_tokens": 1024,
+                    "cache_creation_input_tokens": 0
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(raw.content.len(), 2);
+        assert_eq!(raw.content[0].text.as_deref(), Some("Hi there."));
+        assert_eq!(raw.content[1].block_type, "tool_use");
+        assert_eq!(raw.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(raw.usage.cache_read_input_tokens, Some(1024));
+    }
+
+    #[test]
+    fn builds_the_wire_body_with_cache_control_on_system_and_last_tool_only() {
+        let params = AnthropicCreateParams {
+            model: "claude-opus-4-8".to_owned(),
+            max_tokens: 16000,
+            system: Some(vec![SystemBlock {
+                text: "Be helpful.".to_owned(),
+                cacheable: true,
+            }]),
+            tools: Some(vec![
+                ToolParam {
+                    name: "search".to_owned(),
+                    description: Some("Search things".to_owned()),
+                    input_schema: json!({ "properties": { "query": { "type": "string" } } }),
+                    cacheable: false,
+                },
+                ToolParam {
+                    name: "fetch".to_owned(),
+                    description: None,
+                    input_schema: json!({ "type": "custom", "properties": {} }),
+                    cacheable: true,
+                },
+            ]),
+            messages: vec![AnthropicMessage {
+                role: AnthropicRole::User,
+                content: "Hi".to_owned(),
+            }],
+        };
+
+        let body = build_request_body(&params);
+
+        assert_eq!(body["model"], json!("claude-opus-4-8"));
+        assert_eq!(body["max_tokens"], json!(16000));
+        assert_eq!(
+            body["messages"],
+            json!([{ "role": "user", "content": "Hi" }])
+        );
+
+        // System block carries the ephemeral breakpoint.
+        assert_eq!(
+            body["system"],
+            json!([{
+                "type": "text",
+                "text": "Be helpful.",
+                "cache_control": { "type": "ephemeral" }
+            }])
+        );
+
+        // input_schema gets "type": "object" merged in (schema keys win); only
+        // the last tool carries cache_control.
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["input_schema"]["type"], json!("object"));
+        assert_eq!(
+            tools[0]["input_schema"]["properties"]["query"]["type"],
+            json!("string")
+        );
+        assert_eq!(tools[0]["description"], json!("Search things"));
+        assert!(tools[0].get("cache_control").is_none());
+        assert_eq!(tools[1]["input_schema"]["type"], json!("custom"));
+        assert!(tools[1].get("description").is_none());
+        assert_eq!(tools[1]["cache_control"], json!({ "type": "ephemeral" }));
+    }
+}

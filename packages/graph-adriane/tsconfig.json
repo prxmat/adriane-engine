@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*",
+    "../graph-core/src/index.ts",
+    "../graph-core/src/types.ts",
+    "../graph-core/src/messages.ts",
+    "../graph-core/src/schemas.ts",
+    "../graph-core/src/errors.ts",
+    "../graph-core/src/validator.ts"
+  ]
+}

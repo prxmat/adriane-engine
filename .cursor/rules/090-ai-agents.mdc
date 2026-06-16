@@ -1,0 +1,36 @@
+---
+description: Rules for AI agents in packages/agents-core and any agent implementation
+globs:
+  - "packages/agents-core/**/*",
+  - "packages/llm-gateway/**/*"
+alwaysApply: true
+---
+
+# 090 — AI Agents
+
+## LLM access
+
+- All LLM calls must go through `packages/llm-gateway`. No direct `openai`, `anthropic`, or `mistral` SDK calls outside of `llm-gateway`.
+- `llm-gateway` is the only package that imports provider SDKs.
+
+## Prompts
+
+- Prompts are versioned artifacts stored in the artifact store or a dedicated prompt registry.
+- No hardcoded prompt strings in agent implementations — reference a prompt by ID and version.
+
+## Outputs
+
+- Agent outputs must be structured and validated with a Zod schema before use.
+- `AgentResult` shape: `{ artifacts: Artifact[]; blockers: Blocker[]; approvalRequests: ApprovalRequest[]; confidence: number; reasoning: string }`.
+
+## Safety
+
+- Agents must not bypass approval gates.
+- Agents must not self-approve their own outputs.
+- Agents must not make authoritative claims in domains requiring human judgment: legal, medical, security policy, privacy decisions.
+- Any output flagged with `requiresHumanReview: true` must be routed to an approval gate before downstream nodes consume it.
+
+## Prompt injection defense
+
+- User-supplied content passed to an agent must be wrapped in explicit delimiters in the prompt template.
+- Agent implementations must document which parts of their prompt are user-controlled.

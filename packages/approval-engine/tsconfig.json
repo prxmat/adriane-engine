@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*",
+    "../artifact-store/src/**/*",
+    "../graph-core/src/**/*",
+    "../config/src/index.ts",
+    "../config/src/errors.ts",
+    "../config/src/env.ts",
+    "../config/src/feature-flags.ts"
+  ]
+}

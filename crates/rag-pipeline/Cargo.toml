@@ -1,0 +1,18 @@
+[package]
+name = "adriane-rag-pipeline"
+description = "Rust port of @adriane/rag-pipeline."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+futures = "0.3"
+adriane-runnable = { path = "../runnable" }
+adriane-llm-gateway = { path = "../llm-gateway" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

@@ -1,0 +1,28 @@
+{
+  "name": "@adriane/adriane-cli",
+  "private": true,
+  "license": "Apache-2.0",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/src/cli.js",
+  "types": "./dist/src/cli.d.ts",
+  "bin": {
+    "adriane": "./bin/adriane.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/make-bin.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@adriane/graph-adriane": "workspace:*",
+    "@adriane/graph-runtime": "workspace:*",
+    "@adriane/lang-adriane": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}
