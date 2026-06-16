@@ -11,6 +11,7 @@
     "test": "turbo run test",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
+    "test:coverage": "vitest run --coverage",
     "rust:check": "bash scripts/rust-check.sh",
     "rust:build": "bash scripts/rust-check.sh build",
     "rust:test": "bash scripts/rust-check.sh test",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.18",
+    "@vitest/coverage-v8": "^2.1.9",
     "@typescript-eslint/eslint-plugin": "^8.33.1",
     "@typescript-eslint/parser": "^8.33.1",
     "eslint": "^9.26.0",

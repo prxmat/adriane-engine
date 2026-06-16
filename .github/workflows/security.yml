@@ -1,0 +1,55 @@
+name: security
+
+# Dependency vulnerability scanning across both ecosystems.
+#   deps-js     — pnpm audit (npm advisories) at --audit-level=high
+#   cargo-audit — RustSec advisories against the flat crates/ workspace lockfile
+#
+# Runs on PRs, pushes to main, a weekly schedule (drift / newly-disclosed CVEs),
+# and manual dispatch. Read-only — never mutates the repo.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  deps-js:
+    name: pnpm audit (js)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm audit (high+)
+        run: pnpm audit --audit-level=high
+
+  cargo-audit:
+    name: cargo audit (rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit (flat crates/ workspace)
+        working-directory: crates
+        run: cargo audit

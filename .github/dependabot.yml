@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # JavaScript/TypeScript dependencies (pnpm workspace, manifest at repo root).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  # Rust crates — flat workspace lives in crates/ (NOT engine/crates).
+  - package-ecosystem: cargo
+    directory: "/crates"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
