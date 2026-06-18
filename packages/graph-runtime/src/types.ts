@@ -1,4 +1,4 @@
-import type { ChannelsSchema, GraphState, NodeId, RunId } from "@adriane/graph-core";
+import type { ChannelsSchema, GraphState, NodeId, RunId } from "@adriane-ai/graph-core";
 
 export type CheckpointId = string & { readonly __brand: "CheckpointId" };
 

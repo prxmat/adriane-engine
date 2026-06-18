@@ -1,6 +1,6 @@
 [package]
 name = "adriane-artifact-store"
-description = "Versioned artifact store (Rust port of @adriane/artifact-store)."
+description = "Versioned artifact store (Rust port of @adriane-ai/artifact-store)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

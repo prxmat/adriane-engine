@@ -2,7 +2,7 @@
 
 > **État pre-release.** Le moteur s'installe **depuis les sources** (monorepo pnpm + crates Rust). Aucun paquet npm/crate publié n'est requis. La compilation de l'addon natif est optionnelle (voir [Pont napi Rust ↔ TS](#pont-napi-rust--ts)).
 
-Adriane est un **runtime de graphes d'agents** : exécution **déterministe**, **resumable** (reprise depuis le dernier checkpoint) et **observable** (un événement par transition de cycle de vie de nœud). Le moteur est écrit en Rust (chemin de production) avec un **SDK TypeScript** comme porte d'entrée publique (`@adriane/graph-sdk`). Une implémentation TypeScript équivalente du runtime sert de **fallback** quand l'addon natif est absent.
+Adriane est un **runtime de graphes d'agents** : exécution **déterministe**, **resumable** (reprise depuis le dernier checkpoint) et **observable** (un événement par transition de cycle de vie de nœud). Le moteur est écrit en Rust (chemin de production) avec un **SDK TypeScript** comme porte d'entrée publique (`@adriane-ai/graph-sdk`). Une implémentation TypeScript équivalente du runtime sert de **fallback** quand l'addon natif est absent.
 
 ---
 
@@ -191,7 +191,7 @@ Ordre de résolution (premier trouvé l'emporte) :
 
 1. `./adriane_napi.node` — build local de dev (`scripts/build-napi.sh`).
 2. `./adriane_napi.<triple>.node` — build local par plateforme.
-3. `@adriane/napi-<triple>` — paquet prebuilt par plateforme.
+3. `@adriane-ai/napi-<triple>` — paquet prebuilt par plateforme.
 
 Cibles couvertes : **darwin** (arm64/x64), **linux glibc** (x64/arm64), **win32 x64**. Non livrées : linux musl/Alpine, win32 arm64, autres arches — sur celles-ci le module **throw**, et le SDK retombe sur le moteur TS.
 
@@ -223,7 +223,7 @@ Côté Rust, ce sont des `ThreadsafeFunction` (TSFN) que le moteur attend, perme
 
 ### Le contrat de fil `EngineSpec` (`crates/bindings/src/spec.rs`)
 
-Le SDK envoie un `EngineSpec` en **JSON camelCase** qui doit correspondre exactement aux types `@adriane/graph-core` :
+Le SDK envoie un `EngineSpec` en **JSON camelCase** qui doit correspondre exactement aux types `@adriane-ai/graph-core` :
 
 ```
 EngineSpec {

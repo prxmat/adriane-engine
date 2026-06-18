@@ -1,4 +1,4 @@
-//! Reflection — the Rust port of `@adriane/agents-core`'s `createReflectionNode`
+//! Reflection — the Rust port of `@adriane-ai/agents-core`'s `createReflectionNode`
 //! (`reflection-node.ts`).
 //!
 //! The TS ships a graph node that runs **one** critique per invocation and either

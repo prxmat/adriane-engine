@@ -10,7 +10,7 @@ import { createGraph, rustEngineAvailable } from "./index.js";
  * `scripts/build-napi.sh`) and is forced onto the Rust engine so the native
  * component handler is exercised.
  */
-describe("@adriane/graph-sdk — components (TS fallback handlers)", () => {
+describe("@adriane-ai/graph-sdk — components (TS fallback handlers)", () => {
   it("promptBuilder renders {{var}} placeholders from the channels", async () => {
     const app = createGraph({ name: "prompt-ts" })
       .channel("name", { type: "string", default: "" })
@@ -599,7 +599,7 @@ const fakeResponse = (init: {
  * NO real network. Forced onto Rust when the addon is present so the JS-seam path
  * (on_node) is exercised; otherwise the TS path.
  */
-describe("@adriane/graph-sdk — integration components (injected, offline)", () => {
+describe("@adriane-ai/graph-sdk — integration components (injected, offline)", () => {
   const saved: Record<string, string | undefined> = {};
   // When the addon is present, run on Rust so the JS handler crosses the on_node seam;
   // otherwise stay on the TS engine. Either way the injected fake keeps it offline.
@@ -895,7 +895,7 @@ describe("@adriane/graph-sdk — integration components (injected, offline)", ()
 
 const describeIfRust = rustEngineAvailable() ? describe : describe.skip;
 
-describeIfRust("@adriane/graph-sdk — components (native Rust handler)", () => {
+describeIfRust("@adriane-ai/graph-sdk — components (native Rust handler)", () => {
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
@@ -933,7 +933,7 @@ describeIfRust("@adriane/graph-sdk — components (native Rust handler)", () => 
  * and assert the observable channel update is identical. This is the gate that proves
  * each TS-equivalent handler mirrors its Rust counterpart byte-for-byte on ASCII input.
  */
-describeIfRust("@adriane/graph-sdk — new components TS-vs-Rust fidelity", () => {
+describeIfRust("@adriane-ai/graph-sdk — new components TS-vs-Rust fidelity", () => {
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {

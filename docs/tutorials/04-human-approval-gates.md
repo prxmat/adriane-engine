@@ -18,7 +18,7 @@ Prerequisites: [Tutorial 02](./02-agent-nodes.md), [Tutorial 03](./03-tools-and-
 resume from the latest checkpoint after a human approves out of band.
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "publish-flow" })
   .channel("draft", { type: "string", default: "" })
@@ -63,7 +63,7 @@ import {
   MockLLMProviderAdapter,
   type LLMGateway,
   type ToolId
-} from "@adriane/graph-sdk";
+} from "@adriane-ai/graph-sdk";
 
 // A mock LLM that always asks to call the `refund` tool.
 const mockLLM = (toolName: string): LLMGateway => {
@@ -162,8 +162,8 @@ Both suspend cleanly and resume from the latest checkpoint — see
 ## Try it
 
 ```bash
-pnpm --filter @adriane/graph-sdk example         # examples/quickstart.ts — humanGate + resume
-pnpm --filter @adriane/graph-sdk example:agent   # examples/agent.ts — suspendForApproval + approveAndResume
+pnpm --filter @adriane-ai/graph-sdk example         # examples/quickstart.ts — humanGate + resume
+pnpm --filter @adriane-ai/graph-sdk example:agent   # examples/agent.ts — suspendForApproval + approveAndResume
 ```
 
 ## Next

@@ -1,4 +1,4 @@
-//! Supervisor — the Rust port of `@adriane/agents-core`'s `SupervisorAgent`
+//! Supervisor — the Rust port of `@adriane-ai/agents-core`'s `SupervisorAgent`
 //! (`supervisor.ts`).
 //!
 //! The TS supervisor routes among named worker agents within a round budget. Each

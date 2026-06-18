@@ -1,4 +1,4 @@
-//! Anthropic provider adapter — the Rust port of `@adriane/llm-gateway`'s
+//! Anthropic provider adapter — the Rust port of `@adriane-ai/llm-gateway`'s
 //! `anthropic-adapter.ts`, behavior-for-behavior.
 //!
 //! The adapter talks to the Messages API through a single seam, [`AnthropicPort`],

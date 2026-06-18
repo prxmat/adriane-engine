@@ -38,8 +38,8 @@
  * reduction range, then exits 1 on any violation.
  *
  * Run it:
- *   pnpm --filter @adriane/graph-sdk exec node --import tsx examples/token-economics.ts
- *   pnpm --filter @adriane/graph-sdk example:tokens
+ *   pnpm --filter @adriane-ai/graph-sdk exec node --import tsx examples/token-economics.ts
+ *   pnpm --filter @adriane-ai/graph-sdk example:tokens
  */
 
 // ── Self-verification helpers ────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 //! Graph-runtime integration: run a [`ReActAgent`] as a node handler — the Rust
-//! port of `@adriane/graph-sdk`'s `agent-node.ts` pattern.
+//! port of `@adriane-ai/graph-sdk`'s `agent-node.ts` pattern.
 //!
 //! When the agent needs human approval and `suspend_for_approval` is set, the
 //! handler returns [`NodeOutput::interrupt`] carrying the pending result into the

@@ -1,5 +1,5 @@
-import type { Command, GraphState } from "@adriane/graph-core";
-import type { NodeExecutionContext } from "@adriane/graph-runtime";
+import type { Command, GraphState } from "@adriane-ai/graph-core";
+import type { NodeExecutionContext } from "@adriane-ai/graph-runtime";
 
 /** A map of channel name → value type. The generic that flows through the builder. */
 export type ChannelValues = Record<string, unknown>;

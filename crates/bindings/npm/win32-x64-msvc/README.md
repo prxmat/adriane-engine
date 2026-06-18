@@ -1,3 +1,3 @@
-# `@adriane/napi-win32-x64-msvc`
+# `@adriane-ai/napi-win32-x64-msvc`
 
-This is the **x86_64-pc-windows-msvc** binary for `@adriane/napi`
+This is the **x86_64-pc-windows-msvc** binary for `@adriane-ai/napi`

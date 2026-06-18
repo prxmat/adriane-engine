@@ -1,13 +1,13 @@
-// Loads the Adriane Rust engine native addon (@adriane/napi).
+// Loads the Adriane Rust engine native addon (@adriane-ai/napi).
 //
 // Resolution order (first hit wins):
 //   1. ./adriane_napi.node            — local dev build (scripts/build-napi.sh).
 //   2. ./adriane_napi.<triple>.node   — local per-platform build (`napi build --platform`).
-//   3. @adriane/napi-<triple>         — the published per-platform optional package.
+//   3. @adriane-ai/napi-<triple>         — the published per-platform optional package.
 //
 // Covered targets: darwin (arm64/x64), linux glibc (x64/arm64), win32 x64. NOT built:
 // linux musl/Alpine, win32 arm64, android, and other arches — on those this module
-// THROWS. Callers (e.g. @adriane/graph-sdk) require it inside try/catch and fall back
+// THROWS. Callers (e.g. @adriane-ai/graph-sdk) require it inside try/catch and fall back
 // to the in-process TypeScript engine, so a missing addon degrades gracefully.
 "use strict";
 
@@ -46,7 +46,7 @@ function load() {
     const localTriple = join(__dirname, `adriane_napi.${triple}.node`);
     if (existsSync(localTriple)) return require(localTriple);
     try {
-      return require(`@adriane/napi-${triple}`);
+      return require(`@adriane-ai/napi-${triple}`);
     } catch {
       // fall through to the descriptive error below
     }
@@ -55,7 +55,7 @@ function load() {
   const libc =
     platform === "linux" ? (isGlibc() ? " (glibc)" : " (musl/non-glibc, unsupported)") : "";
   throw new Error(
-    `@adriane/napi: no prebuilt native binary for ${platform}-${arch}${libc}. ` +
+    `@adriane-ai/napi: no prebuilt native binary for ${platform}-${arch}${libc}. ` +
       `Prebuilt targets: darwin arm64/x64, linux glibc x64/arm64, win32 x64. ` +
       `The Rust engine is unavailable here; callers fall back to the TypeScript engine. ` +
       `To build locally: bash scripts/build-napi.sh`

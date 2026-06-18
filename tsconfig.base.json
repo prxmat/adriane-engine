@@ -17,19 +17,19 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@adriane/graph-core": ["packages/graph-core/src/index.ts"],
-      "@adriane/graph-runtime": ["packages/graph-runtime/src/index.ts"],
-      "@adriane/graph-sdk": ["packages/graph-sdk/src/index.ts"],
-      "@adriane/agents-core": ["packages/agents-core/src/index.ts"],
-      "@adriane/llm-gateway": ["packages/llm-gateway/src/index.ts"],
-      "@adriane/artifact-store": ["packages/artifact-store/src/index.ts"],
-      "@adriane/approval-engine": ["packages/approval-engine/src/index.ts"],
-      "@adriane/observability": ["packages/observability/src/index.ts"],
-      "@adriane/lang-adriane": ["packages/lang-adriane/src/index.ts"],
-      "@adriane/graph-adriane": ["packages/graph-adriane/src/index.ts"],
-      "@adriane/adriane-cli": ["packages/adriane-cli/src/cli.ts"],
-      "@adriane/contracts": ["packages/contracts/src/index.ts"],
-      "@adriane/config": ["packages/config/src/index.ts"]
+      "@adriane-ai/graph-core": ["packages/graph-core/src/index.ts"],
+      "@adriane-ai/graph-runtime": ["packages/graph-runtime/src/index.ts"],
+      "@adriane-ai/graph-sdk": ["packages/graph-sdk/src/index.ts"],
+      "@adriane-ai/agents-core": ["packages/agents-core/src/index.ts"],
+      "@adriane-ai/llm-gateway": ["packages/llm-gateway/src/index.ts"],
+      "@adriane-ai/artifact-store": ["packages/artifact-store/src/index.ts"],
+      "@adriane-ai/approval-engine": ["packages/approval-engine/src/index.ts"],
+      "@adriane-ai/observability": ["packages/observability/src/index.ts"],
+      "@adriane-ai/lang-adriane": ["packages/lang-adriane/src/index.ts"],
+      "@adriane-ai/graph-adriane": ["packages/graph-adriane/src/index.ts"],
+      "@adriane-ai/adriane-cli": ["packages/adriane-cli/src/cli.ts"],
+      "@adriane-ai/contracts": ["packages/contracts/src/index.ts"],
+      "@adriane-ai/config": ["packages/config/src/index.ts"]
     }
   }
 }

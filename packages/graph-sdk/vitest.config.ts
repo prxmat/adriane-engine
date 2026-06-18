@@ -16,13 +16,13 @@ export default defineConfig({
   resolve: {
     alias: {
       // Resolve the SDK's own package name to source too, so example files (which
-      // import the public `@adriane/graph-sdk` entry) and their tests exercise current
+      // import the public `@adriane-ai/graph-sdk` entry) and their tests exercise current
       // source instead of a possibly-stale `dist/`.
-      "@adriane/graph-sdk": fromHere("./src/index.ts"),
-      "@adriane/graph-core": fromHere("../graph-core/src/index.ts"),
-      "@adriane/graph-runtime": fromHere("../graph-runtime/src/index.ts"),
-      "@adriane/agents-core": fromHere("../agents-core/src/index.ts"),
-      "@adriane/llm-gateway": fromHere("../llm-gateway/src/index.ts")
+      "@adriane-ai/graph-sdk": fromHere("./src/index.ts"),
+      "@adriane-ai/graph-core": fromHere("../graph-core/src/index.ts"),
+      "@adriane-ai/graph-runtime": fromHere("../graph-runtime/src/index.ts"),
+      "@adriane-ai/agents-core": fromHere("../agents-core/src/index.ts"),
+      "@adriane-ai/llm-gateway": fromHere("../llm-gateway/src/index.ts")
     }
   }
 });

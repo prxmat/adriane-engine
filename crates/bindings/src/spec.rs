@@ -1,5 +1,5 @@
 //! The wire spec the SDK sends across the napi boundary, plus the outcome it
-//! gets back. All camelCase, matching the TS SDK and `@adriane/graph-core`.
+//! gets back. All camelCase, matching the TS SDK and `@adriane-ai/graph-core`.
 
 use std::collections::BTreeMap;
 

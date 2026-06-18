@@ -4,7 +4,7 @@
  * one prebuilt-style agent), authored once and runnable two ways:
  *
  *   1. as a {@link CompiledGraph} via {@link buildDocQaReference} — runs on the engine
- *      (Rust when the `@adriane/napi` addon is present, else the TS fallback);
+ *      (Rust when the `@adriane-ai/napi` addon is present, else the TS fallback);
  *   2. as a plain {@link GraphDefinition} via {@link docQaReferenceDefinition} — every
  *      node carries the shared `node.metadata.component` / `node.metadata.agent`
  *      carrier, so the control plane can persist it, the Studio can render it, and the
@@ -33,13 +33,13 @@
  * knowledge the documents describe, kept in params so the run is fully reproducible.
  */
 
-import type { GraphDefinition } from "@adriane/graph-core";
+import type { GraphDefinition } from "@adriane-ai/graph-core";
 import {
   DefaultLLMGateway,
   MockLLMProviderAdapter,
   type LLMGateway,
   type ModelTier
-} from "@adriane/llm-gateway";
+} from "@adriane-ai/llm-gateway";
 
 import { createGraph } from "./builder.js";
 import type { CompiledGraph } from "./compiled-graph.js";

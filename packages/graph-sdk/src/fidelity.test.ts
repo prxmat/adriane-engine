@@ -63,7 +63,7 @@ const toolCallGateway = (toolName: string): LLMGateway => {
 /** Distinct event types seen, for a stable set comparison. */
 const eventTypes = (events: RunEvent[]): string[] => [...new Set(events.map((event) => event.type))].sort();
 
-describeIfRust("@adriane/graph-sdk — TS vs Rust engine fidelity", () => {
+describeIfRust("@adriane-ai/graph-sdk — TS vs Rust engine fidelity", () => {
   // Provider keys that would steer the Rust agent path off its deterministic mock onto
   // a real provider. Force them off so both engines are reproducible.
   const PROVIDER_KEYS = ["MISTRAL_API_KEY", "ANTHROPIC_API_KEY", "ADRIANE_USE_OLLAMA"] as const;

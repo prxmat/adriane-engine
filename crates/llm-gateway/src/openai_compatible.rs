@@ -1,5 +1,5 @@
 //! OpenAI-compatible (Chat Completions) provider adapter — the Rust port of
-//! `@adriane/llm-gateway`'s `openai-compatible-adapter.ts`, mirroring the
+//! `@adriane-ai/llm-gateway`'s `openai-compatible-adapter.ts`, mirroring the
 //! [`crate::anthropic`] adapter's port-seam pattern.
 //!
 //! One adapter drives any server speaking the OpenAI `/chat/completions` shape:

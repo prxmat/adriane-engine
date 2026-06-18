@@ -15,7 +15,7 @@ The first node you add becomes the entry point unless you call `.entry(id)`.
 ## A linear graph
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "order-flow" })
   .channel("amount", { type: "number", default: 0 })
@@ -78,7 +78,7 @@ Routing decisions are **named predicates you register** — never `eval`'d strin
 keeps flows safe and inspectable. You register a predicate with `.conditionalEdge(...)`:
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "triage" })
   .channel("amount", { type: "number", default: 0 })
@@ -133,7 +133,7 @@ createGraph({ name: "g" })
 Adapt the shipped quickstart, which is the canonical minimal graph:
 
 ```bash
-pnpm --filter @adriane/graph-sdk example   # examples/quickstart.ts
+pnpm --filter @adriane-ai/graph-sdk example   # examples/quickstart.ts
 ```
 
 ## Next

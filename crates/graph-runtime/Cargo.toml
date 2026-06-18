@@ -1,6 +1,6 @@
 [package]
 name = "adriane-graph-runtime"
-description = "Execution engine over a validated GraphDefinition (Rust port of @adriane/graph-runtime)."
+description = "Execution engine over a validated GraphDefinition (Rust port of @adriane-ai/graph-runtime)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

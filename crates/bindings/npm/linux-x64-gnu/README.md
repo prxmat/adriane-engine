@@ -1,3 +1,3 @@
-# `@adriane/napi-linux-x64-gnu`
+# `@adriane-ai/napi-linux-x64-gnu`
 
-This is the **x86_64-unknown-linux-gnu** binary for `@adriane/napi`
+This is the **x86_64-unknown-linux-gnu** binary for `@adriane-ai/napi`

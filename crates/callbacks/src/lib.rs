@@ -1,4 +1,4 @@
-//! Rust port of `@adriane/callbacks`.
+//! Rust port of `@adriane-ai/callbacks`.
 //!
 //! Provides the [`CallbackEvent`] lifecycle vocabulary, the [`CallbackHandler`]
 //! and [`CallbackManager`] seams, and the default in-process

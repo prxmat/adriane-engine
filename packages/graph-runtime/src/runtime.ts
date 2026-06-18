@@ -9,7 +9,7 @@ import type {
   NodeDefinition,
   NodeId,
   RunId
-} from "@adriane/graph-core";
+} from "@adriane-ai/graph-core";
 
 import type { Checkpointer, ConditionRegistry, EventBus, NodeRegistry } from "./interfaces.js";
 import { InMemoryStore } from "../../memory-store/src/in-memory-store.js";

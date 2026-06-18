@@ -27,7 +27,7 @@ const DOCUMENTS =
   "<p>Adriane is a stateful, resumable agent graph runtime.</p> It checkpoints after " +
   "every node. Human gates suspend the run cleanly for approval.";
 
-describe("@adriane/graph-sdk — Doc-QA reference graph (offline, deterministic)", () => {
+describe("@adriane-ai/graph-sdk — Doc-QA reference graph (offline, deterministic)", () => {
   const PROVIDER_KEYS = ["MISTRAL_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ADRIANE_USE_OLLAMA"] as const;
   const saved: Record<string, string | undefined> = {};
 

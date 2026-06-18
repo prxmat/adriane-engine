@@ -1,8 +1,8 @@
 # Multi-platform release pipeline — runs on a `v*` tag (PR/branch CI stays in ci.yml).
 #
 # Publishes, in order:
-#   1. @adriane/napi-<triple> per-platform native packages + @adriane/napi  (npm)
-#   2. @adriane/graph-sdk self-contained bundle                              (npm)
+#   1. @adriane-ai/napi-<triple> per-platform native packages + @adriane-ai/napi  (npm)
+#   2. @adriane-ai/graph-sdk self-contained bundle                              (npm)
 #   3. abi3 Python wheels (one cp39-abi3 per platform)                       (PyPI)
 #
 # Required repository secrets:
@@ -90,8 +90,8 @@ jobs:
           path: crates/bindings/*.node
           if-no-files-found: error
 
-  # 1b. + 2. Assemble the per-platform packages, publish @adriane/napi, then the
-  #          self-contained @adriane/graph-sdk bundle (which references napi optionally).
+  # 1b. + 2. Assemble the per-platform packages, publish @adriane-ai/napi, then the
+  #          self-contained @adriane-ai/graph-sdk bundle (which references napi optionally).
   npm-publish:
     name: publish npm
     needs: napi-build
@@ -113,19 +113,19 @@ jobs:
       - name: Distribute .node into the per-platform npm/ dirs
         working-directory: crates/bindings
         run: pnpm exec napi artifacts -d artifacts-dl
-      - name: Publish @adriane/napi-<triple> packages + update optionalDependencies
+      - name: Publish @adriane-ai/napi-<triple> packages + update optionalDependencies
         working-directory: crates/bindings
         run: pnpm exec napi prepublish -t npm --skip-gh-release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish @adriane/napi (main package)
-        run: pnpm --filter @adriane/napi publish --no-git-checks --access public
+      - name: Publish @adriane-ai/napi (main package)
+        run: pnpm --filter @adriane-ai/napi publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Build + publish @adriane/graph-sdk bundle
+      - name: Build + publish @adriane-ai/graph-sdk bundle
         run: |
-          pnpm --filter @adriane/graph-sdk build
-          pnpm --filter @adriane/graph-sdk publish --no-git-checks --access public
+          pnpm --filter @adriane-ai/graph-sdk build
+          pnpm --filter @adriane-ai/graph-sdk publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

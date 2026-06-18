@@ -43,7 +43,7 @@ pnpm napi:build   # compiles crates/bindings → adriane_napi.node
 Verify it loaded:
 
 ```ts
-import { rustEngineAvailable } from "@adriane/graph-sdk";
+import { rustEngineAvailable } from "@adriane-ai/graph-sdk";
 console.log(rustEngineAvailable()); // true when the native addon is present
 ```
 
@@ -55,9 +55,9 @@ The SDK ships runnable, self-verifying examples. They assert their own behaviour
 non-zero on the first failed assertion, so a clean exit means everything worked.
 
 ```bash
-pnpm --filter @adriane/graph-sdk example          # quickstart: human gate + resume
-pnpm --filter @adriane/graph-sdk example:agent    # agent + approval gate
-pnpm --filter @adriane/graph-sdk example:qa        # governed QA over documents
+pnpm --filter @adriane-ai/graph-sdk example          # quickstart: human gate + resume
+pnpm --filter @adriane-ai/graph-sdk example:agent    # agent + approval gate
+pnpm --filter @adriane-ai/graph-sdk example:qa        # governed QA over documents
 ```
 
 Expected output for `example` (the quickstart):
@@ -76,7 +76,7 @@ from its checkpoint, and it **completed**.
 Create a file `hello.ts` anywhere inside the workspace:
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "greeter" })
   .channel("name", { type: "string", default: "" })
@@ -89,10 +89,10 @@ console.log(result.status);            // "completed"
 console.log(result.channels.greeting); // "Hello, Ada!"
 ```
 
-Run it from inside the SDK package so the workspace resolution picks up `@adriane/graph-sdk`:
+Run it from inside the SDK package so the workspace resolution picks up `@adriane-ai/graph-sdk`:
 
 ```bash
-pnpm --filter @adriane/graph-sdk exec node --import tsx /absolute/path/to/hello.ts
+pnpm --filter @adriane-ai/graph-sdk exec node --import tsx /absolute/path/to/hello.ts
 ```
 
 Expected output:

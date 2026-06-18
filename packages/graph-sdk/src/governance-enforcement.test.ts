@@ -60,7 +60,7 @@ const gatedToolRegistry = (name: string, handler: () => Promise<unknown>): InMem
 // TS path: approveAndResume resolves through the engine under `resolvedBy`.
 // ---------------------------------------------------------------------------
 
-describe("@adriane/graph-sdk governance — approveAndResume(resolvedBy) on the TS engine", () => {
+describe("@adriane-ai/graph-sdk governance — approveAndResume(resolvedBy) on the TS engine", () => {
   let savedEngine: string | undefined;
   beforeEach(() => {
     savedEngine = process.env.ADRIANE_SDK_ENGINE;
@@ -211,7 +211,7 @@ const catalogGatedGraph = (): GraphDefinition =>
 
 const rustOnly = rustEngineAvailable() ? describe : describe.skip;
 
-rustOnly("@adriane/graph-sdk governance — catalog seam emission (Rust engine)", () => {
+rustOnly("@adriane-ai/graph-sdk governance — catalog seam emission (Rust engine)", () => {
   it("recognizes the gated agent graph as a catalog graph", () => {
     expect(isCatalogGraph(catalogGatedGraph())).toBe(true);
   });

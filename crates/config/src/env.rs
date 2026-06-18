@@ -1,4 +1,4 @@
-//! Typed environment configuration — the Rust port of `@adriane/config`'s
+//! Typed environment configuration — the Rust port of `@adriane-ai/config`'s
 //! `env.ts`.
 //!
 //! The TS layer defines a Zod `EnvironmentSchema` and exposes `parseEnv(source)`

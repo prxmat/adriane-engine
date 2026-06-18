@@ -6,7 +6,7 @@ and run it. Every run is **deterministic by default**, **checkpointed after ever
 **resumable from where it stopped** — including across process restarts and human approvals.
 
 > **Pre-release.** Adriane is not published to npm/PyPI yet. You install it **from source**
-> in this monorepo. The public surface is `@adriane/graph-sdk` (TypeScript) and the
+> in this monorepo. The public surface is `@adriane-ai/graph-sdk` (TypeScript) and the
 > `adriane` Python package over the same Rust engine. Everything in this doc is anchored to
 > the real, shipped API.
 
@@ -53,7 +53,7 @@ import {
   createEmbeddings,   // text embeddings client
   createVectorStore,  // in-memory / persistable vector store
   rustEngineAvailable // is the native Rust engine loaded?
-} from "@adriane/graph-sdk";
+} from "@adriane-ai/graph-sdk";
 ```
 
 The builder is fluent and fully typed — declared channels accumulate into the state type, so
@@ -61,7 +61,7 @@ The builder is fluent and fully typed — declared channels accumulate into the 
 
 ## How execution works
 
-- Execution runs on the **Rust engine** (via the `@adriane/napi` native addon) when it is
+- Execution runs on the **Rust engine** (via the `@adriane-ai/napi` native addon) when it is
   present, otherwise it **falls back to the bundled TypeScript engine**. The public API
   (`run` / `resume` / `approveAndResume` / `stream` / `onEvent`) is identical either way.
 - Check which engine you are on with the `usesRustEngine` property on a compiled graph, or

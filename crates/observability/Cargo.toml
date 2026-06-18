@@ -1,6 +1,6 @@
 [package]
 name = "adriane-observability"
-description = "Rust port of @adriane/observability."
+description = "Rust port of @adriane-ai/observability."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

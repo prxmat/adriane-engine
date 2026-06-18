@@ -10,7 +10,7 @@ import { PatchRunStateDtoSchema, RESERVED_PATCH_CHANNELS } from "./runs.js";
  * reads). The schema rejects such a patch so it surfaces as a 400/422, not a silent
  * state mutation.
  */
-describe("@adriane/contracts — PatchRunStateDtoSchema reserved-channel gate", () => {
+describe("@adriane-ai/contracts — PatchRunStateDtoSchema reserved-channel gate", () => {
   it("accepts a patch of ordinary channels", () => {
     const result = PatchRunStateDtoSchema.safeParse({
       patch: { draft: "hello", count: 3 },

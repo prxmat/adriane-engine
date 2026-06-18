@@ -1,7 +1,7 @@
 //! Adriane llm-gateway (Rust).
 //!
 //! The only crate allowed to talk to LLM providers — the Rust port of
-//! `@adriane/llm-gateway`. Requests route through a gateway to a provider adapter;
+//! `@adriane-ai/llm-gateway`. Requests route through a gateway to a provider adapter;
 //! this slice ships the async traits + a mock. Real provider adapters and streaming
 //! land behind the same traits later.
 

@@ -14,7 +14,7 @@ alwaysApply: true
    packages (`graph-core`, `graph-runtime`, `graph-sdk`, `agents-core`, `llm-gateway`,
    `artifact-store`, `approval-engine`, `observability`, …).
 
-The supported public surface is `@adriane/graph-sdk`. A hosted commercial control
+The supported public surface is `@adriane-ai/graph-sdk`. A hosted commercial control
 plane (Adriane Studio) is built on top of this framework in a separate repository
 and is **not** part of this one.
 
@@ -30,5 +30,5 @@ and is **not** part of this one.
 
 - `graph-core` must remain pure: no framework, no React, no DB, no HTTP, no LLM.
 - `graph-runtime` must remain framework-agnostic: no decorators, no React.
-- Consume the engine through `@adriane/graph-sdk`, never a package's internals.
+- Consume the engine through `@adriane-ai/graph-sdk`, never a package's internals.
 - ADR required for any decision that changes inter-package dependencies.

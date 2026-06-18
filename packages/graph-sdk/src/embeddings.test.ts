@@ -7,7 +7,7 @@ import {
   type EmbeddingsRequestBody
 } from "./embeddings.js";
 
-describe("@adriane/graph-sdk — createEmbeddings (injected transport, offline)", () => {
+describe("@adriane-ai/graph-sdk — createEmbeddings (injected transport, offline)", () => {
   it("returns the parsed vectors from an injected transport, preserving order", async () => {
     const seen: EmbeddingsRequestBody[] = [];
     const embeddings = createEmbeddings({

@@ -1,4 +1,4 @@
-import type { GraphDefinition } from "@adriane/graph-core";
+import type { GraphDefinition } from "@adriane-ai/graph-core";
 
 import type { GraphAst } from "../ast/types";
 

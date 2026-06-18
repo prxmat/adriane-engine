@@ -1,5 +1,5 @@
 {
-  "name": "@adriane/napi-linux-x64-gnu",
+  "name": "@adriane-ai/napi-linux-x64-gnu",
   "version": "0.1.0-rc.1",
   "os": [
     "linux"

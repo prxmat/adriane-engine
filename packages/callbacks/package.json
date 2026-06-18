@@ -1,9 +1,9 @@
 {
-  "name": "@adriane/callbacks",
+  "name": "@adriane-ai/callbacks",
   "private": true,
   "license": "Apache-2.0",
   "version": "0.1.0-rc.1",
-  "description": "[DEPRECATED — execution moved to the Rust engine in crates/; the TS engine remains only as a fallback when the @adriane/napi native addon is absent] Callback manager and lifecycle handlers for the runtime. Superseded by the crates/callbacks Rust crate.",
+  "description": "[DEPRECATED — execution moved to the Rust engine in crates/; the TS engine remains only as a fallback when the @adriane-ai/napi native addon is absent] Callback manager and lifecycle handlers for the runtime. Superseded by the crates/callbacks Rust crate.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

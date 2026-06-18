@@ -14,7 +14,7 @@
  * this tutorial doubles as an end-to-end test.
  *
  * Run it:
- *   pnpm --filter @adriane/graph-sdk example:qa
+ *   pnpm --filter @adriane-ai/graph-sdk example:qa
  */
 import {
   createGraph,
@@ -24,7 +24,7 @@ import {
   type LLMGateway,
   type LLMResponse,
   type ToolId
-} from "@adriane/graph-sdk";
+} from "@adriane-ai/graph-sdk";
 
 // ── Self-verification helpers ────────────────────────────────────────────────
 const assert = (condition: boolean, label: string): void => {

@@ -1,4 +1,4 @@
-# @adriane/graph-sdk
+# @adriane-ai/graph-sdk
 
 The front door to the [Adriane](https://github.com/prxmat/adriane-engine) framework: build,
 compile and run **stateful, resumable agent graphs** — agents, tools, human-approval
@@ -10,8 +10,8 @@ from where it stopped, including across process restarts and human approvals.
 ## Install
 
 ```bash
-npm install @adriane/graph-sdk
-# or: pnpm add @adriane/graph-sdk   /   yarn add @adriane/graph-sdk
+npm install @adriane-ai/graph-sdk
+# or: pnpm add @adriane-ai/graph-sdk   /   yarn add @adriane-ai/graph-sdk
 ```
 
 This package is a **self-contained bundle** — it ships the framework inlined and only
@@ -25,18 +25,18 @@ the native addon alongside the SDK and it is picked up automatically (with a cle
 fallback to the TypeScript engine when it is absent or your platform is unsupported):
 
 ```bash
-npm install @adriane/napi
+npm install @adriane-ai/napi
 ```
 
 ```ts
-import { rustEngineAvailable } from "@adriane/graph-sdk";
+import { rustEngineAvailable } from "@adriane-ai/graph-sdk";
 console.log(rustEngineAvailable()); // true when the native addon loaded
 ```
 
 ## Quickstart
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "greeter" })
   .node("hello", async (_input, state) => ({

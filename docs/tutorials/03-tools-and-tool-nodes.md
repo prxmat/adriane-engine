@@ -12,7 +12,7 @@ Prerequisites: [Tutorial 02](./02-agent-nodes.md).
 Tools live in an `InMemoryToolRegistry`. Each tool has a definition plus a handler:
 
 ```ts
-import { InMemoryToolRegistry, type ToolId } from "@adriane/graph-sdk";
+import { InMemoryToolRegistry, type ToolId } from "@adriane-ai/graph-sdk";
 
 const tools = new InMemoryToolRegistry();
 const passthrough = { parse: (value: unknown) => value };
@@ -63,7 +63,7 @@ import {
   type LLMGateway,
   type LLMResponse,
   type ToolId
-} from "@adriane/graph-sdk";
+} from "@adriane-ai/graph-sdk";
 
 const toolTurn = (name: string, input: Record<string, unknown>): LLMResponse => ({
   content: "",
@@ -132,7 +132,7 @@ message in the `messages` channel — for example, to run them in parallel or to
 tool-execution step explicit in the graph. That's `toolNode`:
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 createGraph({ name: "agent-then-tools" })
   .messagesChannel()                              // append-reduced "messages" channel
@@ -154,7 +154,7 @@ where the descriptor comes from a `components.*` factory. They run natively on t
 with a faithful TypeScript fallback.
 
 ```ts
-import { createGraph, components } from "@adriane/graph-sdk";
+import { createGraph, components } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "prep" })
   .channel("name", { type: "string", default: "" })
@@ -208,8 +208,8 @@ and demonstrated in `examples/product-pipeline.ts` and `examples/doc-qa-referenc
 ## Try it
 
 ```bash
-pnpm --filter @adriane/graph-sdk example:qa     # examples/qa-rag.ts — agent + search/fetch tools
-pnpm --filter @adriane/graph-sdk example:docqa  # examples/doc-qa-reference.ts — components + agent
+pnpm --filter @adriane-ai/graph-sdk example:qa     # examples/qa-rag.ts — agent + search/fetch tools
+pnpm --filter @adriane-ai/graph-sdk example:docqa  # examples/doc-qa-reference.ts — components + agent
 ```
 
 ## Next

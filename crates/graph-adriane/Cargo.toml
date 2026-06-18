@@ -1,6 +1,6 @@
 [package]
 name = "adriane-graph-adriane"
-description = "Adriane DSL compiler: graph YAML -> GraphDefinition (Rust port of @adriane/graph-adriane)."
+description = "Adriane DSL compiler: graph YAML -> GraphDefinition (Rust port of @adriane-ai/graph-adriane)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

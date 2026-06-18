@@ -12,25 +12,25 @@
  * This is the seam a control plane uses to EXECUTE a graph built from
  * the catalog: it reads each node's metadata, assembles the engine's
  * `EngineSpec.componentNodes` + `agents` maps + the `jsNodeIds` for plain
- * action/tool nodes, and drives the run on the **Rust engine** via `@adriane/napi`.
+ * action/tool nodes, and drives the run on the **Rust engine** via `@adriane-ai/napi`.
  *
  * Unlike {@link import("./builder.js").GraphBuilder}, there are no TS handler closures
  * here — components and agents run **natively** in Rust, and plain action/tool nodes
  * are inert JS seams (they return an empty channel update). The carrier IS the wiring.
  *
  * The carrier readers below mirror the canonical Zod schema in
- * `@adriane/contracts` (`node-metadata.ts`); the SDK stays dependency-free of the
+ * `@adriane-ai/contracts` (`node-metadata.ts`); the SDK stays dependency-free of the
  * contracts package, so the narrowing is duplicated structurally here. The control
  * plane is free to validate the carrier with the contracts schema before handing the
  * definition to this runner.
  */
 
-import type { GraphDefinition, GraphState, NodeId, RunId } from "@adriane/graph-core";
-import type { RunEvent } from "@adriane/graph-runtime";
-import type { ModelTier } from "@adriane/llm-gateway";
+import type { GraphDefinition, GraphState, NodeId, RunId } from "@adriane-ai/graph-core";
+import type { RunEvent } from "@adriane-ai/graph-runtime";
+import type { ModelTier } from "@adriane-ai/llm-gateway";
 // Type-only: keeps the ApprovalEngine contract without pulling its Pg/db implementation
 // (and a `pg` dependency) into consumers such as the Studio bundle.
-import type { ApprovalEngine } from "@adriane/approval-engine";
+import type { ApprovalEngine } from "@adriane-ai/approval-engine";
 
 import type { RustAgentConfig } from "./agent-node.js";
 import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
@@ -96,7 +96,7 @@ export type RunCatalogGraphOptions = {
 export class RustEngineUnavailableError extends Error {
   public constructor() {
     super(
-      "Catalog graphs execute on the Rust engine, but the native addon (@adriane/napi) " +
+      "Catalog graphs execute on the Rust engine, but the native addon (@adriane-ai/napi) " +
         "is not available. Build it with scripts/build-napi.sh."
     );
     this.name = "RustEngineUnavailableError";

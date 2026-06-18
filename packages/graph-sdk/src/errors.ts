@@ -1,4 +1,4 @@
-import type { GraphValidationError } from "@adriane/graph-core";
+import type { GraphValidationError } from "@adriane-ai/graph-core";
 
 /**
  * Discriminated-union result type used across the SDK's "safe" entry points
@@ -6,7 +6,7 @@ import type { GraphValidationError } from "@adriane/graph-core";
  */
 export type Result<T, E> = { success: true; data: T } | { success: false; error: E };
 
-/** Base class for every error thrown by `@adriane/graph-sdk`. */
+/** Base class for every error thrown by `@adriane-ai/graph-sdk`. */
 export class AdrianeSdkError extends Error {
   public constructor(message: string) {
     super(message);

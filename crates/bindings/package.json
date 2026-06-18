@@ -1,5 +1,5 @@
 {
-  "name": "@adriane/napi",
+  "name": "@adriane-ai/napi",
   "version": "0.1.0-rc.1",
   "license": "Apache-2.0",
   "description": "Node bindings to the Adriane Rust engine (graph validation, DSL compile, run/resume/approve).",
@@ -18,7 +18,7 @@
   "napi": {
     "name": "adriane_napi",
     "package": {
-      "name": "@adriane/napi"
+      "name": "@adriane-ai/napi"
     },
     "triples": {
       "defaults": false,

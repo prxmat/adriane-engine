@@ -1,4 +1,4 @@
-//! Plan-and-execute — the Rust port of `@adriane/agents-core`'s
+//! Plan-and-execute — the Rust port of `@adriane-ai/agents-core`'s
 //! `PlannerAgent` + `ExecutorAgent` pair (`plan-execute.ts`).
 //!
 //! The TS ships two cooperating agents:

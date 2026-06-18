@@ -1,5 +1,5 @@
 // Throwaway: prove the model policy + a fast-tier prebuilt agent on Mistral-only, on Rust.
-import { ModelPolicy, prebuilt } from "@adriane/graph-sdk";
+import { ModelPolicy, prebuilt } from "@adriane-ai/graph-sdk";
 
 const policy = new ModelPolicy();
 const available = policy.availableFromEnv();

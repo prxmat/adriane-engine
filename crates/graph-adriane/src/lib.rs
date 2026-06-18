@@ -1,5 +1,5 @@
 //! Adriane DSL compiler (Rust) — compiles graph YAML into a validated
-//! [`adriane_graph_core::GraphDefinition`]. Rust port of `@adriane/graph-adriane`.
+//! [`adriane_graph_core::GraphDefinition`]. Rust port of `@adriane-ai/graph-adriane`.
 //!
 //! The pipeline mirrors the TypeScript one stage for stage:
 //! `parser` (lenient raw-YAML -> AST) -> `validator` (DSL diagnostics) ->

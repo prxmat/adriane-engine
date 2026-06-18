@@ -1,9 +1,9 @@
 import { createRequire } from "node:module";
 
-import type { GraphDefinition, GraphState, NodeId, RunId } from "@adriane/graph-core";
-import type { RunEvent } from "@adriane/graph-runtime";
+import type { GraphDefinition, GraphState, NodeId, RunId } from "@adriane-ai/graph-core";
+import type { RunEvent } from "@adriane-ai/graph-runtime";
 
-import type { ModelTier } from "@adriane/llm-gateway";
+import type { ModelTier } from "@adriane-ai/llm-gateway";
 
 import type { RustAgentConfig } from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
@@ -11,7 +11,7 @@ import type { ChannelValues, TypedGraphState } from "./typed.js";
 
 /**
  * Optional bridge to the Rust engine's async run/resume/approve entry points
- * (`@adriane/napi`). Mirrors {@link import("./rust-validator.js").tryRustValidate}:
+ * (`@adriane-ai/napi`). Mirrors {@link import("./rust-validator.js").tryRustValidate}:
  * when the native addon is present, graph **execution** can run on the Rust engine
  * (via `engine_run`/`engine_resume`/`engine_approve_and_resume`), with the SDK's TS
  * condition predicates and node/tool seams called back from Rust over a
@@ -67,7 +67,7 @@ const loadNativeEngine = (): NativeEngine | null => {
   }
   try {
     const requireFn = createRequire(import.meta.url);
-    const mod: unknown = requireFn("@adriane/napi");
+    const mod: unknown = requireFn("@adriane-ai/napi");
     cachedNative = hasEngineFns(mod) ? mod : null;
   } catch {
     cachedNative = null;

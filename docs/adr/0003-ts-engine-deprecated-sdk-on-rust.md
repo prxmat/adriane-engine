@@ -1,4 +1,4 @@
-# ADR 0003 — Deprecate the TypeScript engine; run @adriane/graph-sdk on Rust
+# ADR 0003 — Deprecate the TypeScript engine; run @adriane-ai/graph-sdk on Rust
 
 - Status: Accepted
 - Date: 2026-06-11
@@ -11,8 +11,8 @@ incrementally, bottom-up, with the TS engine staying in production until each Ru
 crate reached parity and was adopted. That migration has now progressed far enough to
 flip the consumer: the Rust crates under `crates/` cover the model and the executor
 (`graph-core`, `graph-runtime`), the agent patterns (`agents-core`), the provider
-gateway (`llm-gateway`), and the rest of the engine surface, and `@adriane/graph-sdk`
-has been re-plumbed to execute on them through a native addon (`@adriane/napi`).
+gateway (`llm-gateway`), and the rest of the engine surface, and `@adriane-ai/graph-sdk`
+has been re-plumbed to execute on them through a native addon (`@adriane-ai/napi`).
 
 With the SDK able to run on Rust, the TypeScript engine packages are no longer the
 intended execution path. We need to record that the TS engine is **deprecated as the
@@ -21,7 +21,7 @@ execution engine**, while being explicit about what is *kept* and why nothing br
 ## Decision
 
 The TypeScript engine packages are **deprecated in their execution role** and retained
-only as a fallback. `@adriane/graph-sdk` remains the supported front door and runs on
+only as a fallback. `@adriane-ai/graph-sdk` remains the supported front door and runs on
 the Rust engine when the native addon is present, falling back to the deprecated TS
 engine when it is absent.
 
@@ -41,18 +41,18 @@ must keep compiling) are untouched.
 
 ### What is explicitly retained (not deprecated)
 
-- **`@adriane/graph-sdk`** — the kept, supported front door. Its public API is
+- **`@adriane-ai/graph-sdk`** — the kept, supported front door. Its public API is
   unchanged; whether it runs on Rust or TS is an internal detail behind a read-only
   `usesRustEngine` getter and the exported `rustEngineAvailable()`.
-- **`@adriane/graph-core`** — the pure data model + Zod validator. It is the shared
+- **`@adriane-ai/graph-core`** — the pure data model + Zod validator. It is the shared
   foundation for both the TS fallback and the wire contract with the Rust engine
   (serde camelCase ↔ TS types), so it stays first-class.
-- `@adriane/contracts`, `@adriane/db`, `@adriane/config`, `@adriane/ui` — not engine
+- `@adriane-ai/contracts`, `@adriane-ai/db`, `@adriane-ai/config`, `@adriane-ai/ui` — not engine
   execution packages; unaffected.
 
 ### Architecture: the napi async + ThreadsafeFunction bridge
 
-`@adriane/graph-sdk` reaches the Rust engine through the optional `@adriane/napi`
+`@adriane-ai/graph-sdk` reaches the Rust engine through the optional `@adriane-ai/napi`
 native addon, loaded with `createRequire` so its absence is a clean miss (mirroring the
 existing `rust-validator.ts` pattern):
 
@@ -72,11 +72,11 @@ existing `rust-validator.ts` pattern):
 
 ### Fallback rule
 
-> Run on **Rust if the `@adriane/napi` addon is present; otherwise fall back to the
+> Run on **Rust if the `@adriane-ai/napi` addon is present; otherwise fall back to the
 > (deprecated) TypeScript engine.**
 
 When the addon is absent, `rustEngineAvailable()` returns `false` and `CompiledGraph`
-executes on the deprecated `@adriane/graph-runtime`. This keeps `main` building and the
+executes on the deprecated `@adriane-ai/graph-runtime`. This keeps `main` building and the
 Studio working with or without a built native addon.
 
 ## Consequences
@@ -85,7 +85,7 @@ Studio working with or without a built native addon.
   and `pnpm lint` stay green; the Studio (which imports the TS engine) still compiles.
 - **Clear direction for consumers:** the IDE surfaces the `@deprecated` banners and
   npm shows the `[DEPRECATED — …]` description, steering new code to
-  `@adriane/graph-sdk` and the Rust crates instead of the TS engine internals.
+  `@adriane-ai/graph-sdk` and the Rust crates instead of the TS engine internals.
 - **Two engines coexist** behind one SDK API until the native addon is universally
   built; the TS engine remains a working safety net rather than dead code.
 - **Future:** once the Rust addon ships everywhere by default, a later ADR can decide

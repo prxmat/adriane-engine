@@ -1,5 +1,5 @@
 // Throwaway: prove the SDK defaults to Rust (NO ADRIANE_SDK_ENGINE set) + live Mistral.
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const warnings: string[] = [];
 const origWarn = console.warn.bind(console);

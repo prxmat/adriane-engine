@@ -21,7 +21,7 @@ import {
   DefaultLLMGateway,
   MockLLMProviderAdapter,
   type LLMGateway
-} from "@adriane/graph-sdk";
+} from "@adriane-ai/graph-sdk";
 
 // A mock LLM that returns a single final answer (no tool calls).
 const mockLLM = (): LLMGateway => {
@@ -71,7 +71,7 @@ console.log(result.channels.agentResult.reasoning); // the ReAct reasoning trace
 | `suspendForApproval` | Suspend the whole run when a gated tool is reached (see [Tutorial 04](./04-human-approval-gates.md)). |
 | `outputChannel` | Channel the result lands in (default `"agentResult"`). |
 
-The result type is `AgentResult` (from `@adriane/agents-core`): `{ artifacts, blockers, approvalRequests, confidence, reasoning, requiresHumanReview }`. The output channel holds this **full object** (not a bare string) — you'll most often route on `confidence` or `requiresHumanReview`.
+The result type is `AgentResult` (from `@adriane-ai/agents-core`): `{ artifacts, blockers, approvalRequests, confidence, reasoning, requiresHumanReview }`. The output channel holds this **full object** (not a bare string) — you'll most often route on `confidence` or `requiresHumanReview`.
 
 ## Capability tiers, not hardcoded models
 
@@ -125,7 +125,7 @@ For common single-purpose agents you don't need to wire anything — `prebuilt` 
 ready-to-run `CompiledGraph`. Each runs on a deterministic mock gateway by default (no keys).
 
 ```ts
-import { prebuilt } from "@adriane/graph-sdk";
+import { prebuilt } from "@adriane-ai/graph-sdk";
 
 const result = await prebuilt.summarizer().run({ question: "…a long text…" });
 // The output channel holds the full `AgentResult` object — not a bare string.
@@ -177,7 +177,7 @@ await prebuilt.ragAnswerer({
 ## Try it
 
 ```bash
-pnpm --filter @adriane/graph-sdk example:agent   # examples/agent.ts — agent + approval gate
+pnpm --filter @adriane-ai/graph-sdk example:agent   # examples/agent.ts — agent + approval gate
 ```
 
 ## Next

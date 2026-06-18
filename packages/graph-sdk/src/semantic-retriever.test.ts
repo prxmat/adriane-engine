@@ -22,7 +22,7 @@ const fakeEmbeddings = (table: Record<string, number[]>, fallback: number[]): Em
 
 const engine = rustEngineAvailable() ? "rust" : "ts";
 
-describe("@adriane/graph-sdk — semanticRetriever (injected fake embeddings, offline)", () => {
+describe("@adriane-ai/graph-sdk — semanticRetriever (injected fake embeddings, offline)", () => {
   it("ranks the relevant doc first through a compiled graph (into-channel order)", async () => {
     const savedEngine = process.env.ADRIANE_SDK_ENGINE;
     process.env.ADRIANE_SDK_ENGINE = engine;

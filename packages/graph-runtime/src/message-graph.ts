@@ -1,4 +1,4 @@
-import type { EdgeDefinition, GraphDefinition, NodeDefinition } from "@adriane/graph-core";
+import type { EdgeDefinition, GraphDefinition, NodeDefinition } from "@adriane-ai/graph-core";
 
 type MessageGraphChannels = {
   messages: {

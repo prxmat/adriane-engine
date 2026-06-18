@@ -12,7 +12,7 @@
  * Use {@link GraphBuilder.component} to push a node carrying both:
  *
  * ```ts
- * import { createGraph, components } from "@adriane/graph-sdk";
+ * import { createGraph, components } from "@adriane-ai/graph-sdk";
  *
  * const app = createGraph({ name: "prompt" })
  *   .channel("name", { type: "string", default: "" })
@@ -22,7 +22,7 @@
  * ```
  */
 
-import type { NodeHandler } from "@adriane/graph-runtime";
+import type { NodeHandler } from "@adriane-ai/graph-runtime";
 
 /** The component kinds the library knows, matching `ComponentRegistry::kinds()`. */
 export type ComponentKind =

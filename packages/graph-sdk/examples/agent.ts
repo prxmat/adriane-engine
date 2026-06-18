@@ -14,7 +14,7 @@ import {
   MockLLMProviderAdapter,
   type LLMGateway,
   type ToolId
-} from "@adriane/graph-sdk";
+} from "@adriane-ai/graph-sdk";
 
 // A mock LLM that always asks to call the `refund` tool (a structured tool call).
 const mockLLM = (toolName: string): LLMGateway => {

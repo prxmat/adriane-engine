@@ -1,12 +1,12 @@
 /**
- * `@adriane/graph-sdk` — the front door to the Adriane framework.
+ * `@adriane-ai/graph-sdk` — the front door to the Adriane framework.
  *
  * Build, compile and run stateful, resumable agent graphs without touching the
  * lower-level engine primitives. Everything you need for the common case is
  * re-exported here.
  *
  * ```ts
- * import { createGraph } from "@adriane/graph-sdk";
+ * import { createGraph } from "@adriane-ai/graph-sdk";
  *
  * const app = createGraph({ name: "greeter" })
  *   .node("hello", async (_input, state) => ({ greeting: `Hello, ${state.channels.name}!` }))
@@ -190,17 +190,17 @@ export type {
   NodeId,
   RunId,
   ChannelReducer
-} from "@adriane/graph-core";
-export type { Message, AIMessage, ToolCall, MessageId } from "@adriane/graph-core";
-export type { ConditionFn, NodeHandler, RunEvent } from "@adriane/graph-runtime";
-export type { StreamEvent, StreamMode } from "@adriane/graph-runtime";
+} from "@adriane-ai/graph-core";
+export type { Message, AIMessage, ToolCall, MessageId } from "@adriane-ai/graph-core";
+export type { ConditionFn, NodeHandler, RunEvent } from "@adriane-ai/graph-runtime";
+export type { StreamEvent, StreamMode } from "@adriane-ai/graph-runtime";
 
 // Advanced wiring for callers who want durable checkpoints / custom buses. The
-// Postgres-backed adapters live in the PRIVATE `@adriane/db-adapters` package and are
+// Postgres-backed adapters live in the PRIVATE `@adriane-ai/db-adapters` package and are
 // intentionally NOT re-exported here, so the public SDK bundle never embeds the DB
 // schema. Bring your own `Checkpointer` (the interface is exported above) or import
-// the Pg adapters from `@adriane/db-adapters` in private/control-plane code.
-export { InMemoryCheckpointer, DynamicInterrupt } from "@adriane/graph-runtime";
+// the Pg adapters from `@adriane-ai/db-adapters` in private/control-plane code.
+export { InMemoryCheckpointer, DynamicInterrupt } from "@adriane-ai/graph-runtime";
 
 // Building blocks for agent/tool nodes, re-exported so a single import suffices.
 export {
@@ -213,7 +213,7 @@ export {
   MODEL_TIERS,
   DEFAULT_TIER_TABLE,
   DEFAULT_PREFERENCE
-} from "@adriane/llm-gateway";
+} from "@adriane-ai/llm-gateway";
 export type {
   LLMGateway,
   LLMProvider,
@@ -229,6 +229,6 @@ export type {
   ModelChoice,
   TierModelTable,
   ResolveOverride
-} from "@adriane/llm-gateway";
-export { InMemoryToolRegistry } from "@adriane/agents-core";
-export type { ToolRegistry, ToolDefinition, ToolId, AgentResult } from "@adriane/agents-core";
+} from "@adriane-ai/llm-gateway";
+export { InMemoryToolRegistry } from "@adriane-ai/agents-core";
+export type { ToolRegistry, ToolDefinition, ToolId, AgentResult } from "@adriane-ai/agents-core";

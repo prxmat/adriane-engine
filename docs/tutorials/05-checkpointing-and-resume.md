@@ -30,7 +30,7 @@ A suspension is a normal terminal state of a `run()` call. You inspect it, do wh
 out-of-band work is needed (a human approves), then continue:
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "two-step" })
   .channel("step", { type: "string", default: "start" })
@@ -101,8 +101,8 @@ guarantees don't depend on hidden state.
 The checkpoint/resume contract is exercised by every suspend/resume example:
 
 ```bash
-pnpm --filter @adriane/graph-sdk example         # quickstart: suspend then resume
-pnpm --filter @adriane/graph-sdk example:agent   # suspend for approval, then approveAndResume
+pnpm --filter @adriane-ai/graph-sdk example         # quickstart: suspend then resume
+pnpm --filter @adriane-ai/graph-sdk example:agent   # suspend for approval, then approveAndResume
 ```
 
 ## Next

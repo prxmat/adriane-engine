@@ -11,9 +11,9 @@ import {
   type NodeId,
   type NodeType,
   type RetryPolicy
-} from "@adriane/graph-core";
-import type { AgentResult } from "@adriane/agents-core";
-import type { ConditionFn, NodeHandler } from "@adriane/graph-runtime";
+} from "@adriane-ai/graph-core";
+import type { AgentResult } from "@adriane-ai/agents-core";
+import type { ConditionFn, NodeHandler } from "@adriane-ai/graph-runtime";
 
 import { CompiledGraph } from "./compiled-graph.js";
 import {

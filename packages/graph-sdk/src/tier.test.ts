@@ -9,7 +9,7 @@ import { DefaultLLMGateway } from "./index.js";
  * tier rides into the serializable agent config the Rust bridge consumes. No network:
  * resolution is pure over a forced environment.
  */
-describe("@adriane/graph-sdk — capability tiers", () => {
+describe("@adriane-ai/graph-sdk — capability tiers", () => {
   const PROVIDER_KEYS = ["ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "ADRIANE_USE_OLLAMA"] as const;
   const saved: Record<string, string | undefined> = {};
 

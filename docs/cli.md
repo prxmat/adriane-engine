@@ -1,6 +1,6 @@
 # Adriane CLI (`adriane`)
 
-> **État pre-release.** La CLI s'exécute **depuis les sources** du monorepo. Le paquet `@adriane/adriane-cli` est `private` et n'est pas publié sur npm. Les commandes ci-dessous sont décrites telles qu'implémentées dans `packages/adriane-cli/src/`.
+> **État pre-release.** La CLI s'exécute **depuis les sources** du monorepo. Le paquet `@adriane-ai/adriane-cli` est `private` et n'est pas publié sur npm. Les commandes ci-dessous sont décrites telles qu'implémentées dans `packages/adriane-cli/src/`.
 
 La CLI `adriane` est l'outil en ligne de commande pour **valider**, **compiler**, **exécuter**, **publier**, **comparer** et **initialiser** des définitions Adriane (graphes, agents, prompts). Elle est construite sur `commander` (`packages/adriane-cli/src/cli.ts`).
 

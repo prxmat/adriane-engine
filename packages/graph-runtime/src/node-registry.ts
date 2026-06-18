@@ -1,4 +1,4 @@
-import type { NodeId } from "@adriane/graph-core";
+import type { NodeId } from "@adriane-ai/graph-core";
 
 import type { NodeHandler, NodeRegistry } from "./interfaces.js";
 

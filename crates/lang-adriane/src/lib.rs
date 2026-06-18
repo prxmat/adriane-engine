@@ -1,5 +1,5 @@
 //! Prompt/agent/chain DSL compiler (Rust) — compiles prompt, agent, and chain
-//! YAML into their validated definitions. Rust port of `@adriane/lang-adriane`,
+//! YAML into their validated definitions. Rust port of `@adriane-ai/lang-adriane`,
 //! and the sibling of `adriane-graph-adriane` (which compiles graph YAML).
 //!
 //! The pipeline mirrors the TypeScript one stage for stage:

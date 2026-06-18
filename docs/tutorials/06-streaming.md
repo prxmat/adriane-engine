@@ -22,7 +22,7 @@ selects the shape of events:
 | `"debug"` | debug payloads per node (`{ type: "debug", payload, nodeId }`) |
 
 ```ts
-import { createGraph } from "@adriane/graph-sdk";
+import { createGraph } from "@adriane-ai/graph-sdk";
 
 const app = createGraph({ name: "pipeline" })
   .channel("n", { type: "number", default: 0 })
@@ -90,7 +90,7 @@ For a chat UI you want the agent's reply to appear as it's generated. `streamAge
 streams a **single-turn (no-tools)** reply token by token through the gateway's `stream()`:
 
 ```ts
-import { streamAgentTokens, type LLMGateway } from "@adriane/graph-sdk";
+import { streamAgentTokens, type LLMGateway } from "@adriane-ai/graph-sdk";
 
 async function chat(llm: LLMGateway, question: string) {
   for await (const delta of streamAgentTokens(

@@ -15,6 +15,6 @@ alwaysApply: true
 - All runtime validation via Zod schemas. No manual `typeof` guards for external data.
 - Errors must be typed — never `throw new Error("string")` alone; wrap in typed error classes.
 - Every package exposes its public API exclusively from `src/index.ts`.
-- No deep internal imports across packages: `import { x } from '@adriane/graph-core'`, not `import { x } from '@adriane/graph-core/src/internal/something'`.
+- No deep internal imports across packages: `import { x } from '@adriane-ai/graph-core'`, not `import { x } from '@adriane-ai/graph-core/src/internal/something'`.
 - Avoid `namespace`. Prefer plain module exports.
 - Enums only if the values need to be iterable at runtime; prefer `const` objects + `as const` otherwise.

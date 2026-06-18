@@ -9,7 +9,7 @@
  * composes the `retriever` + `reranker` components with an agent step.
  *
  * ```ts
- * import { prebuilt } from "@adriane/graph-sdk";
+ * import { prebuilt } from "@adriane-ai/graph-sdk";
  *
  * const result = await prebuilt.summarizer().run({ question: "long text…" });
  * console.log(result.channels.summary);
@@ -27,8 +27,8 @@ import {
   type LLMGateway,
   type LLMProvider,
   type ModelTier
-} from "@adriane/llm-gateway";
-import { InMemoryToolRegistry, type ToolId, type ToolRegistry } from "@adriane/agents-core";
+} from "@adriane-ai/llm-gateway";
+import { InMemoryToolRegistry, type ToolId, type ToolRegistry } from "@adriane-ai/agents-core";
 
 import { createGraph } from "./builder.js";
 import { components, type RetrieverDoc } from "./components.js";

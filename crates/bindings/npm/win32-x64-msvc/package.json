@@ -1,5 +1,5 @@
 {
-  "name": "@adriane/napi-win32-x64-msvc",
+  "name": "@adriane-ai/napi-win32-x64-msvc",
   "version": "0.1.0-rc.1",
   "os": [
     "win32"

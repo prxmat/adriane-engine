@@ -1,5 +1,5 @@
-import type { NodeId, RunId } from "@adriane/graph-core";
-import type { RunEvent } from "@adriane/graph-runtime";
+import type { NodeId, RunId } from "@adriane-ai/graph-core";
+import type { RunEvent } from "@adriane-ai/graph-runtime";
 
 export type TraceId = string & { readonly __brand: "TraceId" };
 export type SpanId = string & { readonly __brand: "SpanId" };

@@ -1,4 +1,4 @@
-import { ReActAgent, type AgentId, type ToolRegistry } from "@adriane/agents-core";
+import { ReActAgent, type AgentId, type ToolRegistry } from "@adriane-ai/agents-core";
 import {
   InMemoryPromptRegistry,
   ModelPolicy,
@@ -6,14 +6,14 @@ import {
   type LLMProvider,
   type ModelTier,
   type PromptRegistry
-} from "@adriane/llm-gateway";
-import { createToolNode, DynamicInterrupt, type NodeHandler } from "@adriane/graph-runtime";
+} from "@adriane-ai/llm-gateway";
+import { createToolNode, DynamicInterrupt, type NodeHandler } from "@adriane-ai/graph-runtime";
 // Type-only: keeps the ApprovalEngine contract without pulling its Pg/db implementation
 // (and a `pg` dependency) into consumers such as the Studio bundle.
-import type { ApprovalEngine, ApprovalId } from "@adriane/approval-engine";
-import type { NodeId, RunId } from "@adriane/graph-core";
+import type { ApprovalEngine, ApprovalId } from "@adriane-ai/approval-engine";
+import type { NodeId, RunId } from "@adriane-ai/graph-core";
 
-/** Default channel an agent node writes its {@link import("@adriane/agents-core").AgentResult} into. */
+/** Default channel an agent node writes its {@link import("@adriane-ai/agents-core").AgentResult} into. */
 export const DEFAULT_AGENT_OUTPUT_CHANNEL = "agentResult";
 
 /**

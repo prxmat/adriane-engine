@@ -47,13 +47,13 @@ importers:
 
   packages/adriane-cli:
     dependencies:
-      '@adriane/graph-adriane':
+      '@adriane-ai/graph-adriane':
         specifier: workspace:*
         version: link:../graph-adriane
-      '@adriane/graph-runtime':
+      '@adriane-ai/graph-runtime':
         specifier: workspace:*
         version: link:../graph-runtime
-      '@adriane/lang-adriane':
+      '@adriane-ai/lang-adriane':
         specifier: workspace:*
         version: link:../lang-adriane
       commander:
@@ -69,10 +69,10 @@ importers:
 
   packages/agents-core:
     dependencies:
-      '@adriane/artifact-store':
+      '@adriane-ai/artifact-store':
         specifier: workspace:*
         version: link:../artifact-store
-      '@adriane/graph-core':
+      '@adriane-ai/graph-core':
         specifier: workspace:*
         version: link:../graph-core
     devDependencies:
@@ -85,10 +85,10 @@ importers:
 
   packages/approval-engine:
     dependencies:
-      '@adriane/artifact-store':
+      '@adriane-ai/artifact-store':
         specifier: workspace:*
         version: link:../artifact-store
-      '@adriane/graph-core':
+      '@adriane-ai/graph-core':
         specifier: workspace:*
         version: link:../graph-core
     devDependencies:
@@ -101,7 +101,7 @@ importers:
 
   packages/artifact-store:
     dependencies:
-      '@adriane/graph-core':
+      '@adriane-ai/graph-core':
         specifier: workspace:*
         version: link:../graph-core
       zod:
@@ -152,7 +152,7 @@ importers:
 
   packages/graph-adriane:
     dependencies:
-      '@adriane/graph-core':
+      '@adriane-ai/graph-core':
         specifier: workspace:*
         version: link:../graph-core
       js-yaml:
@@ -184,10 +184,10 @@ importers:
 
   packages/graph-runtime:
     dependencies:
-      '@adriane/agents-core':
+      '@adriane-ai/agents-core':
         specifier: workspace:*
         version: link:../agents-core
-      '@adriane/graph-core':
+      '@adriane-ai/graph-core':
         specifier: workspace:*
         version: link:../graph-core
     devDependencies:
@@ -226,7 +226,7 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.19.21)
     optionalDependencies:
-      '@adriane/napi':
+      '@adriane-ai/napi':
         specifier: workspace:*
         version: link:../../crates/bindings
 
@@ -273,10 +273,10 @@ importers:
 
   packages/observability:
     dependencies:
-      '@adriane/graph-core':
+      '@adriane-ai/graph-core':
         specifier: workspace:*
         version: link:../graph-core
-      '@adriane/graph-runtime':
+      '@adriane-ai/graph-runtime':
         specifier: workspace:*
         version: link:../graph-runtime
     devDependencies:
@@ -307,13 +307,13 @@ importers:
 
   plugin/mcp:
     dependencies:
-      '@adriane/approval-engine':
+      '@adriane-ai/approval-engine':
         specifier: workspace:*
         version: link:../../packages/approval-engine
-      '@adriane/graph-sdk':
+      '@adriane-ai/graph-sdk':
         specifier: workspace:*
         version: link:../../packages/graph-sdk
-      '@adriane/napi':
+      '@adriane-ai/napi':
         specifier: workspace:*
         version: link:../../crates/bindings
       '@modelcontextprotocol/sdk':

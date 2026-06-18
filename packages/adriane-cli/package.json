@@ -1,5 +1,5 @@
 {
-  "name": "@adriane/adriane-cli",
+  "name": "@adriane-ai/adriane-cli",
   "private": true,
   "license": "Apache-2.0",
   "version": "0.1.0-rc.1",
@@ -16,9 +16,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@adriane/graph-adriane": "workspace:*",
-    "@adriane/graph-runtime": "workspace:*",
-    "@adriane/lang-adriane": "workspace:*",
+    "@adriane-ai/graph-adriane": "workspace:*",
+    "@adriane-ai/graph-runtime": "workspace:*",
+    "@adriane-ai/lang-adriane": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {

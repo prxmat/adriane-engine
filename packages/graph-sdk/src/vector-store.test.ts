@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { cosineSimilarity, createVectorStore } from "./vector-store.js";
 
-describe("@adriane/graph-sdk — cosineSimilarity", () => {
+describe("@adriane-ai/graph-sdk — cosineSimilarity", () => {
   it("scores identical vectors at 1 and orthogonal vectors at 0", () => {
     expect(cosineSimilarity([1, 0], [1, 0])).toBe(1);
     expect(cosineSimilarity([1, 0], [0, 1])).toBe(0);
@@ -17,7 +17,7 @@ describe("@adriane/graph-sdk — cosineSimilarity", () => {
   });
 });
 
-describe("@adriane/graph-sdk — createVectorStore (in-memory)", () => {
+describe("@adriane-ai/graph-sdk — createVectorStore (in-memory)", () => {
   it("upsert + query ranks by cosine similarity, descending", () => {
     const store = createVectorStore();
     store.upsert([
@@ -52,7 +52,7 @@ describe("@adriane/graph-sdk — createVectorStore (in-memory)", () => {
   });
 });
 
-describe("@adriane/graph-sdk — createVectorStore (file persistence)", () => {
+describe("@adriane-ai/graph-sdk — createVectorStore (file persistence)", () => {
   const dirs: string[] = [];
   const tempPath = (): string => {
     const dir = mkdtempSync(join(tmpdir(), "adriane-vstore-"));

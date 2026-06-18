@@ -7,13 +7,13 @@ VERSION="0.0.0"
 TMP_ROOT="${TMPDIR:-/tmp}/adriane-name-reservation"
 PYPI_NAME="adriane"
 NPM_PACKAGES=(
-  "@adriane/graph-sdk"
-  "@adriane/napi"
-  "@adriane/napi-darwin-arm64"
-  "@adriane/napi-darwin-x64"
-  "@adriane/napi-linux-arm64-gnu"
-  "@adriane/napi-linux-x64-gnu"
-  "@adriane/napi-win32-x64-msvc"
+  "@adriane-ai/graph-sdk"
+  "@adriane-ai/napi"
+  "@adriane-ai/napi-darwin-arm64"
+  "@adriane-ai/napi-darwin-x64"
+  "@adriane-ai/napi-linux-arm64-gnu"
+  "@adriane-ai/napi-linux-x64-gnu"
+  "@adriane-ai/napi-win32-x64-msvc"
 )
 
 usage() {

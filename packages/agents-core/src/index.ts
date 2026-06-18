@@ -1,9 +1,9 @@
 /**
  * @deprecated The TypeScript agents-core is deprecated as part of the execution
  * engine. Agent execution has moved to the Rust `crates/agents-core` crate, driven
- * from `@adriane/graph-sdk` through the `@adriane/napi` native addon; this package now
+ * from `@adriane-ai/graph-sdk` through the `@adriane-ai/napi` native addon; this package now
  * serves only as a fallback when that native addon is absent. New code should run
- * agents via `@adriane/graph-sdk`, not by importing this engine directly. See
+ * agents via `@adriane-ai/graph-sdk`, not by importing this engine directly. See
  * `docs/adr/0003-ts-engine-deprecated-sdk-on-rust.md`.
  */
 export * from "./types.js";

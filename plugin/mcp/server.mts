@@ -1,4 +1,4 @@
-// Adriane MCP server — runs the production TypeScript engine (@adriane/graph-sdk)
+// Adriane MCP server — runs the production TypeScript engine (@adriane-ai/graph-sdk)
 // in-process so Claude Code can EXECUTE governed agents and graphs, not just
 // validate them. The full governance loop is real: an agent that reaches for a
 // sensitive tool suspends the run (`status: "suspended"`), surfaces a pending
@@ -9,13 +9,13 @@
 //   - run_agent({ agent, input })            — build the agent's graph via the SDK and run it.
 //   - approve_and_resume({ runId, ... })     — grant approval and resume a suspended run.
 //   - run_graph({ graph, input })            — run a predefined SDK graph by name.
-//   - validate_graph({ definitionJson })     — structural validation (wraps @adriane/napi).
-//   - compile_graph_yaml({ yaml })           — compile graph DSL YAML (wraps @adriane/napi).
+//   - validate_graph({ definitionJson })     — structural validation (wraps @adriane-ai/napi).
+//   - compile_graph_yaml({ yaml })           — compile graph DSL YAML (wraps @adriane-ai/napi).
 //
 // This file is TypeScript (.mts) and is launched under `tsx` so it can import the
-// workspace TS sources of @adriane/graph-sdk directly (see plugin/mcp/tsconfig.json
+// workspace TS sources of @adriane-ai/graph-sdk directly (see plugin/mcp/tsconfig.json
 // + tsconfig.base.json path aliases). The Rust validate/compile path stays on the
-// prebuilt @adriane/napi addon.
+// prebuilt @adriane-ai/napi addon.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -29,7 +29,7 @@ import { dirname, join } from "node:path";
 // The MCP stdio transport only forwards a whitelist of env vars to this child, so an
 // external `ADRIANE_SDK_ENGINE=rust` set by the launcher does NOT reach us. We opt in
 // here so agent/graph tools route to the Rust engine (Phase G already defaults agent
-// graphs to Rust under `auto` when the @adriane/napi addon is present; this makes the
+// graphs to Rust under `auto` when the @adriane-ai/napi addon is present; this makes the
 // choice explicit and whitelist-proof). An explicit caller value is never overridden.
 process.env.ADRIANE_SDK_ENGINE = process.env.ADRIANE_SDK_ENGINE ?? "rust";
 
@@ -103,14 +103,14 @@ import {
   type LLMResponse,
   type RunId,
   type ToolId
-} from "@adriane/graph-sdk";
+} from "@adriane-ai/graph-sdk";
 // The in-memory approval engine and its types come from the public package index.
-// The Pg adapter (and its `db`/`pg` chain) now lives in the PRIVATE `@adriane/db-adapters`
+// The Pg adapter (and its `db`/`pg` chain) now lives in the PRIVATE `@adriane-ai/db-adapters`
 // package and is no longer re-exported here, so importing the package index is safe.
-import { InMemoryApprovalEngine } from "@adriane/approval-engine";
-import type { ApprovalId, ApprovalRequest } from "@adriane/approval-engine";
+import { InMemoryApprovalEngine } from "@adriane-ai/approval-engine";
+import type { ApprovalId, ApprovalRequest } from "@adriane-ai/approval-engine";
 
-// --- @adriane/napi (Rust engine) — kept for validate / compile -----------------
+// --- @adriane-ai/napi (Rust engine) — kept for validate / compile -----------------
 
 type RustEngine = {
   validateGraphJson: (definitionJson: string) => string;
@@ -119,11 +119,11 @@ type RustEngine = {
 
 let cachedEngine: { engine: RustEngine } | { error: string } | undefined;
 
-/** Lazily load @adriane/napi; memoize the outcome so failure is reported, not thrown. */
+/** Lazily load @adriane-ai/napi; memoize the outcome so failure is reported, not thrown. */
 async function loadEngine(): Promise<{ engine: RustEngine } | { error: string }> {
   if (cachedEngine !== undefined) return cachedEngine;
   try {
-    const mod = (await import("@adriane/napi")) as unknown as {
+    const mod = (await import("@adriane-ai/napi")) as unknown as {
       default?: Partial<RustEngine>;
     } & Partial<RustEngine>;
     const engine = (mod?.default ?? mod) as Partial<RustEngine>;
@@ -132,14 +132,14 @@ async function loadEngine(): Promise<{ engine: RustEngine } | { error: string }>
       typeof engine?.compileGraphYamlJson !== "function"
     ) {
       cachedEngine = {
-        error: "@adriane/napi loaded but is missing validateGraphJson/compileGraphYamlJson."
+        error: "@adriane-ai/napi loaded but is missing validateGraphJson/compileGraphYamlJson."
       };
     } else {
       cachedEngine = { engine: engine as RustEngine };
     }
   } catch (error) {
     cachedEngine = {
-      error: `Failed to load @adriane/napi (the Rust engine native addon). Build it with the repo's napi build, then pnpm install. Cause: ${
+      error: `Failed to load @adriane-ai/napi (the Rust engine native addon). Build it with the repo's napi build, then pnpm install. Cause: ${
         error instanceof Error ? error.message : String(error)
       }`
     };
@@ -932,7 +932,7 @@ export const TOOLS = [
   {
     name: "run_agent",
     description:
-      "Execute a predefined Adriane agent ON THE ENGINE (in-process via @adriane/graph-sdk) with a fresh run. " +
+      "Execute a predefined Adriane agent ON THE ENGINE (in-process via @adriane-ai/graph-sdk) with a fresh run. " +
       "Returns { runId, status, result?, pendingApprovals?, note }. If the agent reaches for a sensitive tool the run " +
       "SUSPENDS (status 'suspended') and surfaces pending approvals — call approve_and_resume to continue.",
     inputSchema: {

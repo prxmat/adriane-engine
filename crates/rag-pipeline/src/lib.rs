@@ -1,4 +1,4 @@
-//! Rust port of `@adriane/rag-pipeline`.
+//! Rust port of `@adriane-ai/rag-pipeline`.
 //!
 //! A small, deterministic Retrieval-Augmented-Generation pipeline. The public
 //! surface mirrors the TypeScript package's module set, with the same flow:

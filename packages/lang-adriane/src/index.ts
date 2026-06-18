@@ -1,9 +1,9 @@
 /**
  * @deprecated The TypeScript lang-adriane DSL compiler is deprecated as part of the
  * execution engine. Prompt/agent/chain YAML compilation has moved to the Rust
- * `crates/lang-adriane` crate, used by `@adriane/graph-sdk` through the
- * `@adriane/napi` native addon; this package remains only as a fallback when that
- * native addon is absent. New code should compile via `@adriane/graph-sdk`, not by
+ * `crates/lang-adriane` crate, used by `@adriane-ai/graph-sdk` through the
+ * `@adriane-ai/napi` native addon; this package remains only as a fallback when that
+ * native addon is absent. New code should compile via `@adriane-ai/graph-sdk`, not by
  * importing this engine directly. See
  * `docs/adr/0003-ts-engine-deprecated-sdk-on-rust.md`.
  */

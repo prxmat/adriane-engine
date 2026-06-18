@@ -9,7 +9,7 @@
  * behind {@link import("./semantic-retriever.js").semanticRetriever}.
  *
  * ```ts
- * import { createEmbeddings } from "@adriane/graph-sdk";
+ * import { createEmbeddings } from "@adriane-ai/graph-sdk";
  *
  * const embeddings = createEmbeddings({ apiKey: process.env.MISTRAL_API_KEY });
  * const [a, b] = await embeddings.embed(["hello", "world"]);

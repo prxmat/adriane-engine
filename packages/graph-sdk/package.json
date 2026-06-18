@@ -1,8 +1,8 @@
 {
-  "name": "@adriane/graph-sdk",
+  "name": "@adriane-ai/graph-sdk",
   "license": "Apache-2.0",
   "version": "0.1.0-rc.1",
-  "description": "The front door to the Adriane framework — build, compile and run stateful, resumable agent graphs. Self-contained bundle; the Rust engine (@adriane/napi) activates automatically when installed.",
+  "description": "The front door to the Adriane framework — build, compile and run stateful, resumable agent graphs. Self-contained bundle; the Rust engine (@adriane-ai/napi) activates automatically when installed.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -25,7 +25,7 @@
   },
   "scripts": {
     "build": "tsup",
-    "prepublishOnly": "node -e \"if(!/pnpm/.test(process.env.npm_config_user_agent||'')){console.error('ERROR: publish @adriane/graph-sdk with pnpm (workspace deps are rewritten on publish). See RELEASING.md.');process.exit(1)}\"",
+    "prepublishOnly": "node -e \"if(!/pnpm/.test(process.env.npm_config_user_agent||'')){console.error('ERROR: publish @adriane-ai/graph-sdk with pnpm (workspace deps are rewritten on publish). See RELEASING.md.');process.exit(1)}\"",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
@@ -45,7 +45,7 @@
     "zod": "^3.24.4"
   },
   "optionalDependencies": {
-    "@adriane/napi": "workspace:*"
+    "@adriane-ai/napi": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.3.5",

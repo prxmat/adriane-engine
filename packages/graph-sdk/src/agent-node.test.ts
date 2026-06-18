@@ -33,7 +33,7 @@ const mockGateway = (content: string): LLMGateway => {
 
 const passthrough = { parse: (value: unknown) => value };
 
-describe("@adriane/graph-sdk agent node", () => {
+describe("@adriane-ai/graph-sdk agent node", () => {
   // This block unit-tests the **TS agent-node handler + the TS `AgentNodeConfig.llm`
   // gateway**, asserting the gateway's exact output text flows into `AgentResult`.
   // Under `auto`, agent nodes now route to the Rust engine, which builds its *own*
@@ -142,7 +142,7 @@ describe("@adriane/graph-sdk agent node", () => {
   });
 });
 
-describe("@adriane/graph-sdk agent node — native suspend on approval", () => {
+describe("@adriane-ai/graph-sdk agent node — native suspend on approval", () => {
   const toolCallGateway = (toolName: string): LLMGateway => {
     const gateway = new DefaultLLMGateway();
     gateway.registerAdapter(
@@ -244,7 +244,7 @@ describe("@adriane/graph-sdk agent node — native suspend on approval", () => {
   });
 });
 
-describe("@adriane/graph-sdk agent node — native tool-calling", () => {
+describe("@adriane-ai/graph-sdk agent node — native tool-calling", () => {
   // Asserts the exact TS-gateway tool_use → observation → final trace text, so it
   // pins to the TS engine (the Rust path uses its own gateway; see the note above).
   let savedEngine: string | undefined;
@@ -312,7 +312,7 @@ describe("@adriane/graph-sdk agent node — native tool-calling", () => {
   });
 });
 
-describe("@adriane/graph-sdk tool node", () => {
+describe("@adriane-ai/graph-sdk tool node", () => {
   it("executes the tool calls emitted by the last AI message", async () => {
     const tools = new InMemoryToolRegistry();
     tools.register(
@@ -348,7 +348,7 @@ describe("@adriane/graph-sdk tool node", () => {
   });
 });
 
-describe("@adriane/graph-sdk streamAgentTokens", () => {
+describe("@adriane-ai/graph-sdk streamAgentTokens", () => {
   it("streams the agent's reply token by token via the gateway stream", async () => {
     const gateway = new DefaultLLMGateway();
     gateway.registerAdapter(

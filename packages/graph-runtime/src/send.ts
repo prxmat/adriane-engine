@@ -1,4 +1,4 @@
-import type { NodeId, RunId } from "@adriane/graph-core";
+import type { NodeId, RunId } from "@adriane-ai/graph-core";
 
 export type SendEnvelope = {
   runId: RunId;
