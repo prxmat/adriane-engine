@@ -8,7 +8,8 @@ description: A typed-error index and the operational failure modes you will actu
 
 Adriane errors are **typed classes**, never bare `throw new Error("…")`. The class name
 and message tell you the cause; this page maps each to its fix, then covers the
-operational footguns (engine availability, cross-process resume, seeding, mocks, SSE).
+engine-level footguns (engine availability, cross-process resume, validation codes, and
+mock sequencing).
 
 ## Typed-error index
 
@@ -23,11 +24,11 @@ operational footguns (engine availability, cross-process resume, seeding, mocks,
 :::note On `RunError`
 There is no `RunError` class. A run that fails surfaces as a **`run_failed` event**
 (`{ type: "run_failed", runId, error, timestamp }`) on the event bus, and the run's
-status becomes `failed`. To diagnose, read the run's event journal
-(`GET /runs/:id/events`) and inspect the `error` string on the `run_failed` event — it
-carries the message of whatever the failing node threw. The `AdrianeSdkError` base class
-covers SDK-thrown errors; `ToolException` (graph-runtime) is thrown by a failing tool
-node.
+status becomes `failed`. To diagnose, read the run's event journal (subscribe with
+`app.onEvent(...)`, or replay the journal you persisted) and inspect the `error` string on
+the `run_failed` event — it carries the message of whatever the failing node threw. The
+`AdrianeSdkError` base class covers SDK-thrown errors; `ToolException` (graph-runtime) is
+thrown by a failing tool node.
 :::
 
 All SDK errors extend `AdrianeSdkError`, so `error instanceof AdrianeSdkError` catches
@@ -67,27 +68,14 @@ A run resumes from its latest checkpoint. With `InMemoryCheckpointer` those chec
 live in the original process's memory and are gone the moment a *different* process
 tries to resume.
 
-Fix: use `PgCheckpointer` so checkpoints are durable and cross-process — and resume with
-the **same graph definition** that produced the checkpoint. The checkpoint encodes a
-position in a specific graph; resuming against a structurally different graph (renamed
-nodes, changed edges) will not line up. See
+Fix: give the graph a **durable** `Checkpointer` so checkpoints are cross-process. The
+engine ships the `Checkpointer` interface + `InMemoryCheckpointer` only — implement the
+interface against your own store (Postgres/Redis/…), or use **Adriane Studio**, the managed
+control plane that provides durable checkpointing for you. Then resume on the **same
+`CompiledGraph`** that produced the checkpoint: the checkpoint encodes a position in a
+specific graph, so resuming against a structurally different graph (renamed nodes, changed
+edges) will not line up. See
 [persistent checkpointing](/docs/core-concepts/resumability-and-approvals).
-
-## Seeding was skipped → `/graphs` and `/runs` are empty
-
-The schema is not migrated on API boot. The seed runs in `onApplicationBootstrap`, and
-if the tables do not exist it logs `Skipped seeding: …` and swallows the error — so the
-API comes up **healthy but empty**, and `POST /runs` 404s because there are no graphs.
-
-Fix: push the schema **before** the API boots, then restart it.
-
-```bash
-pnpm --filter @adriane-ai/db db:push
-PORT=3001 pnpm --filter @adriane-ai/api dev
-```
-
-Expected result: `GET /graphs` lists the seeded example graphs (e.g.
-`sdk-publish-flow`, `sdk-approval-demo`).
 
 ## Mock-sequencing order for scripted gateways
 
@@ -111,23 +99,16 @@ Expected result: the first `complete()` returns turn 1, the second returns turn 
 any further calls repeat turn 2. A single `response` (not `responses`) is equivalent to
 a one-element array that repeats forever. `responses` takes precedence over `response`.
 
-## SSE needs `AUTH_DISABLED` (locally)
+## No live SSE view from the engine
 
-The live run view streams over Server-Sent Events (`GET /runs/:id/stream`). The browser
-`EventSource` API **cannot send an `Authorization` header**, so with server auth on, the
-stream is rejected. Locally, run the API with `AUTH_DISABLED=true` (which is only
-permitted in `NODE_ENV=local` — see [deployment](/docs/production/deployment)); the
-`JwtAuthGuard` injects a system principal and the SSE connection succeeds. Do **not**
-set `AUTH_DISABLED=false` and expect `EventSource` to work — it will break the stream.
-
-:::note This is a local convenience, not a production pattern
-`AUTH_DISABLED` refuses to boot outside `NODE_ENV=local`. A production SSE story needs
-an auth scheme `EventSource` can carry (e.g. a token in the query string or a cookie) —
-that is not implemented yet. Treat the live view as a local/dev capability for now.
-:::
+The engine emits events in-process; it does **not** serve an HTTP stream. If you expected a
+live `EventSource`/SSE view, that belongs to a control plane, not the library. Subscribe with
+`app.onEvent(...)` and push events to your own transport, or use **Adriane Studio**, which
+persists the journal and serves the live SSE governance view for you. See
+[observable runs](/docs/governance/observable-runs).
 
 ## See also
 
-- [Deployment](/docs/production/deployment)
+- [Running in production](/docs/production/deployment)
 - [Production best practices](/docs/production/best-practices)
 - [The execution contract](/docs/core-concepts/execution-contract)

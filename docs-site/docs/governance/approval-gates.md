@@ -42,9 +42,11 @@ continue" — publishing, deploying, routing a low-confidence answer.
 
 :::note Engine note
 `resume()` / `approveAndResume()` must follow a suspended run on the **same `CompiledGraph`
-instance**, which holds the suspended state to feed back to the Rust engine. With a durable
-[`PgCheckpointer`](/docs/core-concepts/resumability-and-approvals#durable-checkpoints) the state
-is persisted, so a different process can resume.
+instance**, which holds the suspended state to feed back to the Rust engine. The engine ships
+the [`Checkpointer` interface plus an `InMemoryCheckpointer`](/docs/core-concepts/resumability-and-approvals#durable-checkpoints);
+implement that interface against a durable store (Postgres, Redis, …) — or use **Adriane
+Studio**, the managed control plane — so the state is persisted and a different process can
+resume.
 :::
 
 ## Seam 2 — agent-native tool approval
@@ -108,10 +110,13 @@ never approves anything itself. The wire mechanics (the reserved channels) are i
 This is the rule the whole model turns on: the principal that **requests** an action and the
 principal that **approves** it must be different.
 
-- The control plane binds the resolver to the **authenticated principal** and rejects an
-  attempt to approve a request made by that same identity with a **`409`** — not a warning.
 - The Rust engine independently guards its approve/resume entry points (`ensure_can_resolve`),
-  so a direct-engine caller cannot resolve an approval *as the requesting agent* either.
+  so a direct-engine caller cannot resolve an approval *as the requesting agent*. This guard
+  ships in the open engine.
+- A control plane on top — **Adriane Studio** (the managed governance platform), or one you
+  build on the SDK — binds the resolver to the **authenticated principal** and rejects an
+  attempt to approve a request made by that same identity (e.g. with a **`409`**) before it ever
+  reaches the engine.
 
 That two-layer enforcement is the [defense in depth](./governance-model#defense-in-depth) that
 keeps the rule true even if one layer is misconfigured.

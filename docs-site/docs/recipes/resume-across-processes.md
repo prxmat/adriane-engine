@@ -1,26 +1,35 @@
 ---
 sidebar_position: 3
 title: Resume across processes
-description: Suspend a governed run in one process, persist the checkpoint, and resume it in another via the catalog run path.
+description: Suspend a governed run in one process, persist the checkpoint, and resume it in another — by implementing the Checkpointer interface or running on Adriane Studio.
 ---
 
 # Resume across processes
 
-The realistic shape of a human-approval workflow: an API process starts a run, it **suspends**
-for approval, the process exits, and hours later a *different* process (a worker) resumes it. To
-cross that process boundary you need two things — a **stable run id** and a **persisted
-checkpoint** — and a resume entry point that takes the checkpoint as data rather than reading it
-from in-process memory.
+The realistic shape of a human-approval workflow: one process starts a run, it **suspends**
+for approval, the process exits, and hours later a *different* process resumes it. To cross that
+process boundary you need two things — a **stable run id** and a **persisted checkpoint** — and a
+resume entry point that takes the checkpoint as data rather than reading it from in-process
+memory.
 
-That entry point is the **catalog run path**: `runCatalogGraph` and `resumeCatalogGraph`. They
-run a plain `GraphDefinition` on the Rust engine and return a **serializable `GraphState`** you
-can store anywhere and hand back later. This is the exact seam the Adriane control plane uses.
+The engine is a **library you embed**, not a server. It ships the `Checkpointer` **interface**
+plus an `InMemoryCheckpointer` (great for a single process, tests, and the dev loop). In-memory
+checkpoints die with the process, so to resume across a boundary you have two honest options:
+
+1. **Implement the `Checkpointer` interface** against a durable store you own (Postgres, Redis,
+   S3, a file) and wire it into your own service. The engine never embeds a DB schema — the
+   persistence is yours.
+2. **Use [Adriane Studio](/docs/roadmap)** — the managed control plane — which provides durable
+   checkpointing, a worker fleet, and the governance UI out of the box, so you don't build or
+   operate any of it.
+
+This recipe shows option 1 end to end, then points at the seam Studio builds on.
 
 ```mermaid
 sequenceDiagram
-  participant P1 as Process A (API)
+  participant P1 as Process A
   participant Store as Your store (Postgres, …)
-  participant P2 as Process B (worker)
+  participant P2 as Process B
   P1->>P1: runCatalogGraph(def, { runId })
   P1->>Store: persist outcome.state (status "suspended")
   Note over P1: process A can exit
@@ -29,7 +38,15 @@ sequenceDiagram
   P2-->>P2: status "completed"
 ```
 
-## Process A — start and persist
+## The serializable seam
+
+The catalog run path — `runCatalogGraph` and `resumeCatalogGraph` — runs a plain
+`GraphDefinition` on the Rust engine and returns a **serializable `GraphState`** you can store
+anywhere and hand back later. Because the checkpoint comes back to you *as data*, you decide
+where it lives. This is the seam a control plane (your own, or Adriane Studio) builds durable
+resume on top of.
+
+### Process A — start and persist
 
 `runCatalogGraph(definition, options)` runs to completion or suspension and returns a
 `CatalogRunOutcome`: `{ state, status, usedRustEngine }`. The `state` is a full `GraphState`
@@ -62,7 +79,7 @@ if (outcome.status === "suspended") {
 **Expected result:** `outcome.status` is `"suspended"` for a graph that hits a gate, and
 `outcome.state` is a JSON-serializable snapshot you control the persistence of.
 
-## Process B — load and resume
+### Process B — load and resume
 
 A fresh process loads the persisted state and calls `resumeCatalogGraph(definition, state, …)`.
 The definition must be the *same* graph (it is data — store it, or rebuild it from the same
@@ -95,11 +112,67 @@ For an *ungoverned* resume (no gated tools to unlock), omit `approvedTools`:
 const resumed = await resumeCatalogGraph(definition, state);
 ```
 
-:::warning The Rust engine is required for cross-process resume
+:::warning The Rust engine is required for the catalog seam
 `runCatalogGraph` / `resumeCatalogGraph` throw `RustEngineUnavailableError` when the native
 addon (`@adriane-ai/napi`) is absent — there is no TypeScript fallback for this seam. The Rust
-engine re-validates the no-self-approval provenance on every resume (defence in depth on the
-production path). (Source: `packages/graph-sdk/src/run-catalog-graph.ts`.)
+engine re-validates the no-self-approval provenance on every resume (defence in depth). Both the
+catalog path and `@adriane-ai/napi` ship in the open SDK. (Source:
+`packages/graph-sdk/src/run-catalog-graph.ts`.)
+:::
+
+## Implementing a durable `Checkpointer`
+
+The engine exports the `Checkpointer` interface and the in-memory implementation; persisting to a
+real store is just implementing the same four methods against it. Here is a minimal sketch
+against any key/value-ish store — adapt the body to Postgres, Redis, S3, or a file:
+
+```ts
+import { InMemoryCheckpointer } from "@adriane-ai/graph-sdk";
+import type { Checkpointer, Checkpoint, CheckpointId } from "@adriane-ai/graph-runtime";
+import type { RunId } from "@adriane-ai/graph-sdk";
+
+// `InMemoryCheckpointer` is what the engine uses by default — swap in your own.
+export class MyStoreCheckpointer implements Checkpointer {
+  constructor(private readonly store: MyDurableStore) {}
+
+  // Called after every node completion / state mutation — append, don't overwrite.
+  async save(checkpoint: Checkpoint): Promise<void> {
+    await this.store.put(`cp:${checkpoint.id}`, JSON.stringify(checkpoint));
+    await this.store.put(`latest:${checkpoint.runId}`, checkpoint.id);
+    await this.store.append(`run:${checkpoint.runId}`, checkpoint.id);
+  }
+
+  // The latest checkpoint for a run — what resume reads.
+  async load(runId: RunId): Promise<Checkpoint | undefined> {
+    const id = await this.store.get(`latest:${runId}`);
+    return id ? this.loadById(id as CheckpointId) : undefined;
+  }
+
+  async loadById(id: CheckpointId): Promise<Checkpoint | undefined> {
+    const raw = await this.store.get(`cp:${id}`);
+    return raw ? (JSON.parse(raw) as Checkpoint) : undefined;
+  }
+
+  // Every checkpoint for a run, oldest first — powers time-travel / audit.
+  async list(runId: RunId): Promise<Checkpoint[]> {
+    const ids = await this.store.listAppended(`run:${runId}`);
+    const all = await Promise.all(ids.map((id) => this.loadById(id as CheckpointId)));
+    return all.filter((cp): cp is Checkpoint => cp !== undefined);
+  }
+}
+```
+
+A `Checkpoint` is `{ id, runId, graphState, createdAt }` — `graphState` is the same
+JSON-serializable `GraphState` the catalog seam hands you, so the store only ever sees plain
+JSON. Once you have a durable `Checkpointer`, your service persists on `save` and rehydrates on
+`load` across any process boundary, with `list` backing time-travel and audit.
+
+:::note Don't want to build and operate this?
+[Adriane Studio](/docs/roadmap) — the managed control plane — provides durable checkpointing, a
+worker fleet that picks up suspended runs, and a governance UI to review and approve them, so you
+don't implement a `Checkpointer`, stand up a store, or run a worker yourself. The engine in this
+repo gives you the `Checkpointer` interface and `InMemoryCheckpointer`; Studio is the platform
+that runs durably on top of the same seam.
 :::
 
 ## Why not `CompiledGraph.resume()` across processes?
@@ -112,17 +185,8 @@ run …"*. That makes `CompiledGraph` the right tool for a **single-process** su
 for crossing a process boundary. (Source: `CompiledGraph.requireSuspendedState`,
 `packages/graph-sdk/src/compiled-graph.ts`.)
 
-For the cross-process case, the catalog path is the supported seam because the checkpoint is
-**returned to you as data** — you decide where it lives.
-
-:::note Bring your own durable store
-The catalog seam hands you a serializable `GraphState`; persisting it is yours to wire up
-(Postgres, Redis, S3, a file). The Postgres-backed `Checkpointer` adapters used by the control
-plane live in a private `@adriane-ai/db-adapters` package and are intentionally **not** in the
-public SDK bundle, so the SDK never embeds the DB schema. The `Checkpointer` interface is
-exported if you want to implement your own. (Source: the export comment in
-`packages/graph-sdk/src/index.ts`.)
-:::
+For the cross-process case, use the catalog path (the checkpoint is **returned to you as data**)
+or a durable `Checkpointer` of your own — or let Adriane Studio do it for you.
 
 ## Approvals across the boundary
 

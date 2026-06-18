@@ -219,6 +219,31 @@ entry(nodeId: string): this;
 
 Override the entry node (which otherwise defaults to the first node added).
 
+### `checkpointer(cp)`
+
+```ts
+checkpointer(cp: Checkpointer): this;
+```
+
+Set the checkpointer the compiled graph uses to persist state after every node completion. The
+open SDK ships the `Checkpointer` **interface** plus a single concrete implementation,
+`InMemoryCheckpointer` (the default) — process-local and ideal for development, tests, and
+single-process runs.
+
+```ts
+import { createGraph, InMemoryCheckpointer } from "@adriane-ai/graph-sdk";
+
+createGraph({ name: "p" })
+  .checkpointer(new InMemoryCheckpointer())
+  .node("step", async () => ({}))
+  .compile();
+```
+
+For **durable cross-process resume**, implement the `Checkpointer` interface against your own
+store (Postgres/Redis/…), or use **Adriane Studio** — the managed control plane that provides
+durable checkpointing, a worker fleet, and the governance UI. The open engine does **not** ship a
+Postgres checkpointer.
+
 ### `safeCompile()`
 
 ```ts
@@ -294,8 +319,11 @@ Resume a previously suspended run from its latest checkpoint.
 :::warning Rust resume is instance-bound
 On the Rust engine, `resume` / `approveAndResume` must follow a suspended run **on the same
 `CompiledGraph` instance** — the suspended state is held in-process and fed back to Rust. A
-fresh instance throws `No suspended state for run '...'`. Durable cross-process resume is the
-control plane's job (with a `PgCheckpointer`). (Source: `compiled-graph.ts`.)
+fresh instance throws `No suspended state for run '...'`. For durable cross-process resume the
+engine ships the `Checkpointer` interface and an `InMemoryCheckpointer`; implement the interface
+against your own store (Postgres/Redis/…), or use **Adriane Studio** — the managed control plane
+that provides durable checkpointing, a worker fleet, and the governance UI. (Source:
+`compiled-graph.ts`.)
 :::
 
 ### `approveAndResume(runId, options)`

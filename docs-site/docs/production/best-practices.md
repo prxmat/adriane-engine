@@ -6,23 +6,33 @@ description: Durable checkpoints, governed tools, pinned tiers, and idempotent s
 
 # Production best practices
 
-These are the things that bite once a run survives a process restart, a crash, or a
-human approval that lands an hour later. None of them are new APIs — they are how to
-use the [execution contract](/docs/core-concepts/execution-contract) under real load.
+These are the things that bite once a run — inside your own app — survives a process
+restart, a crash, or a human approval that lands an hour later. None of them are new APIs —
+they are how to use the [execution contract](/docs/core-concepts/execution-contract) under
+real load.
 
-## Use `PgCheckpointer`, not `InMemoryCheckpointer`
+## Use a durable Checkpointer, not `InMemoryCheckpointer`
 
 A checkpoint is the full typed state plus the position in the graph, written after every
 node completion. `InMemoryCheckpointer` keeps those in process memory — fine for tests
 and single-process runs, useless the moment the process exits.
 
-For anything that suspends on a human gate, runs on a worker, or must survive a restart,
-use `PgCheckpointer`. It persists checkpoints to Postgres, so a run suspended in one
-process resumes in **another** process — which is exactly what a worker fleet does.
+For anything that suspends on a human gate, runs across more than one instance of your app,
+or must survive a restart, you need **durable** checkpoints. The engine ships the
+`Checkpointer` **interface** plus `InMemoryCheckpointer` only — there is no built-in
+database checkpointer. Two paths give you durability:
+
+- **Implement the `Checkpointer` interface** against a store you already run (Postgres,
+  Redis, …) and pass your instance to `.checkpointer(...)`. A run suspended in one process
+  then resumes in **another**, which is what a horizontally-scaled app needs.
+- **Use Adriane Studio**, the managed control plane — durable checkpointing, a worker fleet,
+  and the governance UI out of the box, so you don't build the durable layer yourself.
+
+Both are covered in [Running in production](/docs/production/deployment#choosing-a-checkpointer).
 
 :::warning In-memory checkpoints do not cross processes
 A run suspended on a human gate with `InMemoryCheckpointer` is unresumable from any
-other process — including the worker that picks it up next. If `resume()` fails in a new
+other process — including a fresh instance of the same app. If `resume()` fails in a new
 process, this is almost always why. See
 [persistent checkpointing](/docs/core-concepts/resumability-and-approvals).
 :::
@@ -38,10 +48,12 @@ approval request, and resumes only after a human resolves it. The full loop is i
 ## Never let an agent approve its own output
 
 The approver must be a different principal from the requester. The engine enforces this
-— a self-approval attempt is rejected (the control plane returns `409`). Do not work
-around it by resolving approvals with the same identity that requested them; that
-defeats the entire governance story. Review is always a separate principal (see
-[agent nodes](/docs/building/agent-nodes-and-react)).
+itself — its Rust guard rejects an attempt to resolve an approval as the requesting agent,
+even with no control plane in front of it. Do not work around it by resolving approvals
+with the same identity that requested them; that defeats the entire governance story.
+Review is always a separate principal. A control plane you build on the SDK, or
+**Adriane Studio**, binds the resolver to an authenticated principal on top of that guard
+(see [the governance model](/docs/governance/governance-model)).
 
 ## Pin tiers, not hardcoded models
 
@@ -83,9 +95,9 @@ agent loop and no more — an unbounded loop is an unbounded bill.
 
 Because the runtime checkpoints after every node and resumes from the **latest**
 checkpoint, completed work is never re-run on a clean resume. But a node can still be
-**retried** — a crash mid-node, a worker that dies before the checkpoint is written, a
-job re-delivered by BullMQ. If a node's side effect is a charge or an email, design it
-to be safe to run twice:
+**retried** — a crash mid-node, an instance that dies before the checkpoint is written, or
+a run re-driven by whatever queues work in front of your app. If a node's side effect is a
+charge or an email, design it to be safe to run twice:
 
 - Use an idempotency key tied to the run + node id so a retried charge is deduplicated
   by the downstream service.
@@ -103,12 +115,12 @@ responsibility inside the handler.
 ## Observe via the event journal
 
 Every node lifecycle transition emits an event (`node_started`, `node_completed`,
-`run_suspended`, `run_resumed`, `run_completed`, `run_failed`). The persisted event
-journal **is** the audit trail and the source of truth for the live run view — if a
-transition happened there is an event for it. Read it via the API (`GET /runs/:id/events`
-for the durable log, `GET /runs/:id/stream` for the live SSE feed) rather than scraping
-application logs. Wire `OTEL_ENDPOINT` if you want the same signals in your collector.
-See [observable runs](/docs/governance/observable-runs).
+`run_suspended`, `run_resumed`, `run_completed`, `run_failed`). The event journal **is**
+the audit trail and the source of truth for any live run view — if a transition happened
+there is an event for it. Subscribe with `app.onEvent(...)` in-process and persist the
+journal wherever you keep operational data, rather than scraping application logs. If you'd
+rather not build that, **Adriane Studio** persists the journal and serves the live view for
+you. See [observable runs](/docs/governance/observable-runs).
 
 ## Next
 

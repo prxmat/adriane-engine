@@ -251,6 +251,14 @@ gated `deploy_to_prod` executes exactly once during Act 3 — **never before its
 | Who decides | any out-of-band human signal | a principal that is **not** the requesting agent |
 | Recorded as | a `run_suspended` event | an `ApprovalRequest` (`requestedBy = security-audit`) + event |
 
+The whole pipeline above is the **open SDK** — you embed it in your own process and drive it with
+`run` / `resume`. In production, *who* signs off at each seam and *where* the audit trail lives is
+a control-plane concern: **Adriane Studio** (the managed governance platform) binds each approval
+to an authenticated principal, persists the journal, and runs suspended pipelines on a worker
+fleet — or you build the same on top of the SDK approval API. The engine enforces the invariant
+either way (no self-approval, attestation, lifecycle events); the control plane decides and
+records.
+
 :::note Why this graph runs on the TypeScript engine
 This example wires the `security-audit` agent with a TypeScript `approvalEngine`. The
 engine-backed approval flow (file a request per gated tool, read the engine's decision on

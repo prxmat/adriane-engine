@@ -24,10 +24,10 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | Capability | Status | Notes |
 | --- | --- | --- |
 | Deterministic execution (named-predicate routing) | Stable | Conditions are names resolved in the `ConditionRegistry`, never `eval`'d. See [execution contract](/docs/core-concepts/execution-contract). |
-| Checkpoint after every node + state mutation | Stable | `InMemoryCheckpointer` and `PgCheckpointer`. |
+| Checkpoint after every node + state mutation | Stable | The engine ships the `Checkpointer` interface + `InMemoryCheckpointer`. Durable Postgres checkpointing is **Adriane Studio** (commercial), not an open-SDK export. |
 | Lifecycle events (`node_started` … `run_completed`/`run_failed`) | Stable | The event journal is the audit trail. |
 | Suspend / resume + human gates | Stable | `run_suspended` / `run_resumed`; resume re-validates the checkpoint with Zod. |
-| Governance: approval gates, separation of duties, Ed25519 attestation | Stable | Enforced at the control plane **and** independently in the Rust engine. See [governance](/docs/governance/governance-model). |
+| Governance: approval gates, separation of duties, Ed25519 attestation | Stable | The Rust engine enforces no-self-approval + attestation and emits lifecycle events; the SDK exposes the approval API (`humanGate` / `suspendForApproval` / `approveAndResume` / `onEvent`). Binding approvals to authenticated principals, persisting the audit journal, and the live view are a control-plane concern (**Adriane Studio**, or one you build on the SDK). See [governance](/docs/governance/governance-model). |
 | Recursion limit | Stable | `RecursionLimitError` bounds cyclic runs. |
 | One Rust engine + TypeScript SDK (`@adriane-ai/graph-sdk`) | Stable | The Rust engine (`@adriane-ai/napi`) is a **required** dependency. |
 | TypeScript engine path (dev/test/uncovered platforms) | Stable | Not deprecated — it's the fallback when the native addon is absent. |
@@ -37,8 +37,8 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | Rust incremental streaming | Reserved | The Rust path does not yet stream incrementally; streaming is a TS-SDK capability for now. |
 | Parallel fan-out (`NodeDefinition.fanOut`) | Reserved | Schema slot only — **not executed** by the runtime. |
 | Subgraph execution (`NodeDefinition.subgraphId`) | Reserved | Schema slot only — **not executed** by the runtime. |
-| Durable timers / signals | Planned | Not present. See below. |
-| Scalable worker fleet / server | Planned | A single BullMQ worker exists in the control plane; there is no managed, scalable fleet yet. |
+| Durable timers / signals | Planned | Not present in the engine. See below. |
+| Control plane, worker fleet & governance UI | Adriane Studio (commercial) | The control-plane API, the BullMQ worker fleet, durable Postgres checkpointing, and the governance Studio UI are **Adriane Studio**, the managed platform — not part of this open engine repo. The engine is a library you embed; there is no server to run for the engine itself. |
 | Polyglot SDKs beyond TS/Python (Go, Java, PHP, .NET, Ruby, native Rust) | Planned | The architecture is built for this; none are shipped. See below. |
 
 :::note Reserved means absent
@@ -76,18 +76,24 @@ Go, Java, PHP, .NET, Ruby, and a native Rust SDK *tractable* rather than rewrite
 
 ### Durable timers and signals
 
-Today a run suspends at a human gate and resumes from a checkpoint. The next step is
-time-and-event-driven durability: **durable timers** (resume after a delay that survives process
-restarts) and **signals** (resume on an external event), so a governed run can wait on the real
-world without holding a process. This moves Adriane toward the durability properties that tools
-like Temporal are known for — see [the comparison](/docs/introduction/comparison) for the honest
-gap today.
+Today a run suspends at a human gate and resumes from a checkpoint (via the `Checkpointer`
+interface — `InMemoryCheckpointer` in-process, or your own/Adriane Studio for durability). The
+next step is time-and-event-driven durability: **durable timers** (resume after a delay that
+survives process restarts) and **signals** (resume on an external event), so a governed run can
+wait on the real world without holding a process. This moves Adriane toward the durability
+properties that tools like Temporal are known for — see
+[the comparison](/docs/introduction/comparison) for the honest gap today.
 
-### A scalable worker fleet / server
+### The managed platform: Adriane Studio
 
-The control plane has a single BullMQ worker that drains a Redis queue. The roadmap is a
-**managed, scalable fleet**: many workers, self-registration, heartbeating, graceful drain, and a
-server that schedules governed runs across them durably.
+The engine in this repo is a **library you embed** — there is no server to run for the engine
+itself. Like Temporal separates the open SDK from the Temporal Service/Cloud, Adriane separates
+this open engine from **Adriane Studio**, the managed control plane: durable Postgres
+checkpointing, a scalable worker fleet (self-registration, heartbeating, graceful drain), and the
+governance Studio UI (live view, audit journal, approvals bound to authenticated principals).
+Studio's code is **not** in this repo. If you'd rather build your own control plane, the SDK gives
+you everything you need: the `Checkpointer` interface, the approval API (`humanGate` /
+`suspendForApproval` / `approveAndResume`), and `onEvent` for the lifecycle stream.
 
 ### More integrations
 

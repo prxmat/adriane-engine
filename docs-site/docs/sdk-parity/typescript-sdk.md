@@ -55,7 +55,7 @@ The builder surface, in brief:
 | `.edge(from, to)` | an unconditional edge |
 | `.conditionalEdge(from, to, name, predicate)` | a guarded edge (named predicate) |
 | `.entry(id)` | override the entry node |
-| `.checkpointer(cp)` | set the checkpointer (`InMemoryCheckpointer`, `PgCheckpointer`) |
+| `.checkpointer(cp)` | set the checkpointer (the `Checkpointer` interface; ships `InMemoryCheckpointer`) |
 | `.compile()` / `.safeCompile()` | validate → `CompiledGraph` (throws / returns a `Result`) |
 
 ## Running, suspending, resuming
@@ -72,6 +72,14 @@ if (out.status === "suspended") {
 ```
 
 `run()` resolves to a typed `TypedGraphState` (`status`, `channels`, `runId`, `currentNodeId`).
+
+:::note Durable resume
+The open SDK ships the `Checkpointer` interface and an `InMemoryCheckpointer` (process-local).
+For durable cross-process resume, implement the interface against your own store
+(Postgres/Redis/…), or use **Adriane Studio** — the managed control plane that adds durable
+checkpointing, a worker fleet, and the governance UI. The engine itself ships no Postgres
+checkpointer.
+:::
 
 ## Streaming and events
 

@@ -1,209 +1,154 @@
 ---
 sidebar_position: 1
-title: Deployment
-description: Self-hosting the control plane — Postgres, Redis, the API, and a worker fleet.
+title: Running in production
+description: The engine is a library you embed in your own app — choosing a Checkpointer, scaling, and where Adriane Studio fits.
 ---
 
-# Deployment
+# Running in production
 
-Adriane is **self-hosted**. There is no managed cloud: you run Postgres, Redis, the
-control-plane API, and one or more workers yourself. The SDK (`@adriane-ai/graph-sdk`)
-runs in-process and needs none of this — you only reach for the control plane when you
-want persisted runs, the event journal, approval gates resolved by a human, and a
-Studio UI over them.
+The Adriane engine is a **library**, not a server. `@adriane-ai/graph-sdk` (and the Python
+`adriane-ai`) compiles and runs graphs **in-process**, inside your own Node or Python
+application or service. There is **no engine server to deploy** — you deploy *your* app,
+exactly as you would any other dependency. The Rust engine runs natively when the
+`@adriane-ai/napi` addon ships alongside the SDK, with a TypeScript fallback when it is
+absent (see [the execution contract](/docs/core-concepts/execution-contract)).
 
-:::note Early self-host story
-This is a working self-host setup, not a turnkey product. There is no Helm chart, no
-managed offering, and no zero-downtime migration tooling yet. Schema changes go through
-Drizzle `db:push` (see below), which is a direct sync — fine for a single operator, not
-a blue/green rollout. Treat what follows as the honest minimum to run the stack.
+So "running Adriane in production" is really three decisions about your own app: which
+`Checkpointer` you give it, how you scale it, and how you supply provider keys.
+
+## Choosing a Checkpointer
+
+A checkpoint is the full typed state plus the position in the graph, written after every
+node completion. *Where* those checkpoints live is the one production decision the engine
+forces on you, because it determines whether a suspended run can resume in a different
+process.
+
+The engine ships exactly two things here: the `Checkpointer` **interface** and an
+`InMemoryCheckpointer`.
+
+### `InMemoryCheckpointer` — ephemeral / single-process
+
+The default. Checkpoints live in the process's memory. Perfect for tests, scripts, and
+single-process apps where a run starts and finishes inside one process lifetime. The moment
+the process exits, those checkpoints are gone — a run suspended on a human gate cannot be
+resumed by any other process, including a fresh instance of the same app.
+
+```ts
+import { createGraph } from "@adriane-ai/graph-sdk";
+
+const app = createGraph({ name: "publish-flow" })
+  // …nodes…
+  .compile(); // InMemoryCheckpointer by default
+```
+
+### Implement `Checkpointer` for durable, cross-process resume
+
+For anything that suspends on a human gate, must survive a restart, or has to resume in a
+*different* process from the one that started it, you need durable checkpoints. The engine
+never assumes a particular backend — you **implement the `Checkpointer` interface** against
+whatever store you already run (Postgres, Redis, a document store), and pass your instance
+to `.checkpointer(...)`:
+
+```ts
+import { createGraph, type Checkpointer } from "@adriane-ai/graph-sdk";
+
+// Your own implementation, backed by whatever store you run.
+const myCheckpointer: Checkpointer = createMyCheckpointer({
+  connectionString: process.env.DATABASE_URL
+});
+
+const app = createGraph({ name: "publish-flow" })
+  .checkpointer(myCheckpointer)
+  // …nodes…
+  .compile();
+```
+
+Once checkpoints are durable, `app.resume(runId)` works across process boundaries: one
+process suspends a run, a human approves hours later, and a fresh process resumes it from
+the persisted checkpoint. See
+[persistent checkpointing](/docs/core-concepts/resumability-and-approvals).
+
+:::tip Don't want to build the durable layer?
+Reach for **Adriane Studio** — the managed control plane gives you durable checkpointing, a
+worker fleet, and the governance UI out of the box, so you embed the open engine in your app
+and let Studio persist and resume runs for you. See the [Engine vs Adriane Studio](#engine-vs-adriane-studio)
+boundary below.
 :::
 
-## Architecture
+## Scaling your app horizontally
 
-Four pieces, with a one-directional dependency rule (engine ← control plane ← Studio):
+The engine holds **no global mutable state** of its own — all run state lives in the
+`Checkpointer`. That makes your app trivially scalable: run as many instances as you like
+behind your usual load balancer, and as long as they share a **durable** `Checkpointer`,
+any instance can start, suspend, or resume any run. A run suspended on instance A at a human
+gate resumes cleanly on instance B once the approval lands.
+
+The only caveat is the one the contract already names: resume against the **same compiled
+graph** that produced the checkpoint. A checkpoint encodes a position in a specific graph,
+so every instance must build the same `CompiledGraph` (same nodes, edges, conditions).
+Ship one graph definition across your fleet and you are done. With `InMemoryCheckpointer`,
+by contrast, runs are pinned to the single process that created them — fine for ephemeral
+workloads, unusable for a fleet.
+
+## Provider keys via env
+
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `MISTRAL_API_KEY` are read **only** by the LLM
+gateway, and only from the process environment. Set them on your app's runtime the way you
+set any other secret — never hardcode a key in a graph, a prompt, or source, and never check
+one into the repo. Agents reference prompts by id/version and models by **tier**, so neither
+your graph nor your prompts carry a secret. See
+[best practices](/docs/production/best-practices#pin-tiers-not-hardcoded-models).
+
+## The Rust addon ships with the SDK
+
+The native Rust engine loads through the `@adriane-ai/napi` addon. When a prebuilt binary
+for your platform ships with the SDK, runs execute on the Rust engine automatically; when it
+is absent (musl/Alpine, Windows arm64, or any host with no prebuilt binary), `CompiledGraph`
+falls back to the in-process TypeScript engine with an identical public API. Nothing in your
+deployment changes either way — you `npm install` (or `pip install`) the SDK and the right
+engine is selected at runtime. Verify which one you're on with `rustEngineAvailable()`; the
+failure modes are covered in [troubleshooting](/docs/production/troubleshooting#rustengineavailable-is-false).
+
+## Engine vs Adriane Studio
+
+The open engine in this repo is a **library + SDK**. It enforces the runtime guarantees and
+the governance primitives, but it does not run any services for you. When you want the managed
+platform around it — durable storage, a worker fleet, RBAC, an audit UI — that is **Adriane
+Studio**, a separate commercial product. The split mirrors the way Temporal separates its open
+SDK from the Temporal Service/Cloud.
+
+| | Open engine (this repo) | Adriane Studio (commercial) |
+| --- | --- | --- |
+| **What it is** | A library + SDK you embed in your app | A managed control plane you point your app at |
+| **Packages** | `@adriane-ai/graph-sdk`, `@adriane-ai/cli`, Python `adriane-ai`, `@adriane-ai/napi`, graph-core/runtime, agents-core, llm-gateway | Hosted platform — not in this repo |
+| **Checkpointing** | `Checkpointer` interface + `InMemoryCheckpointer` (you implement durable storage) | Durable Postgres checkpointing, managed |
+| **Execution** | In-process, in your app | A managed **worker fleet** |
+| **Governance** | No-self-approval guard (Rust), attestation, lifecycle events, the SDK approval API | RBAC, approvals bound to authenticated principals, the **audit UI** |
+| **Live view** | `onEvent` + the event journal (you build any UI) | Live **SSE governance views** out of the box |
+| **You run** | Your own app + your own store | Nothing — Studio is managed |
+
+The engine alone is complete: it enforces no-self-approval, attests decisions, emits a
+lifecycle event for every transition, and exposes the SDK approval API (`humanGate`,
+`suspendForApproval`, `approveAndResume`, `onEvent`). A control plane — one you build on the
+SDK, or **Adriane Studio** — adds the parts that need persistence and identity: binding
+approvals to authenticated principals, storing the audit journal, and serving the live view.
+Reach for Studio when you'd otherwise be rebuilding that platform yourself.
 
 ```mermaid
 flowchart LR
-  subgraph yours["You run this"]
+  subgraph yourapp["Your app / service (you deploy this)"]
     direction TB
-    pg[("Postgres\ncheckpoints, runs,\nevents, artifacts")]
-    redis[("Redis\nBullMQ queue")]
-    api["Control-plane API\nNestJS + Fastify\nPORT 3001"]
-    w1["Worker 1\nBullMQ consumer"]
-    w2["Worker 2"]
-    wN["Worker N"]
+    code["Your code"]
+    sdk["@adriane-ai/graph-sdk\n+ @adriane-ai/napi (Rust)"]
+    cp["Checkpointer\nInMemory · or your own durable store"]
+    code --> sdk
+    sdk --> cp
   end
-  studio["Studio\nNext.js UI"]
-  sdk["@adriane-ai/graph-sdk\n(in-process, optional)"]
 
-  studio -->|REST + SSE| api
-  api --> pg
-  api -->|enqueue run| redis
-  w1 -->|consume| redis
-  w2 -->|consume| redis
-  wN -->|consume| redis
-  w1 -->|register / heartbeat\nBearer WORKER_TOKEN| api
-  w2 --> api
-  wN --> api
-  w1 --> pg
+  studio["Adriane Studio\nmanaged control plane\n(durable checkpoints · worker fleet ·\nRBAC · audit UI · live SSE)"]
+
+  yourapp -.->|optional: persist & resume,\ngoverned approvals| studio
 ```
-
-- **SDK** (`@adriane-ai/graph-sdk`) — the framework-agnostic engine. Compile and run
-  graphs entirely in-process; no API, no DB. The Rust engine runs natively when the
-  `@adriane-ai/napi` addon is present, with a TypeScript fallback (see
-  [the execution contract](/docs/core-concepts/execution-contract)).
-- **Control-plane API** — NestJS on the Fastify adapter. REST + Swagger at `/docs`,
-  plus an SSE stream per run. Thin controllers over services that drive the engine and
-  persist to Postgres.
-- **Worker** — a standalone BullMQ consumer that executes runs off the Redis queue,
-  registers itself with the API, heartbeats, and drains on `SIGTERM`/`SIGINT`.
-- **Studio** — the Next.js UI. Renders data from the API; never executes the runtime.
-
-## What you self-host
-
-Postgres, Redis, the API, and the worker fleet. Studio is optional (it is just a client
-of the API). The SDK is a library, not a service.
-
-## Environment variables
-
-The API and worker both validate their environment through the same Zod schema in
-`@adriane-ai/config` (`packages/config/src/env.ts`). Boot **fails closed** if the
-schema does not pass.
-
-| Var | Required | Default | Notes |
-| --- | --- | --- | --- |
-| `NODE_ENV` | yes | — | `local` \| `staging` \| `production`. Gates the fail-secure rules below. |
-| `PORT` | no | `3000` | The API listens here. Run it on **3001** so it does not collide with Studio on 3000. |
-| `DATABASE_URL` | yes | — | Postgres connection string. |
-| `REDIS_URL` | yes | — | Redis connection string (BullMQ queue). |
-| `JWT_SECRET` | yes | — | Signing secret for user auth tokens. |
-| `JWT_EXPIRY` | no | `1h` | Token lifetime. |
-| `AUTH_DISABLED` | no | `false` | Dev/offline escape hatch. **Refuses to boot** outside `NODE_ENV=local` (see below). |
-| `WORKER_TOKEN` | conditional | — | Shared m2m secret for worker ↔ API. Optional in `local`, **required (non-empty) everywhere else**. |
-| `OPENAI_API_KEY` | no | — | Provider key; only the LLM gateway reads it. |
-| `ANTHROPIC_API_KEY` | no | — | Provider key. |
-| `MISTRAL_API_KEY` | no | — | Provider key. |
-| `OTEL_ENDPOINT` | no | — | OpenTelemetry collector endpoint. |
-| `LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error`. |
-
-The worker also reads a few non-schema vars directly (`packages` aside, in
-`apps/worker/src/main.ts`): `WORKER_CONCURRENCY` (default `5`), `WORKER_DRAIN_TIMEOUT_MS`
-(default `30000`), and `API_BASE_URL` (defaults to `http://localhost:${PORT}`).
-
-## Postgres + Redis
-
-The dev stack uses Docker (`docker-compose.dev.yml`): `postgres:16` on `5432` and
-`redis:7-alpine` on `6379` with append-only persistence.
-
-```bash
-docker compose -f docker-compose.dev.yml up -d
-```
-
-Expected result: a healthy `postgres` (Postgres 16, user/db `adriane`) and a `redis`
-running `redis-server --appendonly yes`.
-
-For staging/production, point `DATABASE_URL` and `REDIS_URL` at managed instances
-instead — nothing in the API assumes the compose containers specifically.
-
-## Sync the schema (Drizzle)
-
-The schema is **not** migrated on boot. Push it before the API starts, or seeding is
-skipped and `/graphs`/`/runs` come up empty.
-
-```bash
-pnpm --filter @adriane-ai/db db:push
-```
-
-Expected result: the tables (including `workers`, `runs`, `events`, checkpoints,
-artifacts) exist. The API's seed step then inserts the example catalog graphs on
-bootstrap.
-
-:::warning Order matters
-`db:push` must run **before** the API boots. The seed runs in
-`onApplicationBootstrap`; if the tables are missing it logs `Skipped seeding: …` and
-swallows the error, so the API comes up healthy but with no graphs. See
-[troubleshooting](/docs/production/troubleshooting).
-:::
-
-## Run the API
-
-```bash
-PORT=3001 pnpm --filter @adriane-ai/api dev
-```
-
-Expected result: NestJS boots on `0.0.0.0:3001`, Swagger is at
-`http://localhost:3001/docs`, and `GET /health` returns `{"status":"ok"}`. CORS is
-enabled with `origin: true` **only** when `NODE_ENV=local`.
-
-## Run a worker
-
-The worker is a separate process. It waits for the API to be ready, registers itself,
-then consumes runs off the Redis queue and heartbeats every 10 s.
-
-```bash
-pnpm --filter @adriane-ai/worker dev
-```
-
-Expected result: the worker waits for the API, `POST /workers` registers it
-(`{ workerId, capacity, status: "active" }`), and a `PUT /workers/:id/heartbeat` fires
-on a 10-second interval (`apps/worker/src/heartbeat.ts`). `capacity` is the configured
-`WORKER_CONCURRENCY` (default 5).
-
-:::note The worker is optional for synchronous runs
-In the demo path the API executes a run synchronously and the worker is not needed. The
-worker exists for off-loading run execution to a separate, horizontally-scalable
-process pool over Redis.
-:::
-
-### Scaling horizontally
-
-Start more worker processes. Each registers with its own `workerId` (a `nanoid`) and
-pulls jobs off the **same** BullMQ queue in Redis — BullMQ distributes jobs across
-consumers, so adding workers adds throughput with no coordination beyond the shared
-Redis instance.
-
-```bash
-# three workers, eight concurrent jobs each
-WORKER_CONCURRENCY=8 pnpm --filter @adriane-ai/worker dev   # ×3, in separate processes/hosts
-```
-
-Expected result: three rows in `GET /workers`, all heartbeating, all draining the one
-queue.
-
-On `SIGTERM`/`SIGINT` a worker flips its registration to `status: "draining"`, stops
-taking new jobs, waits up to `WORKER_DRAIN_TIMEOUT_MS` for in-flight jobs to finish,
-deregisters (`DELETE /workers/:id`), then exits 0 (`apps/worker/src/main.ts`,
-`drain.ts`).
-
-## Worker ↔ API auth (`WORKER_TOKEN`)
-
-The fleet self-service routes (`POST /workers`, `PUT /workers/:id/heartbeat`,
-`DELETE /workers/:id`) are machine-to-machine. The worker sends the shared
-`WORKER_TOKEN` as `Authorization: Bearer <token>`; the API's `WorkerTokenGuard`
-compares it in **constant time**.
-
-- In `NODE_ENV=local` the token is optional — the worker omits the header and the
-  routes are reachable because the API runs with `AUTH_DISABLED` (below).
-- **Everywhere else** the env schema refuses to boot without a non-empty
-  `WORKER_TOKEN`. Set the same value on the API and every worker.
-
-## `AUTH_DISABLED` is local-only (fail-secure)
-
-`AUTH_DISABLED=true` makes the global `JwtAuthGuard` inject a system principal instead
-of rejecting unauthenticated requests — useful for local boot, the seed, offline
-scripts, and the SSE live view (an `EventSource` cannot send an `Authorization`
-header).
-
-The env schema (`superRefine` in `env.ts`) **refuses to boot** if `AUTH_DISABLED` is
-true and `NODE_ENV` is anything but `local`:
-
-```
-AUTH_DISABLED must not be enabled outside NODE_ENV=local
-```
-
-So a misconfigured staging/prod can never run unauthenticated, even if someone flips the
-flag. The same fail-secure rule applies to `WORKER_TOKEN`.
 
 ## Next
 

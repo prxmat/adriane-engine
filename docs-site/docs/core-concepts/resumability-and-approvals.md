@@ -44,20 +44,38 @@ exactly that sequence.
 
 ## Durable checkpoints
 
-In-memory checkpointing is fine for a single process. To suspend in one process and resume in
-another — the realistic shape of a human-approval workflow — use a durable checkpointer:
+The engine ships the `Checkpointer` **interface** plus an `InMemoryCheckpointer`. In-memory is
+fine for tests and single-process runs. To suspend in one process and resume in another — the
+realistic shape of a human-approval workflow — you need durable checkpoints. You have two paths:
+
+**Implement the interface against your own store.** The engine never assumes a particular
+backend; you wire `Checkpointer` to Postgres, Redis, or anything else, and pass your instance
+to `.checkpointer(...)`:
 
 ```ts
-import { PgCheckpointer } from "@adriane-ai/graph-sdk";
+import { createGraph, type Checkpointer } from "@adriane-ai/graph-sdk";
+
+// Your own implementation, backed by whatever store you run.
+const myCheckpointer: Checkpointer = createMyCheckpointer({
+  connectionString: process.env.DATABASE_URL
+});
 
 const app = createGraph({ name: "publish-flow" })
-  .checkpointer(new PgCheckpointer({ connectionString: process.env.DATABASE_URL }))
+  .checkpointer(myCheckpointer)
   // …nodes…
   .compile();
 ```
 
-Now `app.resume(runId)` works across process boundaries: the API suspends a run, a human
-approves hours later, and a worker resumes it from the persisted checkpoint.
+Once the checkpoints are durable, `app.resume(runId)` works across process boundaries: one
+process suspends a run, a human approves hours later, and a fresh process resumes it from the
+persisted checkpoint.
+
+:::tip Don't want to build the durable layer?
+Use **Adriane Studio**, the managed control plane — it provides durable checkpointing, a worker
+fleet, and the governance UI out of the box, so you embed the open engine in your app and let
+Studio persist and resume runs for you. See the [Governance](/docs/governance/governance-model)
+section.
+:::
 
 ## Approvals are governed resumes
 

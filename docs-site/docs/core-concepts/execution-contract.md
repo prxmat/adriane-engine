@@ -31,9 +31,11 @@ checkpoint is the full, typed state plus the position in the graph. This is what
 exact: a crashed or suspended run continues from the latest checkpoint with **no completed work
 re-run** — and, crucially, no completed *side effects* (a charge, an email) repeated.
 
-Checkpointers are pluggable: `InMemoryCheckpointer` for tests and single-process runs,
-`PgCheckpointer` for durable, cross-process resumption. See
-[persistent checkpointing](/docs/core-concepts/resumability-and-approvals).
+Checkpointers are pluggable. The engine ships the `Checkpointer` interface plus an
+`InMemoryCheckpointer` for tests and single-process runs; for durable, cross-process
+resumption you implement the interface against your own store (Postgres, Redis, …) — or use
+**Adriane Studio**, the managed control plane that provides durable checkpointing for you. See
+[durable checkpoints](/docs/core-concepts/resumability-and-approvals).
 
 ## 3. An event for every node lifecycle transition
 

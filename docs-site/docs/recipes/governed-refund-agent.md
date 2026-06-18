@@ -153,10 +153,12 @@ for (const r of reqs) {
 }
 ```
 
-A real control plane surfaces these to a reviewer, records the decision, and calls
-`approveAndResume` (or simply does not resume — a rejection). For the durable, cross-process
-version of this loop — suspend in the API, approve hours later, resume in a worker — see
-[resume across processes](./resume-across-processes).
+The `run` / `suspend` / `approveAndResume` API shown here is the open SDK — you call it from your
+own service. A control plane on top — **Adriane Studio** (the managed governance platform), or one
+you build on the SDK — surfaces these requests to a reviewer, binds the decision to an
+authenticated principal, records it, and calls `approveAndResume` (or simply does not resume — a
+rejection). For the durable, cross-process version of this loop — suspend in one process, approve
+hours later, resume in another — see [resume across processes](./resume-across-processes).
 
 ## Run it
 

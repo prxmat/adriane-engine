@@ -32,7 +32,7 @@ executes exactly those — no re-gating, no self-grant.
 ## The approval record
 
 Each gated request produces an **approval record** with a stable id. Its shape (as surfaced by
-the control plane):
+a control plane — **Adriane Studio**, or one you build on the SDK):
 
 ```json
 {
@@ -44,9 +44,10 @@ the control plane):
 }
 ```
 
-`resolvedBy` is bound to the **authenticated principal** that resolves the request — never a
-free-text field, and never the requester (that is the
-[no-self-approval](./approval-gates#no-self-approval) rule).
+A control plane (Adriane Studio, or one you build) binds `resolvedBy` to the **authenticated
+principal** that resolves the request — never a free-text field, and never the requester (that
+is the [no-self-approval](./approval-gates#no-self-approval) rule, which the engine also guards
+independently at its resolve entry points).
 
 ## Attestation
 

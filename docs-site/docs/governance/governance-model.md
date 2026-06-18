@@ -16,8 +16,10 @@ guarantees hold no matter what the application does.
 
 The principal that **requests** a sensitive action and the principal that **approves** it must
 be different. An agent cannot approve its own tool call; a user cannot rubber-stamp their own
-request through the same identity. This is enforced — not advised — and a violation is rejected
-(`409`), not logged-and-allowed. See [no-self-approval](./approval-gates#no-self-approval).
+request through the same identity. This is enforced — not advised — and a violation is rejected,
+not logged-and-allowed: the Rust engine guards its resolve entry points, and a control plane on
+top (Adriane Studio, or one you build) rejects the request before it reaches the engine (e.g.
+`409`). See [no-self-approval](./approval-gates#no-self-approval).
 
 ### 2. Provenance — every decision is attributed and attested
 
@@ -38,13 +40,15 @@ to fall out of sync.
 The same rule is enforced at **two independent layers**, so neither a control-plane bug nor a
 direct-engine call can bypass it:
 
-- **Control plane** — the API binds the resolver to the authenticated principal and rejects
-  self-approval before anything reaches the engine.
 - **Engine (Rust)** — the engine independently guards approval and resume entry points
   (`ensure_can_resolve`), so even a caller that reaches the engine directly cannot resolve an
-  approval as the requesting agent.
+  approval as the requesting agent. This guard ships in the open engine.
+- **Control plane** — a control plane you build on the SDK, or **Adriane Studio** (the managed
+  governance platform), binds the resolver to an authenticated principal and rejects
+  self-approval before anything reaches the engine.
 
-If one layer is misconfigured, the other still holds the line.
+If one layer is misconfigured, the other still holds the line. The engine's guard holds even
+with no control plane in front of it.
 
 ## What flows through a governed run
 
