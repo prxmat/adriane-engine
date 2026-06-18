@@ -1,8 +1,8 @@
 {
   "name": "@adriane-ai/graph-sdk",
   "license": "Apache-2.0",
-  "version": "0.1.0-rc.1",
-  "description": "The front door to the Adriane framework — build, compile and run stateful, resumable agent graphs. Self-contained bundle; the Rust engine (@adriane-ai/napi) activates automatically when installed.",
+  "version": "0.1.0",
+  "description": "The front door to the Adriane framework — build, compile and run stateful, resumable agent graphs. Runs on the Rust engine (@adriane-ai/napi), a required dependency.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -39,18 +39,16 @@
     "example:docqa": "node --import tsx examples/doc-qa-reference.ts"
   },
   "dependencies": {
+    "@adriane-ai/napi": "workspace:*",
     "@anthropic-ai/sdk": "^0.69.0",
-    "drizzle-orm": "^0.44.7",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.13.1",
     "zod": "^3.24.4"
-  },
-  "optionalDependencies": {
-    "@adriane-ai/napi": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.3.5",
     "tsx": "^4.20.6",
     "typescript": "^5.8.3",
-    "vitest": "^2.1.9"
+    "vitest": "^3.2.6"
   }
 }

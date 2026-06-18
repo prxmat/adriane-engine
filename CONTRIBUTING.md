@@ -73,7 +73,7 @@ pnpm rust:test   # cargo test
 
 # Native bindings (optional — enables the Rust fast-path locally):
 pnpm napi:build  # builds crates/bindings/adriane_napi.node
-pnpm py:build    # builds the pyo3 extension for local `import adriane`
+pnpm py:build    # builds the pyo3 extension for local `import adriane_ai`
 ```
 
 ## Standards

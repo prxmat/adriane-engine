@@ -1,5 +1,7 @@
 /target
-Cargo.lock
+# Cargo.lock IS committed: this workspace ships binaries/bindings (adriane-cli,
+# bindings/napi, py-bindings) and the release builds with `--locked` for
+# reproducibility. A tracked lockfile is required for clean-checkout CI.
 *.node
 # napi-rs regenerates a JS loader + d.ts on every `napi build`; we ship the
 # hand-written bindings/index.js + index.d.ts instead, so the generated ones

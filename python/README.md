@@ -3,32 +3,51 @@
 A thin, Pythonic SDK over the Adriane **Rust engine**, exposed through a
 [pyo3](https://pyo3.rs) native extension module.
 
-## Multi-language SDK strategy: one engine, many SDKs
+> **Install `adriane-ai`, import `adriane_ai`.** The distribution name on PyPI is
+> `adriane-ai` (hyphen, matching the `@adriane-ai` npm scope); the import package
+> is `adriane_ai` (underscore, per PEP 8 — Python module names can't contain a
+> hyphen). This is the standard pip↔import convention.
 
-Adriane's graph model, validator, and DSL compiler live **once** in Rust (under
-`crates/`). Every language SDK is a thin shim over that single engine rather than
-a re-implementation:
+```bash
+pip install adriane-ai
+```
 
-- **TypeScript SDK** — calls the Rust core via [napi-rs](https://napi.rs)
-  (`crates/bindings`, package `adriane-napi`).
-- **Python SDK** (this package) — calls the *same* Rust core via pyo3
-  (`crates/py-bindings`, package `adriane-py`).
+```python
+import adriane_ai
 
-Both bindings expose the identical JSON-in / JSON-out surface (graph validation,
-DSL compilation, the model policy, the component/prebuilt catalogs, and the
-fully-Rust run paths), so a graph that validates one way in TypeScript validates
+adriane_ai.engine_version()   # -> the bound Rust engine version, e.g. "0.1.0"
+```
+
+## One engine, two SDKs — what to install where
+
+The graph model, validator, and DSL compiler live **once** in Rust (under
+`crates/`). Each language SDK is a thin shim over that single engine, not a
+re-implementation — so a graph that validates one way in TypeScript validates
 exactly the same way in Python. There is no second source of truth to drift.
+
+| | TypeScript | Python (this package) |
+| --- | --- | --- |
+| Install | `npm i @adriane-ai/graph-sdk` | `pip install adriane-ai` |
+| Import | `import { createGraph } from "@adriane-ai/graph-sdk"` | `import adriane_ai` |
+| Rust engine | **optional** — `@adriane-ai/napi` activates it; falls back to the in-bundle TS engine when absent | **built in** — the wheel ships the compiled pyo3 extension |
+| Bridge | [napi-rs](https://napi.rs) (`crates/bindings`) | [pyo3](https://pyo3.rs) (`crates/py-bindings`) |
+| Surface | full builder + custom handlers + streaming | JSON-in / JSON-out: validate, compile, model policy, catalogs, run paths |
+
+Both bindings expose the identical JSON-in / JSON-out core (graph validation, DSL
+compilation, the model policy, the component/prebuilt catalogs, and the
+fully-Rust run paths). The TypeScript SDK adds a builder and custom node handlers
+on top; the Python SDK is the thin JSON surface.
 
 ## API
 
 ### Graph model & DSL
 
 ```python
-import adriane
+import adriane_ai
 
-adriane.engine_version()            # -> "0.0.1" (the bound Rust engine version)
+adriane_ai.engine_version()            # -> the bound Rust engine version string
 
-adriane.validate_graph({            # -> list[dict] of validation errors ([] if sound)
+adriane_ai.validate_graph({            # -> list[dict] of validation errors ([] if sound)
     "id": "g", "version": "0.0.0", "name": "g", "channels": {},
     "nodes": [{"id": "a", "type": "action", "label": "a"}],
     "edges": [{"id": "e1", "from": "a", "to": "ghost", "type": "default"}],
@@ -36,7 +55,7 @@ adriane.validate_graph({            # -> list[dict] of validation errors ([] if 
 })
 # [{'code': 'INVALID_EDGE_REFERENCE', 'message': "Edge 'e1' references unknown node 'ghost'.", 'path': ['e1']}]
 
-adriane.compile_graph_yaml("""    # -> dict (a compiled GraphDefinition)
+adriane_ai.compile_graph_yaml("""    # -> dict (a compiled GraphDefinition)
 id: g
 version: 0.0.0
 name: g
@@ -52,29 +71,29 @@ channels: {}
 
 `validate_graph` returns the full list of structural errors (it does not raise on
 an invalid-but-parseable graph). `compile_graph_yaml` raises `ValueError`
-(`adriane.GraphCompileError`) when the DSL fails to parse, compile, or validate.
+(`adriane_ai.GraphCompileError`) when the DSL fails to parse, compile, or validate.
 
 ### Model policy
 
 ```python
-adriane.available_providers()       # -> list[str], from process env credentials
+adriane_ai.available_providers()       # -> list[str], from process env credentials
 # e.g. ["mistral"] when MISTRAL_API_KEY is set; [] when none are.
 
-adriane.resolve_model("fast", available=["mistral"])
+adriane_ai.resolve_model("fast", available=["mistral"])
 # -> {'provider': 'mistral', 'model': 'mistral-small-latest', 'recommended': True}
 
 # Tiers: "frontier" | "balanced" | "fast" | "creative".
 # Omit `available` to derive it from the env. A provider/model override wins
 # over the policy choice and flags `recommended = False`:
-adriane.resolve_model("frontier", available=["anthropic"], provider="mistral", model="mistral-tiny")
+adriane_ai.resolve_model("frontier", available=["anthropic"], provider="mistral", model="mistral-tiny")
 # -> {'provider': 'mistral', 'model': 'mistral-tiny', 'recommended': False}
 ```
 
 ### Catalogs
 
 ```python
-adriane.list_components()   # -> list[str] of the 28 component kinds, e.g. "promptBuilder"
-adriane.list_prebuilt()     # -> list[dict] of the 16 prebuilt micro-agents
+adriane_ai.list_components()   # -> list[str] of the component kinds, e.g. "promptBuilder"
+adriane_ai.list_prebuilt()     # -> list[dict] of the 16 prebuilt micro-agents
 # each: {'name', 'description', 'tier', 'systemPrompt', 'toolNames',
 #        'suspendForApproval', 'outputChannel'}  (camelCase, from the Rust engine)
 ```
@@ -86,37 +105,39 @@ credentials are present in the env, `run_prebuilt` falls back to a deterministic
 mock gateway, so a run still completes offline.
 
 ```python
-adriane.run_component(              # -> dict, the component's channel-update map
+adriane_ai.run_component(              # -> dict, the component's channel-update map
     "promptBuilder",
     {"template": "Hello {{name}}!", "into": "prompt"},
     {"name": "Ada"},
 )
 # {'prompt': 'Hello Ada!'}
 
-adriane.run_prebuilt("summarizer", "please summarise this long text")
+adriane_ai.run_prebuilt("summarizer", "please summarise this long text")
 # -> {'status': 'completed',
 #     'channels': {'input': ..., 'summary': {...}},
 #     'resolvedModel': {'provider': 'mock', 'model': 'mock-model'}}
 
 # Ergonomic accessor: each attribute is bound to that agent name.
-adriane.prebuilt.summarizer("please summarise this long text")   # same as run_prebuilt("summarizer", ...)
-adriane.prebuilt.classifier("is this spam?", provider="mistral") # override forwarded through
+adriane_ai.prebuilt.summarizer("please summarise this long text")   # same as run_prebuilt("summarizer", ...)
+adriane_ai.prebuilt.classifier("is this spam?", provider="mistral") # override forwarded through
 ```
 
-`run_component` and `run_prebuilt` raise `ValueError` (`adriane.RunError`) on an
+`run_component` and `run_prebuilt` raise `ValueError` (`adriane_ai.RunError`) on an
 unknown kind/agent, invalid input, or an engine/runtime failure.
 
 ## Install
 
-Once published, the wheel installs from PyPI like any package — a single
-`cp39-abi3` wheel covers CPython 3.9+ (the extension targets the stable ABI), so
-nothing compiles on the user's machine:
+A single `cp39-abi3` wheel covers CPython 3.9+ (the extension targets the stable
+ABI), so nothing compiles on the user's machine:
 
 ```bash
-pip install adriane
+pip install adriane-ai
 ```
 
-> **Pre-release:** not on PyPI yet — build from source (below).
+```python
+import adriane_ai
+print(adriane_ai.engine_version())
+```
 
 ### From source (dev)
 
@@ -131,12 +152,12 @@ pip install maturin
 cd python
 maturin develop            # build the extension + install into the active venv
 # …or build a distributable wheel:
-maturin build --release    # -> target/wheels/adriane-0.0.1-cp39-abi3-*.whl
+maturin build --release    # -> target/wheels/adriane_ai-<version>-cp39-abi3-*.whl
 
-python -c "import adriane; print(adriane.engine_version())"
+python -c "import adriane_ai; print(adriane_ai.engine_version())"
 ```
 
-`maturin` compiles the pyo3 cdylib and places it as the `adriane.adriane`
+`maturin` compiles the pyo3 cdylib and places it as the `adriane_ai.adriane`
 submodule — the leaf import name `adriane` resolves the `PyInit_adriane` symbol
 emitted by `#[pymodule] fn adriane` in `crates/py-bindings/src/lib.rs`.
 

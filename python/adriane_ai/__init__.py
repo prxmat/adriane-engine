@@ -6,9 +6,9 @@ the same graph validator and DSL compiler back both languages, so behaviour is
 identical across the ecosystem (the multi-language-SDK strategy: one engine,
 thin per-language SDKs).
 
-The native extension (`adriane.adriane`, built from `crates/py-bindings`) speaks
-JSON in / JSON out. This module hides that boundary, taking and returning native
-Python `dict`/`list` values.
+The native extension (`adriane_ai.adriane`, built from `crates/py-bindings`)
+speaks JSON in / JSON out. This module hides that boundary, taking and returning
+native Python `dict`/`list` values.
 """
 
 from __future__ import annotations
@@ -273,9 +273,9 @@ class _PrebuiltAccessor:
 
     Each attribute resolves to a callable bound to that agent name, so::
 
-        adriane.prebuilt.summarizer("some long text")
+        adriane_ai.prebuilt.summarizer("some long text")
 
-    is shorthand for ``adriane.run_prebuilt("summarizer", "some long text")``.
+    is shorthand for ``adriane_ai.run_prebuilt("summarizer", "some long text")``.
     Any attribute name is accepted; an unknown agent surfaces as a
     :class:`RunError` only when the returned callable is invoked.
     """
@@ -297,4 +297,4 @@ class _PrebuiltAccessor:
 
 
 prebuilt = _PrebuiltAccessor()
-"""Ergonomic accessor: ``adriane.prebuilt.<agent_name>(input, ...)``."""
+"""Ergonomic accessor: ``adriane_ai.prebuilt.<agent_name>(input, ...)``."""

@@ -15,9 +15,10 @@ import type { ChannelValues, TypedGraphState } from "./typed.js";
  * when the native addon is present, graph **execution** can run on the Rust engine
  * (via `engine_run`/`engine_resume`/`engine_approve_and_resume`), with the SDK's TS
  * condition predicates and node/tool seams called back from Rust over a
- * ThreadsafeFunction. When the addon is absent this loader returns `null` and
- * {@link import("./compiled-graph.js").CompiledGraph} falls back to the
- * (now-deprecated) TypeScript runtime.
+ * ThreadsafeFunction. The Rust engine is the required production runtime; when the
+ * addon is absent (development, tests, or an uncovered platform) this loader returns
+ * `null` and {@link import("./compiled-graph.js").CompiledGraph} uses the in-process
+ * TypeScript runtime instead.
  *
  * Boundary contract (napi 2.16, Phase F): the Rust seam now **awaits** the JS
  * callback's returned `Promise` — `call_async::<Promise<T>>(..).await?.await?` drives

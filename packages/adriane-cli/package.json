@@ -1,28 +1,32 @@
 {
-  "name": "@adriane-ai/adriane-cli",
-  "private": true,
+  "name": "@adriane-ai/cli",
   "license": "Apache-2.0",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0",
+  "description": "The Adriane command-line — author, validate, compile and run Adriane DSL graphs. Self-contained bundle; the `adriane` command works after a global install.",
   "type": "module",
-  "main": "./dist/src/cli.js",
-  "types": "./dist/src/cli.d.ts",
   "bin": {
-    "adriane": "./bin/adriane.js"
+    "adriane": "./dist/adriane.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/make-bin.mjs",
+    "build": "tsup",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@adriane-ai/graph-adriane": "workspace:*",
-    "@adriane-ai/graph-runtime": "workspace:*",
-    "@adriane-ai/lang-adriane": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "tsup": "^8.3.5",
     "typescript": "^5.8.3",
-    "vitest": "^2.1.9"
+    "vitest": "^3.2.6"
   }
 }

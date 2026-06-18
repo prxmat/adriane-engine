@@ -93,8 +93,10 @@ export type RunOptions = {
  * - `"auto"` (default): use the Rust engine for graphs it can run faithfully (agent
  *   nodes, human gates, named conditions), else the TypeScript engine.
  * - `"rust"`: force the Rust engine when the native addon is present.
- * - `"ts"`: force the (deprecated) TypeScript engine.
+ * - `"ts"`: force the in-process TypeScript engine (development and tests only).
  * The public SDK API is unchanged — this is an environment escape hatch only.
+ * Production runs on the Rust engine; the TypeScript engine is an internal
+ * development/test path, not a supported runtime.
  */
 type EnginePreference = "auto" | "rust" | "ts";
 
@@ -110,8 +112,8 @@ const warnTsEngineOnce = (): void => {
   }
   warnedTsFallback = true;
   console.warn(
-    "[@adriane-ai/graph-sdk] Executing on the deprecated in-process TypeScript engine. " +
-      "Install the native engine addon (npm install @adriane-ai/napi) to run on the Rust engine."
+    "[@adriane-ai/graph-sdk] Running on the in-process TypeScript engine (development/test path). " +
+      "Adriane requires the Rust engine in production — install the native addon (npm install @adriane-ai/napi)."
   );
 };
 
@@ -120,10 +122,10 @@ const warnTsEngineOnce = (): void => {
  * event bus, runtime) so callers don't touch the lower-level `@adriane-ai/graph-runtime`
  * primitives unless they want to.
  *
- * Execution runs on the **Rust engine** via `@adriane-ai/napi` when the native addon is
- * present and the graph is one Rust can run faithfully; otherwise it falls back to
- * the in-process TypeScript {@link GraphRuntime}. The public API is identical either
- * way — `run` / `resume` / `approveAndResume` / `stream` / `onEvent` behave the same.
+ * Execution runs on the **Rust engine** via `@adriane-ai/napi` (a required dependency).
+ * An in-process TypeScript {@link GraphRuntime} backs development and tests (and
+ * platforms the native addon doesn't cover); the public API is identical either way —
+ * `run` / `resume` / `approveAndResume` / `stream` / `onEvent` behave the same.
  */
 export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   public readonly definition: GraphDefinition;

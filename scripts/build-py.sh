@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reproducible dev build for the adriane-py (pyo3) extension module.
-# Builds the cdylib with cargo and copies it to python/adriane/adriane.abi3.so
-# (abi3-py39), which `import adriane` loads. macOS linking is handled by
+# Builds the cdylib with cargo and copies it to python/adriane_ai/adriane.abi3.so
+# (abi3-py39), which `import adriane_ai` loads. macOS linking is handled by
 # crates/py-bindings/build.rs (-undefined dynamic_lookup).
 set -euo pipefail
 
@@ -21,7 +21,7 @@ case "$(uname -s)" in
   *) LIB_NAME="adriane.dll" ;;
 esac
 
-DEST="../python/adriane/adriane.abi3.so"
+DEST="../python/adriane_ai/adriane.abi3.so"
 cp "target/debug/${LIB_NAME}" "$DEST"
 
-echo "adriane-py dev build OK -> $(cd ../python/adriane && pwd)/adriane.abi3.so"
+echo "adriane-py dev build OK -> $(cd ../python/adriane_ai && pwd)/adriane.abi3.so"

@@ -31,8 +31,8 @@ when the addon is present (graceful TS fallback otherwise).
 | `adriane-config` | `@adriane-ai/config` | ✅ **Env + feature flags** — pure `parse_env(map)` (aggregate validation errors) + `get_env()` (OnceLock), typed flags. 13 tests. |
 | `adriane-rag-pipeline` | `@adriane-ai/rag-pipeline` | ✅ **RAG (mock/in-memory)** — Embedder/Splitter/VectorStore/Retriever/Reranker seams, deterministic MockEmbedder, cosine top-k, end-to-end pipeline. 23 tests. Deferred: real embeddings/loaders. |
 | `adriane-napi` | (bindings) | ✅ **Boundary live** — `validateGraphJson`, `compileGraphYamlJson`, `engineVersion` callable from Node; the SDK's `safeCompile()` uses it. See `bindings/README.md`. |
-| `adriane-cli` | `@adriane-ai/adriane-cli` | ✅ **CLI binary** — `adriane compile/validate/run/inspect/--help`; run drives the async runtime (suspends cleanly at human gates), event journal to stderr. 13 tests. |
-| `adriane-py` | (Python SDK) | ✅ **2nd SDK (pyo3)** — `python/adriane` wraps the Rust core (`validate_graph`, `compile_graph_yaml`, `engine_version`); abi3, builds with cargo. Proves multi-language SDKs over one engine. 5 py tests. |
+| `adriane-cli` | `@adriane-ai/cli` | ✅ **CLI binary** — `adriane compile/validate/run/inspect/--help`; run drives the async runtime (suspends cleanly at human gates), event journal to stderr. 13 tests. |
+| `adriane-py` | (Python SDK adriane-ai) | ✅ **2nd SDK (pyo3)** — `python/adriane_ai` wraps the Rust core (`validate_graph`, `compile_graph_yaml`, `engine_version`); abi3, builds with cargo. Proves multi-language SDKs over one engine. 5 py tests. |
 | Claude Code plugin | `plugin/` | ✅ **Plugin** — skill (authoring graphs), slash commands (`/adriane:compile|validate|run|new` over the CLI), MCP server exposing the Rust engine (`validate_graph`, `compile_graph_yaml` via `@adriane-ai/napi`). MCP smoke verified. |
 | `graph-sdk` · `contracts` | (TS-facing surfaces) | Stay TS (SDK facade over napi; contracts is the API↔Studio DTO boundary). |
 

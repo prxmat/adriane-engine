@@ -1,7 +1,7 @@
 //! adriane CLI — compile, validate, run and inspect Adriane graphs via the
 //! already-ported Rust engine.
 //!
-//! Command surface mirrors the TypeScript `@adriane-ai/adriane-cli`:
+//! Command surface mirrors the TypeScript `@adriane-ai/cli`:
 //!
 //! - `adriane compile <file.yaml>`  — compile the graph and print the resulting
 //!   `GraphDefinition` as pretty JSON.

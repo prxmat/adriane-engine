@@ -18,7 +18,7 @@ import sys
 # Make the package importable when run as a bare script (no pytest / no install).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import adriane
+import adriane_ai
 
 _VALID_GRAPH = {
     "id": "g",
@@ -55,7 +55,7 @@ _TINY_YAML = (
 
 
 def test_engine_version_is_version_string():
-    version = adriane.engine_version()
+    version = adriane_ai.engine_version()
     assert isinstance(version, str)
     assert version != ""
     # Looks like a semver-ish "x.y.z".
@@ -65,12 +65,12 @@ def test_engine_version_is_version_string():
 
 
 def test_validate_graph_valid_returns_empty():
-    errors = adriane.validate_graph(_VALID_GRAPH)
+    errors = adriane_ai.validate_graph(_VALID_GRAPH)
     assert errors == [], errors
 
 
 def test_validate_graph_dangling_edge_flags_invalid_edge_reference():
-    errors = adriane.validate_graph(_DANGLING_EDGE_GRAPH)
+    errors = adriane_ai.validate_graph(_DANGLING_EDGE_GRAPH)
     assert isinstance(errors, list)
     assert len(errors) >= 1, errors
     codes = [e["code"] for e in errors]
@@ -81,7 +81,7 @@ def test_validate_graph_dangling_edge_flags_invalid_edge_reference():
 
 
 def test_compile_graph_yaml_returns_dict_with_expected_shape():
-    graph = adriane.compile_graph_yaml(_TINY_YAML)
+    graph = adriane_ai.compile_graph_yaml(_TINY_YAML)
     assert isinstance(graph, dict)
     assert graph["id"] == "g"
     assert graph["entryNodeId"] == "a"
@@ -92,7 +92,7 @@ def test_compile_graph_yaml_returns_dict_with_expected_shape():
 def test_compile_graph_yaml_raises_on_garbage():
     raised = False
     try:
-        adriane.compile_graph_yaml("this: is: not: a: graph: ::::")
+        adriane_ai.compile_graph_yaml("this: is: not: a: graph: ::::")
     except ValueError:
         raised = True
     assert raised, "expected a ValueError on malformed DSL YAML"
@@ -106,7 +106,7 @@ def _force_mock_env():
 
 
 def test_resolve_model_mistral_fast_picks_mistral_small():
-    choice = adriane.resolve_model("fast", available=["mistral"])
+    choice = adriane_ai.resolve_model("fast", available=["mistral"])
     assert choice == {
         "provider": "mistral",
         "model": "mistral-small-latest",
@@ -115,14 +115,14 @@ def test_resolve_model_mistral_fast_picks_mistral_small():
 
 
 def test_resolve_model_anthropic_fast_picks_haiku():
-    choice = adriane.resolve_model("fast", available=["anthropic"])
+    choice = adriane_ai.resolve_model("fast", available=["anthropic"])
     assert choice["provider"] == "anthropic", choice
     assert choice["model"] == "claude-haiku-4-5", choice
     assert choice["recommended"] is True, choice
 
 
 def test_resolve_model_override_wins_and_flags_not_recommended():
-    choice = adriane.resolve_model(
+    choice = adriane_ai.resolve_model(
         "frontier", available=["anthropic"], provider="mistral", model="mistral-tiny"
     )
     assert choice["provider"] == "mistral", choice
@@ -133,27 +133,27 @@ def test_resolve_model_override_wins_and_flags_not_recommended():
 def test_resolve_model_unknown_tier_raises():
     raised = False
     try:
-        adriane.resolve_model("turbo", available=["mistral"])
+        adriane_ai.resolve_model("turbo", available=["mistral"])
     except ValueError:
         raised = True
     assert raised, "expected a ValueError on an unknown tier"
 
 
 def test_available_providers_returns_list():
-    providers = adriane.available_providers()
+    providers = adriane_ai.available_providers()
     assert isinstance(providers, list), providers
     assert all(isinstance(p, str) for p in providers), providers
 
 
 def test_list_components_has_sixteen():
-    components = adriane.list_components()
+    components = adriane_ai.list_components()
     assert isinstance(components, list)
     assert len(components) == 16, components
     assert "promptBuilder" in components, components
 
 
 def test_list_prebuilt_has_sixteen():
-    agents = adriane.list_prebuilt()
+    agents = adriane_ai.list_prebuilt()
     assert isinstance(agents, list)
     assert len(agents) == 16, [a.get("name") for a in agents]
     names = [a["name"] for a in agents]
@@ -165,7 +165,7 @@ def test_list_prebuilt_has_sixteen():
 
 
 def test_run_component_prompt_builder_renders_template():
-    update = adriane.run_component(
+    update = adriane_ai.run_component(
         "promptBuilder",
         {"template": "Hello {{name}}!", "into": "prompt"},
         {"name": "Ada"},
@@ -176,15 +176,15 @@ def test_run_component_prompt_builder_renders_template():
 def test_run_component_unknown_kind_raises_run_error():
     raised = False
     try:
-        adriane.run_component("definitely-not-a-component", {}, {})
-    except adriane.RunError:
+        adriane_ai.run_component("definitely-not-a-component", {}, {})
+    except adriane_ai.RunError:
         raised = True
     assert raised, "expected a RunError on an unknown component kind"
 
 
 def test_run_prebuilt_summarizer_completes_on_mock():
     _force_mock_env()
-    outcome = adriane.run_prebuilt("summarizer", "please summarise this text")
+    outcome = adriane_ai.run_prebuilt("summarizer", "please summarise this text")
     assert outcome["status"] == "completed", outcome
     assert outcome["resolvedModel"]["provider"] == "mock", outcome
     # The summarizer writes into its `summary` output channel.
@@ -193,7 +193,7 @@ def test_run_prebuilt_summarizer_completes_on_mock():
 
 def test_prebuilt_accessor_runs_named_agent_on_mock():
     _force_mock_env()
-    outcome = adriane.prebuilt.summarizer("please summarise this text")
+    outcome = adriane_ai.prebuilt.summarizer("please summarise this text")
     assert outcome["status"] == "completed", outcome
     assert outcome["resolvedModel"]["provider"] == "mock", outcome
 
@@ -201,8 +201,8 @@ def test_prebuilt_accessor_runs_named_agent_on_mock():
 def test_run_prebuilt_unknown_agent_raises_run_error():
     raised = False
     try:
-        adriane.run_prebuilt("no-such-agent", "x")
-    except adriane.RunError:
+        adriane_ai.run_prebuilt("no-such-agent", "x")
+    except adriane_ai.RunError:
         raised = True
     assert raised, "expected a RunError on an unknown prebuilt agent"
 
