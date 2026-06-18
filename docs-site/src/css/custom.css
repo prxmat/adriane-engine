@@ -1,0 +1,98 @@
+/**
+ * Adriane docs theme. Brand palette: deep indigo/violet (governance + graph),
+ * warm amber accent for "approval / human-in-the-loop".
+ */
+
+:root {
+  --ifm-color-primary: #5b4ddb;
+  --ifm-color-primary-dark: #4536d3;
+  --ifm-color-primary-darker: #3a2dc7;
+  --ifm-color-primary-darkest: #3025a4;
+  --ifm-color-primary-light: #7264e0;
+  --ifm-color-primary-lighter: #8275e3;
+  --ifm-color-primary-lightest: #a99fec;
+  --ifm-code-font-size: 92%;
+  --ifm-font-family-base: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --docusaurus-highlighted-code-line-bg: rgba(91, 77, 219, 0.12);
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #9d92f0;
+  --ifm-color-primary-dark: #8174ec;
+  --ifm-color-primary-darker: #7365ea;
+  --ifm-color-primary-darkest: #5141e2;
+  --ifm-color-primary-light: #b9b0f4;
+  --ifm-color-primary-lighter: #c7bff6;
+  --ifm-color-primary-lightest: #ece9fc;
+  --ifm-background-color: #0e0c1a;
+  --ifm-background-surface-color: #16132a;
+  --docusaurus-highlighted-code-line-bg: rgba(157, 146, 240, 0.18);
+}
+
+/* Landing hero */
+.heroBanner {
+  padding: 5rem 0 4rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(1200px 400px at 50% -10%, rgba(91, 77, 219, 0.25), transparent);
+}
+
+.heroTitle {
+  font-size: clamp(2.4rem, 6vw, 4rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+
+.heroTagline {
+  font-size: clamp(1.05rem, 2.4vw, 1.4rem);
+  opacity: 0.85;
+  max-width: 720px;
+  margin: 0 auto 2rem;
+}
+
+.heroButtons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.heroCode {
+  max-width: 640px;
+  margin: 2.5rem auto 0;
+  text-align: left;
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  padding: 3rem 0;
+}
+
+.featureCard {
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+  background: var(--ifm-background-surface-color);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.featureCard:hover {
+  transform: translateY(-3px);
+  border-color: var(--ifm-color-primary);
+}
+
+.featureCard h3 {
+  margin-bottom: 0.5rem;
+}
+
+.featureEyebrow {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+}

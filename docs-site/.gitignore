@@ -1,0 +1,14 @@
+# Dependencies
+/node_modules
+
+# Production build
+/build
+
+# Docusaurus cache + generated
+/.docusaurus
+.cache-loader
+
+# Misc
+.DS_Store
+*.local
+npm-debug.log*
