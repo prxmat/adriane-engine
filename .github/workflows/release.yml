@@ -3,11 +3,12 @@
 # Publishes, in order:
 #   1. @adriane-ai/napi-<triple> per-platform native packages + @adriane-ai/napi  (npm)
 #   2. @adriane-ai/graph-sdk self-contained bundle                              (npm)
-#   3. abi3 Python wheels (one cp39-abi3 per platform)                       (PyPI)
+#   3. @adriane-ai/cli self-contained CLI bundle                                (npm)
+#   4. abi3 Python wheels (one cp39-abi3 per platform)                       (PyPI)
 #
 # Required repository secrets:
-#   NPM_TOKEN        — npm automation token (publish access to the @adriane scope)
-#   PYPI_API_TOKEN   — PyPI API token for the `adriane` project
+#   NPM_TOKEN        — npm automation token (publish access to the @adriane-ai scope)
+#   PYPI_API_TOKEN   — PyPI API token for the `adriane-ai` project
 #
 # NOTE: the per-step build commands (`napi build --platform --release`,
 # `maturin build --release`) are the same ones validated locally on darwin-arm64.
@@ -40,7 +41,7 @@ jobs:
           fi
           TAG="${GITHUB_REF_NAME#v}"
           fail=0
-          for f in packages/graph-sdk/package.json crates/bindings/package.json; do
+          for f in packages/graph-sdk/package.json packages/adriane-cli/package.json crates/bindings/package.json; do
             v=$(node -p "require('./$f').version")
             if [[ "$v" != "$TAG" ]]; then echo "::error::$f version $v != tag $TAG"; fail=1; fi
           done
@@ -127,6 +128,12 @@ jobs:
         run: |
           pnpm --filter @adriane-ai/graph-sdk build
           pnpm --filter @adriane-ai/graph-sdk publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Build + publish @adriane-ai/cli bundle
+        run: |
+          pnpm --filter @adriane-ai/cli build
+          pnpm --filter @adriane-ai/cli publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
