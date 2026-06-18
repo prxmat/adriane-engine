@@ -33,3 +33,6 @@ target
 /phase2-*.png
 competitor-profiles/
 .claude/memory/competitor-profiles
+
+# Editor / assistant rules — not shipped publicly
+.cursor/
