@@ -20,7 +20,7 @@ adriane-approval-engine = { path = "../approval-engine" }
 adriane-components = { path = "../components" }
 adriane-llm-gateway = { path = "../llm-gateway" }
 napi = { version = "2", default-features = false, features = ["napi8", "async", "tokio_rt"] }
-napi-derive = "2"
+napi-derive = "3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
