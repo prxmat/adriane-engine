@@ -22,7 +22,7 @@
     "commander": "^12.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
+    "typescript": "^6.0.3",
     "vitest": "^2.1.9"
   }
 }
