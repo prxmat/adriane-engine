@@ -86,7 +86,7 @@ jobs:
           --target ${{ matrix.target }}
           ${{ matrix.zig && '--zig' || '' }}
           --js napi-generated.js --dts napi-generated.d.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: napi-${{ matrix.target }}
           path: crates/bindings/*.node
@@ -160,7 +160,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: auto
           working-directory: python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.target }}
           path: python/dist/*.whl
