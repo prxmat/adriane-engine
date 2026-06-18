@@ -19,7 +19,7 @@
     "@adriane-ai/graph-adriane": "workspace:*",
     "@adriane-ai/graph-runtime": "workspace:*",
     "@adriane-ai/lang-adriane": "workspace:*",
-    "commander": "^12.1.0"
+    "commander": "^15.0.0"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
