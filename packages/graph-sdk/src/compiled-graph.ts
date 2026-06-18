@@ -15,11 +15,18 @@ import {
   type StreamMode
 } from "@adriane/graph-runtime";
 
-import { APPROVED_TOOLS_CHANNEL, type RustAgentConfig } from "./agent-node.js";
+import type { ApprovalId, ApprovalRequest } from "@adriane/approval-engine";
+
+import {
+  APPROVED_TOOLS_CHANNEL,
+  type AgentApprovalBinding,
+  type RustAgentConfig
+} from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
 import {
   rustEngineAvailable,
   tryCreateRustRunner,
+  type ApprovedToolWire,
   type AsyncNodeFn,
   type AsyncToolFn,
   type RustGraphRunner,
@@ -31,6 +38,17 @@ import type { ChannelValues, InitialData, TypedGraphState } from "./typed.js";
 export type ApproveAndResumeOptions = {
   /** Names of approval-gated tools the human has granted. They execute on resume. */
   approvedTools: string[];
+  /**
+   * The principal granting the approval — a human, NEVER the agent that requested it.
+   * It is recorded as each granted tool's `resolvedBy` and carried to the Rust engine,
+   * which rejects the resume if it is empty or equals the tool's requester (the
+   * no-self-approval guard-rail). On the TS path, when an agent node was configured with
+   * an {@link import("@adriane/approval-engine").ApprovalEngine}, the matching pending
+   * requests are approved through the engine under this principal before resuming — so
+   * the engine's own `ensureCanResolve` enforces the same invariant. Defaults to
+   * `"human"` when omitted.
+   */
+  resolvedBy?: string;
 };
 
 const generateRunId = (): RunId => {
@@ -48,6 +66,14 @@ export type CompiledGraphParts = {
    * needs (see {@link RustAgentConfig}). Empty for graphs with no agent nodes.
    */
   agentConfigs?: Map<string, RustAgentConfig>;
+  /**
+   * Per agent node, the governance binding (the optional {@link ApprovalEngine} plus
+   * the principal that requests approvals and the node's gated tool names) that
+   * {@link CompiledGraph.approveAndResume} uses to approve pending engine requests on
+   * the TS path and to stamp each granted tool's `requestedBy` for the Rust guard-rail.
+   * Empty for graphs with no agent nodes.
+   */
+  agentApprovals?: Map<string, AgentApprovalBinding>;
   /**
    * Per component node, the `{ kind, params }` carrier the Rust engine bridge needs to
    * run the native component handler (see {@link RustComponentConfig}). Empty for
@@ -117,9 +143,12 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   private readonly rustRunner: RustGraphRunner<ChannelValues> | null;
   /** The last suspended state seen per run id, fed back into the Rust resume/approve. */
   private readonly suspendedStates = new Map<string, GraphState>();
+  /** Per agent node, the governance binding used by {@link approveAndResume}. */
+  private readonly agentApprovals: Map<string, AgentApprovalBinding>;
 
   public constructor(parts: CompiledGraphParts) {
     this.definition = parts.definition;
+    this.agentApprovals = parts.agentApprovals ?? new Map<string, AgentApprovalBinding>();
 
     const nodeRegistry = new InMemoryNodeRegistry();
     for (const [nodeId, handler] of parts.handlers) {
@@ -335,15 +364,80 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     runId: RunId,
     options: ApproveAndResumeOptions
   ): Promise<TypedGraphState<TState>> {
+    const resolvedBy = options.resolvedBy ?? "human";
     if (this.rustRunner !== null) {
       const suspended = this.requireSuspendedState(runId);
-      const state = await this.rustRunner.approveAndResume(suspended, options.approvedTools);
+      const wire = this.toApprovedToolWire(options.approvedTools, resolvedBy);
+      const state = await this.rustRunner.approveAndResume(suspended, wire);
       this.captureSuspension(state);
       return state as unknown as TypedGraphState<TState>;
     }
     warnTsEngineOnce();
-    await this.runtime.updateState(runId, { [APPROVED_TOOLS_CHANNEL]: options.approvedTools });
+    // Mirror the control-plane authority on the TS path: when an agent node routes
+    // approvals through an ApprovalEngine, the granted tools' pending requests are
+    // resolved THROUGH the engine (under the distinct `resolvedBy` principal) before
+    // resuming — so the engine's own `ensureCanResolve` enforces no-self-approval. The
+    // `__approvedTools` channel is written too, covering the no-engine (channel-only)
+    // case and the engine case identically.
+    await this.approvePendingThroughEngines(runId, options.approvedTools, resolvedBy);
+    // Sorted + de-duplicated so the channel write is deterministic regardless of the
+    // caller's ordering — matching the Rust guard-rail and the control-plane writer.
+    const names = [...new Set(options.approvedTools)].sort();
+    await this.runtime.updateState(runId, { [APPROVED_TOOLS_CHANNEL]: names });
     return this.resume(runId);
+  }
+
+  /**
+   * Project granted tool names into the wire shape the Rust engine validates: each
+   * tool carries the principal that requested it (the owning agent node) and the
+   * distinct principal granting it. Names are sorted so the wire payload is
+   * deterministic regardless of the caller's ordering.
+   */
+  private toApprovedToolWire(approvedTools: string[], resolvedBy: string): ApprovedToolWire[] {
+    return [...approvedTools]
+      .sort()
+      .map((name) => ({ name, requestedBy: this.requesterOfTool(name), resolvedBy }));
+  }
+
+  /** The agent node that declared `toolName` as approval-gated, as the request principal. */
+  private requesterOfTool(toolName: string): string {
+    for (const binding of this.agentApprovals.values()) {
+      if (binding.approvalToolNames.includes(toolName)) {
+        return binding.requestedBy;
+      }
+    }
+    // No owning agent on record (e.g. a channel-only grant): fall back to the first
+    // agent's requester, else a neutral principal. The Rust guard-rail still rejects a
+    // resolver equal to whatever requester we report, so the invariant is preserved.
+    const first = this.agentApprovals.values().next().value as AgentApprovalBinding | undefined;
+    return first?.requestedBy ?? "agent";
+  }
+
+  /**
+   * For each agent node with an {@link ApprovalEngine}, approve the pending requests
+   * whose gated tool is in `approvedTools`, through the engine, under `resolvedBy`. The
+   * engine rejects a self-approval, so this is the TS-side enforcement point that
+   * mirrors the Rust guard-rail.
+   */
+  private async approvePendingThroughEngines(
+    runId: RunId,
+    approvedTools: string[],
+    resolvedBy: string
+  ): Promise<void> {
+    const granted = new Set(approvedTools);
+    for (const binding of this.agentApprovals.values()) {
+      const engine = binding.approvalEngine;
+      if (engine === undefined) {
+        continue;
+      }
+      const pending = await engine.getPending(runId);
+      for (const request of pending) {
+        const toolName = toolNameOfSubject(request);
+        if (toolName !== undefined && granted.has(toolName)) {
+          await engine.approve(request.id as ApprovalId, resolvedBy);
+        }
+      }
+    }
   }
 
   /**
@@ -410,6 +504,20 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     return state;
   }
 }
+
+const TOOL_SUBJECT_PREFIX = "tool:";
+
+/**
+ * Pull the tool name back out of an approval request's subject. The gated-tool subject
+ * is `{ description: "tool:<name>" }` (see `agent-node.ts`); anything else yields
+ * `undefined` (the request is not a tool gate we can match by name).
+ */
+const toolNameOfSubject = (request: ApprovalRequest): string | undefined => {
+  const description = (request.subject as { description?: unknown }).description;
+  return typeof description === "string" && description.startsWith(TOOL_SUBJECT_PREFIX)
+    ? description.slice(TOOL_SUBJECT_PREFIX.length)
+    : undefined;
+};
 
 /**
  * A minimal {@link NodeExecutionContext} for the Rust seam. The channels-only state

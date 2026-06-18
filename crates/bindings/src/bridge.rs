@@ -27,6 +27,7 @@ use adriane_agents_core::{
     agent_node_handler, ApprovalRequestItem, InMemoryToolRegistry, ReActAgent, ToolDefinition,
     APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
+use adriane_approval_engine::ApprovalError;
 use adriane_components::ComponentRegistry;
 use adriane_graph_core::{EdgeType, GraphState, NodeId, NodeType, RunId};
 use adriane_graph_runtime::{
@@ -41,7 +42,7 @@ use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::{json, Value};
 
-use crate::spec::{AgentSpec, EngineSpec, RunOutcome};
+use crate::spec::{AgentSpec, ApprovedTool, EngineSpec, RunOutcome};
 
 /// A TSFN that takes one JS string argument. We use the `Fatal` error strategy so
 /// the JS callback receives just `(payloadString)` (no leading error arg) and a
@@ -127,17 +128,25 @@ async fn drive(
                 )
             })?;
 
-            // On approve, write the granted tool names into the approval channel
-            // before seeding the checkpoint the runtime will resume from.
-            if entry == Entry::Approve {
+            // On BOTH the approve and resume paths, validate the no-self-approval
+            // invariant for each granted tool, then write the validated tool NAMES into
+            // the approval channel before seeding the checkpoint the runtime will resume
+            // from. The control plane is the authority (it only sends tools the approval
+            // engine already approved), but the engine re-checks here — defence in depth:
+            // a tool whose resolver is empty or equals its requester ABORTS the resume
+            // rather than silently unlocking. This covers the PRODUCTION catalog path,
+            // which resumes through `Entry::Resume` after the control plane seeds
+            // `__approvedTools`: by re-validating here too, a forged/malformed resume
+            // cannot slip a self-approved tool past the engine. Names are sorted +
+            // de-duplicated so the channel write is deterministic. When the spec carries
+            // no `approvedTools` (an ordinary resume past a non-approval gate), this is a
+            // no-op: an empty list validates to an empty name set and the existing
+            // channel (if any) is left untouched.
+            if !spec.approved_tools.is_empty() {
+                let names = validate_approved_tools(&spec.approved_tools)?;
                 state.channels.insert(
                     APPROVED_TOOLS_CHANNEL.to_owned(),
-                    Value::Array(
-                        spec.approved_tools
-                            .iter()
-                            .map(|name| Value::String(name.clone()))
-                            .collect(),
-                    ),
+                    Value::Array(names.into_iter().map(Value::String).collect()),
                 );
             }
 
@@ -153,6 +162,34 @@ async fn drive(
 
 fn runtime_err(error: adriane_graph_runtime::RuntimeError) -> napi::Error {
     napi::Error::from_reason(format!("runtime error: {error}"))
+}
+
+/// Validate the governance invariant for every granted tool and return the sorted,
+/// de-duplicated list of validated tool names to unlock.
+///
+/// The core invariant (the same one [`adriane_approval_engine`] enforces in
+/// `ensure_can_resolve`): a tool's `resolved_by` must be a non-empty principal that
+/// DIFFERS from its `requested_by` — an agent never approves its own request. A
+/// violation maps the engine's [`ApprovalError::SelfApproval`] to a napi error that
+/// interrupts the resume, so a malformed/forged approve call cannot unlock a tool.
+/// Returns names sorted + de-duplicated, so the `__approvedTools` channel write is
+/// deterministic regardless of the order the caller sent the tools in.
+fn validate_approved_tools(tools: &[ApprovedTool]) -> napi::Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::with_capacity(tools.len());
+    for tool in tools {
+        // An empty resolver (no principal recorded) is treated as a self-approval
+        // violation: there is no distinct human on record who granted the tool.
+        if tool.resolved_by.trim().is_empty() || tool.resolved_by == tool.requested_by {
+            let error = ApprovalError::SelfApproval(format!("tool:{}", tool.name));
+            return Err(napi::Error::from_reason(format!(
+                "approval guard-rail rejected resume: {error}"
+            )));
+        }
+        names.push(tool.name.clone());
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 /// Seed the runtime's checkpointer with a suspended state so `resume` can load it.
@@ -1126,6 +1163,183 @@ mod tests {
         assert!(parse_update("[1,2,3]").is_empty());
         let map = parse_update("{\"a\":1}");
         assert_eq!(map.get("a"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn validate_approved_tools_accepts_a_distinct_resolver_sorted_and_deduped() {
+        // A human (a different principal) granted both tools — accepted. The returned
+        // names are sorted + de-duplicated so the channel write is deterministic.
+        let tools = vec![
+            ApprovedTool {
+                name: "wire".to_owned(),
+                requested_by: "assistant".to_owned(),
+                resolved_by: "alice".to_owned(),
+            },
+            ApprovedTool {
+                name: "refund".to_owned(),
+                requested_by: "assistant".to_owned(),
+                resolved_by: "alice".to_owned(),
+            },
+            ApprovedTool {
+                name: "refund".to_owned(),
+                requested_by: "assistant".to_owned(),
+                resolved_by: "bob".to_owned(),
+            },
+        ];
+        let names = validate_approved_tools(&tools).expect("distinct resolver passes");
+        assert_eq!(names, vec!["refund".to_owned(), "wire".to_owned()]);
+    }
+
+    #[test]
+    fn validate_approved_tools_rejects_self_approval() {
+        // resolved_by == requested_by: the agent tried to approve its own request. The
+        // guard-rail rejects the whole resume — no tool name escapes into the channel.
+        let tools = vec![ApprovedTool {
+            name: "refund".to_owned(),
+            requested_by: "assistant".to_owned(),
+            resolved_by: "assistant".to_owned(),
+        }];
+        let error = validate_approved_tools(&tools).expect_err("self-approval is rejected");
+        assert!(
+            error.reason.contains("guard-rail"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.reason.contains("tool:refund"),
+            "error should name the offending subject: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_approved_tools_rejects_an_empty_resolver() {
+        // No principal on record approved the tool — treated as a self-approval-class
+        // violation rather than silently unlocking.
+        let tools = vec![ApprovedTool {
+            name: "refund".to_owned(),
+            requested_by: "assistant".to_owned(),
+            resolved_by: "  ".to_owned(),
+        }];
+        assert!(validate_approved_tools(&tools).is_err());
+    }
+
+    #[tokio::test]
+    async fn approve_entry_aborts_resume_on_self_approval() {
+        // End-to-end through `drive`: an Approve whose only granted tool is self-approved
+        // must error out of `drive` (interrupting the resume) before the runtime advances.
+        let graph = GraphDefinition {
+            id: GraphId::from("g"),
+            version: "0.0.0".to_owned(),
+            name: "g".to_owned(),
+            recursion_limit: None,
+            channels: [
+                (DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(), replace_channel()),
+                (APPROVED_TOOLS_CHANNEL.to_owned(), replace_channel()),
+            ]
+            .into_iter()
+            .collect(),
+            nodes: vec![node("assistant", NodeType::Agent)],
+            edges: vec![],
+            entry_node_id: NodeId::from("assistant"),
+            metadata: None,
+        };
+        let suspended = GraphState {
+            run_id: RunId::from("run-guard"),
+            graph_id: GraphId::from("g"),
+            current_node_id: NodeId::from("assistant"),
+            status: GraphStatus::Suspended,
+            channels: BTreeMap::new(),
+            version: 1,
+            checkpoint_id: Some("run-guard:0".to_owned()),
+            created_at: "0".to_owned(),
+            updated_at: "0".to_owned(),
+        };
+        let spec = EngineSpec {
+            graph: graph.clone(),
+            run_id: Some("run-guard".to_owned()),
+            initial_data: BTreeMap::new(),
+            state: Some(suspended),
+            approved_tools: vec![ApprovedTool {
+                name: "refund".to_owned(),
+                requested_by: "assistant".to_owned(),
+                resolved_by: "assistant".to_owned(),
+            }],
+            agents: BTreeMap::new(),
+            component_nodes: BTreeMap::new(),
+            js_node_ids: vec![],
+            js_tool_names: vec![],
+        };
+        // No node handler needed: `drive` validates BEFORE seeding/resuming, so the
+        // self-approval error surfaces without ever routing to the agent node.
+        let runtime = GraphRuntime::new(
+            graph,
+            InMemoryNodeRegistry::new(),
+            InMemoryConditionRegistry::new(),
+        );
+        let result = drive(&runtime, &spec, Entry::Approve).await;
+        assert!(result.is_err(), "self-approval must abort the resume");
+    }
+
+    #[tokio::test]
+    async fn resume_entry_aborts_resume_on_self_approval() {
+        // The PRODUCTION catalog path resumes through `Entry::Resume`, seeding
+        // `approvedTools` with provenance. The guard-rail must fire here too: an
+        // `Entry::Resume` whose only granted tool is self-approved (resolver == requester)
+        // must error out of `drive` before the runtime advances — mirror of the Approve
+        // test, proving GAP #1 (the resume path is no longer an unvalidated back door).
+        let graph = GraphDefinition {
+            id: GraphId::from("g"),
+            version: "0.0.0".to_owned(),
+            name: "g".to_owned(),
+            recursion_limit: None,
+            channels: [
+                (DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(), replace_channel()),
+                (APPROVED_TOOLS_CHANNEL.to_owned(), replace_channel()),
+            ]
+            .into_iter()
+            .collect(),
+            nodes: vec![node("assistant", NodeType::Agent)],
+            edges: vec![],
+            entry_node_id: NodeId::from("assistant"),
+            metadata: None,
+        };
+        let suspended = GraphState {
+            run_id: RunId::from("run-guard-resume"),
+            graph_id: GraphId::from("g"),
+            current_node_id: NodeId::from("assistant"),
+            status: GraphStatus::Suspended,
+            channels: BTreeMap::new(),
+            version: 1,
+            checkpoint_id: Some("run-guard-resume:0".to_owned()),
+            created_at: "0".to_owned(),
+            updated_at: "0".to_owned(),
+        };
+        let spec = EngineSpec {
+            graph: graph.clone(),
+            run_id: Some("run-guard-resume".to_owned()),
+            initial_data: BTreeMap::new(),
+            state: Some(suspended),
+            approved_tools: vec![ApprovedTool {
+                name: "refund".to_owned(),
+                requested_by: "assistant".to_owned(),
+                resolved_by: "assistant".to_owned(),
+            }],
+            agents: BTreeMap::new(),
+            component_nodes: BTreeMap::new(),
+            js_node_ids: vec![],
+            js_tool_names: vec![],
+        };
+        // No node handler needed: `drive` validates BEFORE seeding/resuming, so the
+        // self-approval error surfaces without ever routing to the agent node.
+        let runtime = GraphRuntime::new(
+            graph,
+            InMemoryNodeRegistry::new(),
+            InMemoryConditionRegistry::new(),
+        );
+        let result = drive(&runtime, &spec, Entry::Resume).await;
+        assert!(
+            result.is_err(),
+            "self-approval must abort the production resume path too"
+        );
     }
 
     #[test]

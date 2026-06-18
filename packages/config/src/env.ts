@@ -9,11 +9,52 @@ const EnvironmentSchema = z.object({
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(1),
   JWT_EXPIRY: z.string().min(1).default("1h"),
+  /**
+   * Disable authentication entirely (dev/seed/offline). When `true`, the global
+   * JwtAuthGuard injects a system principal instead of rejecting unauthenticated
+   * requests — so local boot, the seed, and offline scripts keep working without a
+   * login. NEVER enable in staging/production. Accepts the usual env truthy strings.
+   */
+  AUTH_DISABLED: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.toLowerCase() === "true" || value === "1" : value),
+      z.boolean()
+    )
+    .default(false),
+  /**
+   * Shared secret for machine-to-machine (worker → API) authentication. The worker sends
+   * it as `Authorization: Bearer <token>` on register/heartbeat/deregister; the
+   * WorkerTokenGuard compares it in constant time. Optional in NODE_ENV=local (the fleet
+   * routes are reachable via AUTH_DISABLED there), but REQUIRED and non-empty everywhere
+   * else — see the fail-secure superRefine below.
+   */
+  WORKER_TOKEN: z.string().min(1).optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
   MISTRAL_API_KEY: z.string().min(1).optional(),
   OTEL_ENDPOINT: z.string().min(1).optional(),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
+}).superRefine((env, ctx) => {
+  // Fail-secure: AUTH_DISABLED is a dev/offline-only escape hatch. Refuse to boot with it
+  // enabled anywhere but NODE_ENV=local, so a misconfigured staging/prod can never run
+  // unauthenticated even if someone sets the flag.
+  if (env.AUTH_DISABLED && env.NODE_ENV !== "local") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["AUTH_DISABLED"],
+      message: "AUTH_DISABLED must not be enabled outside NODE_ENV=local"
+    });
+  }
+  // Fail-secure (same logic as AUTH_DISABLED): outside NODE_ENV=local the worker MUST
+  // authenticate with a real shared secret. Refuse to boot staging/prod without a
+  // non-empty WORKER_TOKEN, so the m2m fleet routes can never run unauthenticated.
+  if (env.NODE_ENV !== "local" && (env.WORKER_TOKEN === undefined || env.WORKER_TOKEN.length === 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["WORKER_TOKEN"],
+      message: "WORKER_TOKEN is required (non-empty) outside NODE_ENV=local"
+    });
+  }
 });
 
 export type AppEnv = z.infer<typeof EnvironmentSchema>;

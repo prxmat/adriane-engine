@@ -36,11 +36,47 @@ describe("parseEnv", () => {
       NODE_ENV: "staging",
       DATABASE_URL: "postgres://localhost:5432/adriane",
       REDIS_URL: "redis://localhost:6379",
-      JWT_SECRET: "super-secret"
+      JWT_SECRET: "super-secret",
+      // Required outside NODE_ENV=local by the fail-secure superRefine.
+      WORKER_TOKEN: "staging-worker-secret"
     });
 
     expect(env.PORT).toBe(3000);
     expect(env.JWT_EXPIRY).toBe("1h");
     expect(env.LOG_LEVEL).toBe("info");
+  });
+
+  it("allows an absent WORKER_TOKEN in NODE_ENV=local", () => {
+    const env = parseEnv({
+      NODE_ENV: "local",
+      DATABASE_URL: "postgres://localhost:5432/adriane",
+      REDIS_URL: "redis://localhost:6379",
+      JWT_SECRET: "super-secret"
+    });
+
+    expect(env.WORKER_TOKEN).toBeUndefined();
+  });
+
+  it("fails secure: rejects a missing WORKER_TOKEN outside NODE_ENV=local", () => {
+    expect(() =>
+      parseEnv({
+        NODE_ENV: "production",
+        DATABASE_URL: "postgres://localhost:5432/adriane",
+        REDIS_URL: "redis://localhost:6379",
+        JWT_SECRET: "super-secret"
+      })
+    ).toThrowError(ConfigValidationError);
+  });
+
+  it("accepts a WORKER_TOKEN outside NODE_ENV=local", () => {
+    const env = parseEnv({
+      NODE_ENV: "production",
+      DATABASE_URL: "postgres://localhost:5432/adriane",
+      REDIS_URL: "redis://localhost:6379",
+      JWT_SECRET: "super-secret",
+      WORKER_TOKEN: "prod-worker-secret"
+    });
+
+    expect(env.WORKER_TOKEN).toBe("prod-worker-secret");
   });
 });

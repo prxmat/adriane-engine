@@ -62,6 +62,26 @@ pub struct ComponentNodeSpec {
     pub params: Value,
 }
 
+/// One tool a human has granted on the approve path, carrying the governance
+/// provenance the engine guard-rail validates: the principal who *requested* it and
+/// the principal who *resolved* it must differ (no self-approval). The control plane
+/// is the source of truth — it only ever sends tools an [`adriane_approval_engine`]
+/// decision already approved — but the bridge re-checks the invariant before writing
+/// the tool into the resume channel (defence in depth).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovedTool {
+    /// The tool name (the approval subject's `tool:<name>`, stripped of its prefix).
+    pub name: String,
+    /// The principal that *filed* the approval request (the agent/node).
+    #[serde(default)]
+    pub requested_by: String,
+    /// The principal that *resolved* (approved) it — must be present and differ from
+    /// `requested_by`, or the bridge rejects the resume.
+    #[serde(default)]
+    pub resolved_by: String,
+}
+
 /// The full spec for a run/resume/approve call.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,10 +95,15 @@ pub struct EngineSpec {
     /// ignored by start.
     #[serde(default)]
     pub state: Option<GraphState>,
-    /// Tool names a human has granted (approve path): written into the
-    /// `__approvedTools` channel before resuming.
+    /// Tools a human has granted on the approve OR resume path: each carries its
+    /// `{ name, requestedBy, resolvedBy }` provenance. The bridge validates the
+    /// no-self-approval invariant per tool, then writes only the validated *names* into
+    /// the `__approvedTools` channel before resuming — on BOTH `Entry::Approve` and the
+    /// production catalog `Entry::Resume`, so a malformed/forged resume cannot unlock a
+    /// self-approved tool. `#[serde(default)]` keeps a spec that omits it (start, or an
+    /// ordinary resume past a non-approval gate) deserializing to an empty list.
     #[serde(default)]
-    pub approved_tools: Vec<String>,
+    pub approved_tools: Vec<ApprovedTool>,
     /// Per-node agent configuration, keyed by node id.
     #[serde(default)]
     pub agents: BTreeMap<String, AgentSpec>,
@@ -140,6 +165,37 @@ mod tests {
         assert!(spec.agents.is_empty());
         assert!(spec.state.is_none());
         assert!(spec.initial_data.is_empty());
+    }
+
+    #[test]
+    fn deserializes_approved_tools_with_provenance() {
+        let spec_json = json!({
+            "graph": minimal_graph_json(),
+            "approvedTools": [
+                { "name": "refund", "requestedBy": "assistant", "resolvedBy": "alice" }
+            ]
+        });
+        let spec: EngineSpec = serde_json::from_value(spec_json).expect("spec parses");
+        assert_eq!(spec.approved_tools.len(), 1);
+        let tool = &spec.approved_tools[0];
+        assert_eq!(tool.name, "refund");
+        assert_eq!(tool.requested_by, "assistant");
+        assert_eq!(tool.resolved_by, "alice");
+    }
+
+    #[test]
+    fn approved_tools_default_to_empty_and_provenance_defaults_to_blank() {
+        // A start/resume spec omits `approvedTools` entirely (default empty); a tool
+        // object may omit `requestedBy`/`resolvedBy` (both default to "" — the bridge
+        // then treats the blank resolver as a self-approval violation).
+        let spec: EngineSpec =
+            serde_json::from_value(json!({ "graph": minimal_graph_json() })).expect("spec parses");
+        assert!(spec.approved_tools.is_empty());
+
+        let partial: ApprovedTool =
+            serde_json::from_value(json!({ "name": "refund" })).expect("tool parses");
+        assert_eq!(partial.requested_by, "");
+        assert_eq!(partial.resolved_by, "");
     }
 
     #[test]

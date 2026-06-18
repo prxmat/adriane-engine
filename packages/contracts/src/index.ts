@@ -11,3 +11,4 @@ export * from "./fleet.js";
 export * from "./tenant.js";
 export * from "./catalog.js";
 export * from "./node-metadata.js";
+export * from "./principal.js";

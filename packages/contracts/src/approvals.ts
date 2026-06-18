@@ -12,18 +12,23 @@ export const ApprovalDtoSchema = z.object({
   status: ApprovalStatusSchema,
   resolvedBy: z.string().min(1).optional(),
   reason: z.string().min(1).optional(),
+  /** Owning tenant (tenancy). Optional for pre-tenancy rows backfilled to `default`. */
+  tenantId: z.string().min(1).optional(),
   requestedAt: z.string().datetime(),
   decidedAt: z.string().datetime().optional()
 });
 
 export type ApprovalDto = z.infer<typeof ApprovalDtoSchema>;
 
-export const ApproveApprovalDtoSchema = z.object({
-  resolvedBy: z.string().min(1)
-});
+/**
+ * BREAKING (tenancy/auth): `resolvedBy` is no longer accepted in the request body. The
+ * server derives the resolver from the authenticated principal (`@CurrentUser().id`) so
+ * a caller can NOT forge who approved/rejected a gate (which would also defeat the
+ * no-self-approval invariant). Approve carries no body; reject carries only `reason`.
+ */
+export const ApproveApprovalDtoSchema = z.object({}).strict();
 
 export const RejectApprovalDtoSchema = z.object({
-  resolvedBy: z.string().min(1),
   reason: z.string().min(1)
 });
 

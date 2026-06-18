@@ -22,7 +22,9 @@ import {
   createAgentNodeHandler,
   createToolNodeHandler,
   DEFAULT_AGENT_OUTPUT_CHANNEL,
+  toAgentApprovalBinding,
   toRustAgentConfig,
+  type AgentApprovalBinding,
   type AgentNodeConfig,
   type RustAgentConfig,
   type ToolNodeConfig
@@ -86,6 +88,8 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
   private readonly conditions = new Map<string, ConditionFn>();
   /** Per agent node, the serializable config the Rust engine bridge needs. */
   private readonly agentConfigs = new Map<string, RustAgentConfig>();
+  /** Per agent node, the governance binding (approval engine + requester) for resume. */
+  private readonly agentApprovals = new Map<string, AgentApprovalBinding>();
   /** Per component node, the `{ kind, params }` carrier the Rust engine bridge needs. */
   private readonly componentConfigs = new Map<string, RustComponentConfig>();
   private entryNodeId: string | undefined;
@@ -207,6 +211,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
       }
     });
     this.agentConfigs.set(id, rustConfig);
+    this.agentApprovals.set(id, toAgentApprovalBinding(id, config));
     this.ensureChannel(outputChannel, { type: "agentResult", reducer: "replace" });
     // Channels the control plane / ApprovalEngine use to gate and resume.
     this.ensureChannel(APPROVED_TOOLS_CHANNEL, { type: "string[]", reducer: "replace", default: [] });
@@ -323,6 +328,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
         handlers: this.handlers,
         conditions: this.conditions,
         agentConfigs: this.agentConfigs,
+        agentApprovals: this.agentApprovals,
         componentConfigs: this.componentConfigs
       })
     };

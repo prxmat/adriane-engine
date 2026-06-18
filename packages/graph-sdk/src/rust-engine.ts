@@ -143,13 +143,25 @@ type ComponentNodeSpecWire = {
   params: Record<string, unknown>;
 };
 
+/**
+ * One granted tool on the approve path, with the governance provenance the Rust
+ * guard-rail validates (matches Rust `ApprovedTool`, camelCase): the principal who
+ * *requested* the approval and the (distinct) principal who *resolved* it. The bridge
+ * rejects the resume if `resolvedBy` is empty or equals `requestedBy` (no self-approval).
+ */
+export type ApprovedToolWire = {
+  name: string;
+  requestedBy: string;
+  resolvedBy: string;
+};
+
 /** The `EngineSpec` shape the Rust bridge deserializes (camelCase). */
 type EngineSpecWire = {
   graph: GraphDefinition;
   runId?: string;
   initialData?: Record<string, unknown>;
   state?: GraphState;
-  approvedTools?: string[];
+  approvedTools?: ApprovedToolWire[];
   agents: Record<string, AgentSpecWire>;
   /**
    * Per-node native component configuration, keyed by node id. The Phase C carrier:
@@ -325,9 +337,20 @@ export class RustGraphRunner<TState extends ChannelValues> {
     return this.outcomeToState(outcomeJson);
   }
 
-  /** Resume a suspended run from its serialized state. */
-  public async resume(state: GraphState): Promise<TypedGraphState<TState>> {
-    const spec: EngineSpecWire = { ...this.baseSpec(), state };
+  /**
+   * Resume a suspended run from its serialized state. Optionally carries the
+   * human-granted `approvedTools` WITH their `{ name, requestedBy, resolvedBy }`
+   * provenance (the production catalog resume path): the Rust bridge re-validates the
+   * no-self-approval invariant per tool on `Entry::Resume` and writes only the
+   * validated names into `__approvedTools` — so a self-approved (or unresolved) tool
+   * aborts the resume here too, not just on the approve path. Omitted (or empty) for
+   * an ordinary resume past a non-approval gate, which unlocks no tools.
+   */
+  public async resume(
+    state: GraphState,
+    approvedTools: ApprovedToolWire[] = []
+  ): Promise<TypedGraphState<TState>> {
+    const spec: EngineSpecWire = { ...this.baseSpec(), state, approvedTools };
     const outcomeJson = await this.native.engineResume(
       JSON.stringify(spec),
       this.onNode,
@@ -337,10 +360,15 @@ export class RustGraphRunner<TState extends ChannelValues> {
     return this.outcomeToState(outcomeJson);
   }
 
-  /** Grant the approved tools, write them into `__approvedTools`, then resume. */
+  /**
+   * Grant the approved tools (each carrying its `{ name, requestedBy, resolvedBy }`
+   * provenance), then resume. The Rust bridge re-validates the no-self-approval
+   * invariant per tool and writes only the validated names into `__approvedTools`
+   * before resuming — a self-approved (or unresolved) tool aborts the resume.
+   */
   public async approveAndResume(
     state: GraphState,
-    approvedTools: string[]
+    approvedTools: ApprovedToolWire[]
   ): Promise<TypedGraphState<TState>> {
     const spec: EngineSpecWire = { ...this.baseSpec(), state, approvedTools };
     const outcomeJson = await this.native.engineApproveAndResume(

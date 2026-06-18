@@ -1,7 +1,7 @@
 {
   "name": "@adriane/graph-sdk",
   "license": "Apache-2.0",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "The front door to the Adriane framework — build, compile and run stateful, resumable agent graphs. Self-contained bundle; the Rust engine (@adriane/napi) activates automatically when installed.",
   "type": "module",
   "main": "./dist/index.js",

@@ -15,6 +15,10 @@ export const RunDtoSchema = z.object({
   channels: z.record(z.string(), z.unknown()),
   version: z.number().int().min(0),
   checkpointId: z.string().min(1).optional(),
+  /** Owning tenant (tenancy). Optional for pre-tenancy rows backfilled to `default`. */
+  tenantId: z.string().min(1).optional(),
+  /** Id of the principal who started the run. */
+  createdBy: z.string().min(1).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -25,6 +29,8 @@ export const RunSummaryDtoSchema = z.object({
   graphId: z.string().min(1),
   status: GraphStatusSchema,
   currentNodeId: z.string().min(1).nullable(),
+  tenantId: z.string().min(1).optional(),
+  createdBy: z.string().min(1).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -49,8 +55,28 @@ export const InterruptRunDtoSchema = z.object({
   when: z.enum(["before", "after"])
 });
 
+/**
+ * Channel keys the runtime governance machinery owns: `__approvedTools` carries the
+ * human-granted tools an agent may run past an approval gate, and `__approvalIds`
+ * carries the pending ApprovalEngine request ids. Allowing a client to PATCH these
+ * directly would be a self-approval back door (forge an unlock, or erase the pending
+ * ids that the resume gate checks), so they are rejected by the patch DTO below. The
+ * literals mirror `@adriane/graph-sdk`'s `APPROVED_TOOLS_CHANNEL` / `APPROVAL_IDS_CHANNEL`;
+ * contracts stays dependency-free of the SDK, so they are duplicated as constants here.
+ */
+export const RESERVED_PATCH_CHANNELS = ["__approvedTools", "__approvalIds"] as const;
+
 export const PatchRunStateDtoSchema = z.object({
-  patch: z.record(z.string(), z.unknown()),
+  patch: z
+    .record(z.string(), z.unknown())
+    .refine(
+      (patch) => RESERVED_PATCH_CHANNELS.every((channel) => !(channel in patch)),
+      (patch) => ({
+        message: `patch may not write the reserved governance channel(s): ${RESERVED_PATCH_CHANNELS.filter(
+          (channel) => channel in patch
+        ).join(", ")}`
+      })
+    ),
   resumeFrom: z.string().min(1).optional()
 });
 

@@ -63,7 +63,11 @@ export const GraphDtoSchema = z.object({
   nodes: z.array(NodeDefinitionDtoSchema),
   edges: z.array(EdgeDefinitionDtoSchema),
   entryNodeId: z.string().min(1),
-  metadata: z.record(z.string(), z.unknown()).optional()
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Owning tenant (tenancy). Optional for pre-tenancy rows backfilled to `default`. */
+  tenantId: z.string().min(1).optional(),
+  /** Id of the principal who created the graph. */
+  createdBy: z.string().min(1).optional()
 });
 
 export type NodeTypeDto = z.infer<typeof NodeTypeSchema>;

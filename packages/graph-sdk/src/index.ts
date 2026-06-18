@@ -125,6 +125,9 @@ export type {
 
 export { rustValidatorActive } from "./rust-validator.js";
 export { rustEngineAvailable } from "./rust-engine.js";
+// The approve/resume provenance wire shape `{ name, requestedBy, resolvedBy }` the Rust
+// guard-rail validates — the control plane builds it from ApprovalEngine decisions.
+export type { ApprovedToolWire } from "./rust-engine.js";
 
 // Execute a *catalog* graph (a plain GraphDefinition whose nodes carry the shared
 // `node.metadata.component` / `node.metadata.agent` carrier) on the Rust engine. This
@@ -159,12 +162,14 @@ export {
   createToolNodeHandler,
   streamAgentTokens,
   toRustAgentConfig,
+  toAgentApprovalBinding,
   DEFAULT_AGENT_OUTPUT_CHANNEL,
   APPROVED_TOOLS_CHANNEL,
   APPROVAL_IDS_CHANNEL,
   AGENT_APPROVAL_INTERRUPT
 } from "./agent-node.js";
 export type {
+  AgentApprovalBinding,
   AgentNodeConfig,
   AgentPromptSource,
   RustAgentConfig,

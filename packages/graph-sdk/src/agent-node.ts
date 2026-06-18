@@ -138,6 +138,31 @@ export type RustAgentConfig = {
   usesApprovalEngine: boolean;
 };
 
+/**
+ * The governance binding an agent node contributes to {@link CompiledGraph}: the
+ * (optional) {@link ApprovalEngine} a human resolves requests through, the principal
+ * that *requests* approvals on this node's behalf (`config.name ?? nodeId`, the same
+ * `requestedBy` the node files requests under), and the names of its approval-gated
+ * tools. {@link CompiledGraph.approveAndResume} uses it to (a) approve the matching
+ * pending engine requests before resuming on the TS path, and (b) stamp each granted
+ * tool's `requestedBy` for the Rust engine's no-self-approval guard-rail.
+ */
+export type AgentApprovalBinding = {
+  approvalEngine?: ApprovalEngine;
+  requestedBy: string;
+  approvalToolNames: string[];
+};
+
+/** Project an {@link AgentNodeConfig} into its {@link AgentApprovalBinding}. */
+export const toAgentApprovalBinding = (
+  nodeId: string,
+  config: AgentNodeConfig
+): AgentApprovalBinding => ({
+  approvalEngine: config.approvalEngine,
+  requestedBy: config.name ?? nodeId,
+  approvalToolNames: approvalToolNamesOf(config.tools)
+});
+
 /** Pull every tool's name + `execute` out of a registry, for the Rust tool seam. */
 const toolBindingsOf = (tools: ToolRegistry | undefined): RustToolBinding[] => {
   if (tools === undefined) {

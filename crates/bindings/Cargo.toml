@@ -16,6 +16,7 @@ adriane-graph-core = { path = "../graph-core" }
 adriane-graph-adriane = { path = "../graph-adriane" }
 adriane-graph-runtime = { path = "../graph-runtime" }
 adriane-agents-core = { path = "../agents-core" }
+adriane-approval-engine = { path = "../approval-engine" }
 adriane-components = { path = "../components" }
 adriane-llm-gateway = { path = "../llm-gateway" }
 napi = { version = "2", default-features = false, features = ["napi8", "async", "tokio_rt"] }

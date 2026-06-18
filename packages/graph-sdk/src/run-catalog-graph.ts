@@ -25,14 +25,22 @@
  * definition to this runner.
  */
 
-import type { GraphDefinition, GraphState, RunId } from "@adriane/graph-core";
+import type { GraphDefinition, GraphState, NodeId, RunId } from "@adriane/graph-core";
 import type { RunEvent } from "@adriane/graph-runtime";
 import type { ModelTier } from "@adriane/llm-gateway";
+// Type-only: keeps the ApprovalEngine contract without pulling its Pg/db implementation
+// (and a `pg` dependency) into consumers such as the Studio bundle.
+import type { ApprovalEngine } from "@adriane/approval-engine";
 
 import type { RustAgentConfig } from "./agent-node.js";
-import { DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
+import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
 import type { RustComponentConfig, ComponentKind } from "./components.js";
-import { rustEngineAvailable, tryCreateRustRunner, type RustRunnerParts } from "./rust-engine.js";
+import {
+  rustEngineAvailable,
+  tryCreateRustRunner,
+  type ApprovedToolWire,
+  type RustRunnerParts
+} from "./rust-engine.js";
 import type { ChannelValues } from "./typed.js";
 
 /** The component carrier on `node.metadata.component`. Mirrors the contracts schema. */
@@ -72,6 +80,16 @@ export type RunCatalogGraphOptions = {
   initialData?: Record<string, unknown>;
   /** Subscribe to forwarded run-lifecycle events (every node transition). */
   onEvent?: (event: RunEvent) => void;
+  /**
+   * Route the run's approvals through an {@link ApprovalEngine}. When present, the
+   * agents run natively on Rust as usual, but the moment the run suspends for approval
+   * the seam files one request per gated tool (`requestedBy = nodeId`, the agent's own
+   * subject) and stashes the engine ids in the `__approvalIds` channel of the returned
+   * state — so a human resolves them out of band (the engine forbids self-approval) and
+   * the control plane only ever resumes with engine-approved tools. Absent: the run is
+   * ungoverned (the legacy channel-only behaviour).
+   */
+  approvalEngine?: ApprovalEngine;
 };
 
 /** Raised when the native engine is unavailable — catalog graphs require it. */
@@ -114,8 +132,14 @@ export const readAgentCarrier = (
   return agent as AgentCarrier;
 };
 
-/** Project an {@link AgentCarrier} into the wire {@link RustAgentConfig} the bridge consumes. */
-const carrierToAgentConfig = (carrier: AgentCarrier): RustAgentConfig => ({
+/**
+ * Project an {@link AgentCarrier} into the wire {@link RustAgentConfig} the bridge
+ * consumes. `usesApprovalEngine` reflects whether the run was given an
+ * {@link ApprovalEngine}: on the catalog path the agent still executes natively on Rust
+ * (the flag does not re-route it), but the run is governed — the seam files a request
+ * per gated tool when the run suspends (see {@link fileApprovalRequests}).
+ */
+const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean): RustAgentConfig => ({
   provider: carrier.provider ?? "anthropic",
   model: carrier.model,
   tier: carrier.tier,
@@ -128,7 +152,7 @@ const carrierToAgentConfig = (carrier: AgentCarrier): RustAgentConfig => ({
   // The catalog path carries no JS tool closures — the agent's tools are native
   // (no-op stubs in the bridge unless a name is also in jsToolNames, which it never is here).
   toolBindings: [],
-  usesApprovalEngine: false
+  usesApprovalEngine
 });
 
 const generateRunId = (): RunId => {
@@ -142,7 +166,10 @@ const generateRunId = (): RunId => {
  * non-human-gate node becomes an inert JS node (an empty channel update) so a graph
  * that mixes catalog nodes with plain action/tool nodes still runs end-to-end.
  */
-const assembleParts = (definition: GraphDefinition): RustRunnerParts<ChannelValues> => {
+const assembleParts = (
+  definition: GraphDefinition,
+  usesApprovalEngine: boolean
+): RustRunnerParts<ChannelValues> => {
   const components = new Map<string, RustComponentConfig>();
   const agents = new Map<string, RustAgentConfig>();
   const jsNodeIds = new Set<string>();
@@ -156,7 +183,7 @@ const assembleParts = (definition: GraphDefinition): RustRunnerParts<ChannelValu
     }
     const agent = readAgentCarrier(node.metadata);
     if (agent !== undefined) {
-      agents.set(id, carrierToAgentConfig(agent));
+      agents.set(id, carrierToAgentConfig(agent, usesApprovalEngine));
       continue;
     }
     if (node.type === "human-gate") {
@@ -193,7 +220,9 @@ export const runCatalogGraph = async (
   if (!rustEngineAvailable()) {
     throw new RustEngineUnavailableError();
   }
-  const runner = tryCreateRustRunner<ChannelValues>(assembleParts(definition));
+  const runner = tryCreateRustRunner<ChannelValues>(
+    assembleParts(definition, options.approvalEngine !== undefined)
+  );
   if (runner === null) {
     throw new RustEngineUnavailableError();
   }
@@ -201,8 +230,9 @@ export const runCatalogGraph = async (
     runner.subscribe(options.onEvent);
   }
   const runId = options.runId ?? generateRunId();
-  const state = await runner.run(runId, options.initialData ?? {});
-  return { state: state as unknown as GraphState, status: state.status, usedRustEngine: true };
+  const state = (await runner.run(runId, options.initialData ?? {})) as unknown as GraphState;
+  const governed = await fileApprovalRequests(definition, state, runId, options.approvalEngine);
+  return { state: governed, status: governed.status, usedRustEngine: true };
 };
 
 /**
@@ -215,24 +245,133 @@ export const runCatalogGraph = async (
 export const resumeCatalogGraph = async (
   definition: GraphDefinition,
   state: GraphState,
-  options: Pick<RunCatalogGraphOptions, "onEvent"> = {}
+  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine"> & {
+    /**
+     * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
+     * resolvedBy }` provenance. Passed straight through to the Rust bridge, which
+     * re-validates the no-self-approval invariant per tool on `Entry::Resume` and writes
+     * only the validated names into `__approvedTools`. A control plane
+     * is the authority on which tools were approved (drawn from the ApprovalEngine), but
+     * the engine re-checks the provenance here — defence in depth on the PRODUCTION
+     * resume path. Omitted/empty: an ordinary resume that unlocks no tools.
+     */
+    approvedTools?: ApprovedToolWire[];
+  } = {}
 ): Promise<CatalogRunOutcome> => {
   if (!rustEngineAvailable()) {
     throw new RustEngineUnavailableError();
   }
-  const runner = tryCreateRustRunner<ChannelValues>(assembleParts(definition));
+  const runner = tryCreateRustRunner<ChannelValues>(
+    assembleParts(definition, options.approvalEngine !== undefined)
+  );
   if (runner === null) {
     throw new RustEngineUnavailableError();
   }
   if (options.onEvent !== undefined) {
     runner.subscribe(options.onEvent);
   }
-  const resumed = await runner.resume(state);
-  return {
-    state: resumed as unknown as GraphState,
-    status: resumed.status,
-    usedRustEngine: true
-  };
+  const resumed = (await runner.resume(state, options.approvedTools ?? [])) as unknown as GraphState;
+  // A resume can itself hit a NEW approval gate; file requests for that suspension too.
+  const governed = await fileApprovalRequests(
+    definition,
+    resumed,
+    String(resumed.runId) as RunId,
+    options.approvalEngine
+  );
+  return { state: governed, status: governed.status, usedRustEngine: true };
+};
+
+/** One approval request the seam files, normalized to the `{ description }` subject. */
+type SurfacedApprovalRequest = { subject: { description: string } };
+
+/**
+ * Normalize one surfaced `approvalRequests` entry's subject to `{ description }`. The
+ * Rust agent emits a FLAT string subject (`"tool:<name>"`, see agents-core
+ * `ApprovalRequestItem`); the TS handler emits a `{ description: "tool:<name>" }`
+ * object. Accept both, returning `undefined` for anything else.
+ */
+const normalizeSubject = (request: unknown): SurfacedApprovalRequest | undefined => {
+  if (!isRecord(request)) {
+    return undefined;
+  }
+  const subject = (request as { subject?: unknown }).subject;
+  if (typeof subject === "string") {
+    return { subject: { description: subject } };
+  }
+  if (isRecord(subject) && typeof (subject as { description?: unknown }).description === "string") {
+    return { subject: { description: (subject as { description: string }).description } };
+  }
+  return undefined;
+};
+
+/** Read + normalize an agent output channel's `approvalRequests` off the suspended state. */
+const readApprovalRequests = (
+  state: GraphState,
+  outputChannel: string
+): SurfacedApprovalRequest[] => {
+  const channel = (state.channels as Record<string, unknown>)[outputChannel];
+  if (channel === null || typeof channel !== "object") {
+    return [];
+  }
+  const requests = (channel as { approvalRequests?: unknown }).approvalRequests;
+  if (!Array.isArray(requests)) {
+    return [];
+  }
+  return requests
+    .map(normalizeSubject)
+    .filter((request): request is SurfacedApprovalRequest => request !== undefined);
+};
+
+/**
+ * File one {@link ApprovalEngine} request per gated tool surfaced by a suspended
+ * catalog run, and stash the returned ids in the `__approvalIds` channel of the
+ * returned state — mirroring the TS `createAgentNodeHandler` emission pattern
+ * (`requestedBy = nodeId`, the agent's own subject). The agent is the requester; a
+ * human (a different principal) resolves it out of band, which the engine enforces.
+ *
+ * No-ops (returns the state unchanged) when no engine is given or the run is not
+ * suspended. Idempotency: an agent node that already carries stashed ids (a state that
+ * was governed once) is skipped, so re-driving a suspended state does not double-file.
+ */
+const fileApprovalRequests = async (
+  definition: GraphDefinition,
+  state: GraphState,
+  runId: RunId,
+  engine: ApprovalEngine | undefined
+): Promise<GraphState> => {
+  if (engine === undefined || state.status !== "suspended") {
+    return state;
+  }
+  const channels = { ...(state.channels as Record<string, unknown>) };
+  const alreadyStashed = Array.isArray(channels[APPROVAL_IDS_CHANNEL])
+    ? (channels[APPROVAL_IDS_CHANNEL] as unknown[]).length > 0
+    : false;
+  if (alreadyStashed) {
+    return state;
+  }
+
+  const ids: string[] = [];
+  for (const node of definition.nodes) {
+    const agent = readAgentCarrier(node.metadata);
+    if (agent === undefined) {
+      continue;
+    }
+    const outputChannel = agent.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL;
+    for (const request of readApprovalRequests(state, outputChannel)) {
+      const created = await engine.request({
+        runId,
+        nodeId: String(node.id) as NodeId,
+        requestedBy: String(node.id),
+        subject: request.subject
+      });
+      ids.push(String(created.id));
+    }
+  }
+
+  if (ids.length === 0) {
+    return state;
+  }
+  return { ...state, channels: { ...channels, [APPROVAL_IDS_CHANNEL]: ids } };
 };
 
 /** Type guard a node carries either catalog carrier. Useful to decide the run path. */
