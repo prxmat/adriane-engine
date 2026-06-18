@@ -117,7 +117,7 @@ packages/   the framework              (OPEN SOURCE)
   graph-sdk        ← you are here: the ergonomic front door
   agents-core      agent patterns (ReAct, plan-execute, reflection, supervisor, swarm)
   llm-gateway      the only package allowed to import provider SDKs
-  lang-/graph-adriane   the Adriane DSL compilers (YAML → graph)
+  lang-adriane     the Adriane DSL compilers (YAML → graph)
   artifact-store · approval-engine · observability · memory-store · rag-pipeline
   adriane-cli      run and inspect graphs from the terminal
 ```
