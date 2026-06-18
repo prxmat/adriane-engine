@@ -14,6 +14,7 @@ const config = {
 
   onBrokenLinks: "warn",
   markdown: {
+    mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: "warn"
     }
@@ -39,6 +40,20 @@ const config = {
           customCss: require.resolve("./src/css/custom.css")
         }
       })
+    ]
+  ],
+
+  themes: [
+    "@docusaurus/theme-mermaid",
+    [
+      // Offline full-text search (no Algolia signup; works on GitHub Pages).
+      require.resolve("@easyops-cn/docusaurus-search-local"),
+      {
+        hashed: true,
+        indexBlog: false,
+        docsRouteBasePath: "/docs",
+        highlightSearchTermsOnTargetPage: true
+      }
     ]
   ],
 

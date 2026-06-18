@@ -1,0 +1,116 @@
+---
+sidebar_position: 2
+title: How Adriane compares
+description: An honest comparison vs LangGraph, Temporal, and Haystack — where Adriane fits and where it doesn't.
+---
+
+# How Adriane compares
+
+Adriane is **early and narrow on purpose**. It does one thing the others don't make
+first-class — **governance baked into a stateful, resumable agentic-graph runtime, behind a
+single Rust engine with parity SDKs** — and it is honest about everything it does *not* yet do.
+
+This page exists so you can rule Adriane *out* quickly if it's the wrong tool. The credibility
+play here is candor, not a feature checklist that wins on paper.
+
+:::warning Alpha software
+Adriane is **0.1.0 (alpha)**. It is not battle-tested at scale. Several capabilities other
+tools ship in production — clustering, durable timers, signals, a managed worker fleet — are
+**not implemented** here. See the [roadmap](/docs/roadmap) for what's stable, experimental, and
+reserved.
+:::
+
+## The honest one-liner
+
+- **LangGraph** — the closest neighbour: stateful agent graphs with checkpointing and human-in-the-loop. Mature, large ecosystem, Python-first. Adriane's distinction is governance-as-runtime-property and the one-Rust-engine/polyglot design, not graph features.
+- **Temporal.io** — a durable-execution platform. Far more mature and operationally proven for long-running, distributed workflows at scale. Not agent- or governance-shaped; you build those yourself on top.
+- **Haystack** — an LLM/RAG framework with a deep integration catalog (providers, vector stores, retrievers, document stores). Adriane has a fraction of those integrations and is not trying to be a RAG framework.
+
+## Feature matrix
+
+Legend: ✅ first-class · 🟡 partial / early · ❌ not provided · — not the tool's purpose.
+
+| Capability | Adriane (0.1.0) | LangGraph | Temporal.io | Haystack |
+| --- | --- | --- | --- | --- |
+| Deterministic-by-default execution (named-predicate routing, no `eval`) | ✅ | 🟡 (app-controlled) | ✅ (durable, deterministic workflows) | — |
+| Checkpoint after **every** node + state mutation | ✅ | ✅ | ✅ (event-sourced history) | ❌ |
+| Native governance: approval gates as a runtime property | ✅ | 🟡 (interrupt/HIL primitives, you build the policy) | 🟡 (signals, you build the policy) | ❌ |
+| Separation of duties (agent never approves its own output), enforced | ✅ | ❌ (DIY) | ❌ (DIY) | ❌ |
+| Attested decisions (Ed25519, tamper-evident audit) | ✅ | ❌ | ❌ | ❌ |
+| One engine, two SDKs at parity (validate/compile identical across languages) | ✅ (TS + Python over one Rust core) | ❌ (Python-first; JS port is separate) | 🟡 (multi-SDK, but each is a client lib, not one core) | ❌ |
+| Durable execution at scale (clustering, durable timers, signals, retries-as-platform) | ❌ | 🟡 (via LangGraph Platform / external infra) | ✅ (this is its core competency) | — |
+| RAG / retriever / vector-store breadth | 🟡 (a RAG pipeline + a few pieces) | 🟡 | 🟡 | ✅ (deepest catalog) |
+| Provider & tool integration breadth | 🟡 (small, curated) | ✅ (large) | — | ✅ (large) |
+| Polyglot SDKs beyond TS/Python | 🟡 (designed for; Go/Java/PHP/.NET/Ruby/Rust **planned**, not shipped) | ❌ | ✅ (Go, Java, TS, Python, PHP, .NET shipped) | ❌ |
+| Maturity / production track record | 🟡 alpha, pre-1.0 | ✅ widely deployed | ✅ very mature | ✅ mature |
+
+A few entries deserve a footnote rather than a checkmark:
+
+- **Determinism vs Temporal.** Temporal's determinism is the gold standard for *durable
+  execution* (workflow code must be deterministic; the platform replays event history across
+  process restarts and machines). Adriane's determinism is narrower: routing is fully
+  inspectable (conditions are [named predicates, never `eval`'d](/docs/core-concepts/execution-contract)) and a run resumes exactly from its latest checkpoint — but Adriane has no cluster, no
+  cross-host replay guarantees, and no durable timers. Don't read the matching ✅s as equivalence.
+- **Governance in LangGraph/Temporal.** Both give you the *primitives* to pause and resume
+  (interrupts, signals). Neither makes separation-of-duties, attribution, and attestation a
+  property of the runtime — you assemble that yourself in application code. That assembly is
+  exactly what Adriane provides out of the box. See [the governance model](/docs/governance/governance-model).
+
+## Where the parity SDKs actually differ
+
+The "one engine, two SDKs" row is genuine — the graph model, validator, and DSL compiler live
+**once in Rust** and both SDKs call into it, so a graph that validates in TypeScript validates
+identically in Python. But the two surfaces are deliberately not symmetric: TypeScript bridges
+callbacks (custom node handlers, condition predicates, streaming), Python is JSON-in/JSON-out
+(validate, compile, model policy, and end-to-end Rust component/prebuilt runs — **no custom
+Python nodes, no streaming**). The full contract is in
+[one engine, two languages](/docs/sdk-parity/one-engine-two-languages). Read it before assuming
+Python can do everything TypeScript can — it can't, by design.
+
+## When to choose Adriane
+
+Reach for Adriane when the **hard part of your problem is governance over an agentic graph**, and
+you want that governance to be a guarantee of the runtime rather than something you re-implement
+per workflow:
+
+- You're running agents that touch real things (refunds, deploys, outbound mail) and you need a
+  **human gate that suspends the run cleanly and resumes from the exact checkpoint** — with the
+  approver provably different from the requester.
+- You need a **tamper-evident audit trail**: who decided, what, when — attested with a signature,
+  not a free-text log line. (See [tool approval and attestation](/docs/governance/tool-approval-and-attestation).)
+- You want the same graph definition and validation behaviour **across TypeScript and Python**
+  with no second implementation to drift.
+- You value **inspectable, deterministic routing** (named predicates) over the flexibility of
+  arbitrary code in your edges.
+- You're comfortable on **alpha software** and want to shape it.
+
+## When *not* to choose Adriane (yet)
+
+Be honest with yourself here — picking the wrong tool wastes weeks:
+
+- **You need durable execution at scale.** Long-running, distributed workflows with durable
+  timers, signals, cross-host replay, and a managed worker fleet are **Temporal's** domain and
+  are not implemented in Adriane. Don't try to make Adriane be Temporal.
+- **You need a broad RAG / integration catalog today.** If your value is in the breadth of
+  retrievers, vector stores, document stores, and provider connectors, **Haystack** (or
+  LangChain) has years of integrations Adriane doesn't. Adriane ships a small, curated set.
+- **You need a mature, production-proven graph framework right now.** **LangGraph** is widely
+  deployed with a large community. Adriane is pre-1.0 and pre-scale.
+- **You need fan-out parallelism or subgraph composition today.** These have schema slots but are
+  [reserved, not implemented](/docs/roadmap). Don't build on them yet.
+- **You need a polyglot SDK that isn't TypeScript or Python today.** Go/Java/PHP/.NET/Ruby and a
+  native Rust SDK are *designed for* by the architecture but **not shipped**. If you need them
+  now, the only multi-language option that exists is Temporal.
+
+:::note The actual edge
+Adriane's bet is narrow: **governance baked into a stateful agentic-graph runtime, plus a
+one-Rust-engine / thin-binding design that makes polyglot parity tractable.** If that combination
+isn't the crux of your problem, one of the more mature tools above will serve you better today —
+and we'd rather you find that out on this page than three weeks in.
+:::
+
+## See also
+
+- [Why Adriane](/docs/introduction/why-adriane) — the problem and mental model.
+- [The governance model](/docs/governance/governance-model) — the differentiator, end to end.
+- [Roadmap](/docs/roadmap) — feature status and what's coming.

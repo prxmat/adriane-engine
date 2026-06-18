@@ -1,0 +1,8 @@
+{
+  "label": "Production",
+  "position": 10,
+  "link": {
+    "type": "generated-index",
+    "description": "Run Adriane for real: deploy the control plane and worker fleet, follow the best practices, and troubleshoot the common failure modes."
+  }
+}
