@@ -2,7 +2,7 @@
   "name": "@adriane/graph-runtime",
   "private": true,
   "license": "Apache-2.0",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "[DEPRECATED — execution moved to the Rust engine in crates/; the TS engine remains only as a fallback when the @adriane/napi native addon is absent] Stateful, resumable graph execution engine: registries, checkpointer, event bus, suspend/resume. Superseded by the crates/graph-runtime Rust crate.",
   "type": "module",
   "main": "./dist/packages/graph-runtime/src/index.js",
