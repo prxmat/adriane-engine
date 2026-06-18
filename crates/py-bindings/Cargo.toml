@@ -24,6 +24,6 @@ adriane-graph-runtime = { path = "../graph-runtime" }
 adriane-llm-gateway = { path = "../llm-gateway" }
 adriane-components = { path = "../components" }
 adriane-agents-core = { path = "../agents-core" }
-pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt", "macros"] }
