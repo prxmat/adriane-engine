@@ -39,7 +39,7 @@
     "example:docqa": "node --import tsx examples/doc-qa-reference.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.69.0",
+    "@anthropic-ai/sdk": "^0.104.2",
     "drizzle-orm": "^0.44.7",
     "pg": "^8.13.1",
     "zod": "^3.24.4"
