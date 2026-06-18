@@ -38,6 +38,6 @@
     "prepublish:napi": "napi prepublish -t npm"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.4"
+    "@napi-rs/cli": "^3.7.2"
   }
 }
