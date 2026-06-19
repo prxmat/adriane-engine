@@ -146,6 +146,19 @@ A request with `provider: "openai"` and no registered adapter rejects with
 it completes once, then surfaces the whole text as a single delta followed by a terminal chunk.
 :::
 
+:::note Broader provider support on the Rust engine
+The live **Rust** gateway (the default execution path — see ADR 0005) ships
+a wider provider set than this TypeScript fallback: a **native Google Gemini** adapter (the
+`generateContent` API), plus the OpenAI-compatible family — **OpenAI, OpenRouter, MiniMax,
+Hugging Face, LM Studio** alongside Mistral and Ollama. Each new provider is an enum slot + a
+constructor (one adapter covers the whole OpenAI-shaped family); selection is by which env
+credential is present — `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`,
+`OPENROUTER_API_KEY`, `MINIMAX_API_KEY`, `HF_TOKEN`, `ADRIANE_USE_OLLAMA=1`,
+`ADRIANE_USE_LMSTUDIO=1`. This "bring your own model" posture is what lets a deployment stay on
+hosted EU models or run fully on-premise with local models. The deprecated TS gateway here stays
+at two adapters by design.
+:::
+
 ## The capability-tier model policy
 
 Agents declare a **capability tier**, not a model id. `ModelPolicy`
