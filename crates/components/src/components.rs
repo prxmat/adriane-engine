@@ -43,6 +43,7 @@ impl ComponentRegistry {
             "outputParser",
             "router",
             "retriever",
+            "semanticRetriever",
             "reranker",
             "textCleaner",
             "documentSplitter",
@@ -83,6 +84,7 @@ impl ComponentRegistry {
             "outputParser" => build_output_parser(params),
             "router" => build_router(params),
             "retriever" => build_retriever(params),
+            "semanticRetriever" => build_semantic_retriever(params),
             "reranker" => build_reranker(params),
             "textCleaner" => build_text_cleaner(params),
             "documentSplitter" => build_document_splitter(params),
@@ -598,6 +600,66 @@ fn build_retriever(params: &Value) -> Result<NodeHandler, ComponentError> {
             .into_iter()
             .map(|(score, doc)| json!({ "id": doc.id, "content": doc.content, "score": score }))
             .collect();
+        NodeOutput::update(single(&into, Value::Array(results)))
+    }))
+}
+
+// --- semanticRetriever -------------------------------------------------------
+
+/// Read a JSON array channel value into a dense `f64` vector (non-numbers dropped).
+fn json_to_f64_vec(value: &Value) -> Vec<f64> {
+    value
+        .as_array()
+        .map(|arr| arr.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default()
+}
+
+/// `semanticRetriever { queryEmbeddingFrom, chunksFrom, into, k? }` — rank a corpus of
+/// PRE-EMBEDDED chunks by cosine similarity to a PRE-EMBEDDED query, both supplied on
+/// channels, and write the top-`k` `{ id, content, score }` to `into`.
+///
+/// Unlike `retriever` (lexical mock embeddings over inline `docs`), this consumes REAL
+/// embeddings — produced at ingestion by the gateway (e.g. Mistral) and persisted in the
+/// knowledge base. Embedding is a provider/gateway concern; this component owns only the
+/// cosine ranking (the engine's [`cosine_similarity`]). The host (control plane) seeds
+/// `chunksFrom` with a namespace's persisted KB and `queryEmbeddingFrom` with the embedded
+/// query, so the same component serves an in-memory OSS corpus or a Postgres-backed one.
+fn build_semantic_retriever(params: &Value) -> Result<NodeHandler, ComponentError> {
+    let kind = "semanticRetriever";
+    let query_embedding_from = require_string(kind, params, "queryEmbeddingFrom")?;
+    let chunks_from = require_string(kind, params, "chunksFrom")?;
+    let into = require_string(kind, params, "into")?;
+    let k = optional_usize(kind, params, "k")?.unwrap_or(4);
+
+    Ok(sync_handler(move |state: GraphState| {
+        let query_vec = state
+            .channels
+            .get(&query_embedding_from)
+            .map(json_to_f64_vec)
+            .unwrap_or_default();
+        let chunks = state
+            .channels
+            .get(&chunks_from)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut scored: Vec<(f64, Value)> = chunks
+            .iter()
+            .filter_map(|chunk| {
+                let embedding = json_to_f64_vec(chunk.get("embedding")?);
+                let score = cosine_similarity(&query_vec, &embedding);
+                let id = chunk.get("id").and_then(Value::as_str).unwrap_or("");
+                let content = chunk.get("content").and_then(Value::as_str).unwrap_or("");
+                Some((
+                    score,
+                    json!({ "id": id, "content": content, "score": score }),
+                ))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        let results: Vec<Value> = scored.into_iter().map(|(_, value)| value).collect();
         NodeOutput::update(single(&into, Value::Array(results)))
     }))
 }
@@ -2446,10 +2508,10 @@ mod tests {
     }
 
     #[test]
-    fn registry_lists_all_twenty_eight_kinds() {
-        assert_eq!(ComponentRegistry::kinds().len(), 28);
-        // The seventeen wave-one kinds plus the eleven wave-two kinds, in
-        // declaration order.
+    fn registry_lists_all_twenty_nine_kinds() {
+        assert_eq!(ComponentRegistry::kinds().len(), 29);
+        // The seventeen wave-one kinds plus the eleven wave-two kinds plus
+        // semanticRetriever, in declaration order.
         assert_eq!(
             ComponentRegistry::kinds(),
             &[
@@ -2458,6 +2520,7 @@ mod tests {
                 "outputParser",
                 "router",
                 "retriever",
+                "semanticRetriever",
                 "reranker",
                 "textCleaner",
                 "documentSplitter",
@@ -2509,6 +2572,9 @@ mod tests {
             "outputParser" => json!({ "from": "f", "into": "o" }),
             "router" => json!({ "from": "f", "rules": [], "defaultRoute": "d", "into": "o" }),
             "retriever" => json!({ "query": "q", "into": "o", "docs": [] }),
+            "semanticRetriever" => {
+                json!({ "queryEmbeddingFrom": "q", "chunksFrom": "c", "into": "o" })
+            }
             "reranker" => json!({ "from": "f", "into": "o" }),
             "textCleaner" => json!({ "from": "f", "into": "o" }),
             "documentSplitter" => json!({ "from": "f", "into": "o", "by": "chars", "size": 4 }),
@@ -2735,6 +2801,52 @@ mod tests {
         assert_eq!(escalate.update.get("route"), Some(&json!("escalate")));
         let fallback = run(&handler, channels(&[("label", json!("hello"))]));
         assert_eq!(fallback.update.get("route"), Some(&json!("inbox")));
+    }
+
+    // --- semanticRetriever ---------------------------------------------------
+
+    #[test]
+    fn semantic_retriever_ranks_by_cosine_over_real_embeddings() {
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "semanticRetriever",
+                &json!({
+                    "queryEmbeddingFrom": "qvec",
+                    "chunksFrom": "corpus",
+                    "into": "hits",
+                    "k": 2
+                }),
+            )
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[
+                ("qvec", json!([1.0, 0.0, 0.0])),
+                (
+                    "corpus",
+                    json!([
+                        { "id": "near", "content": "aligned", "embedding": [0.9, 0.1, 0.0] },
+                        { "id": "far", "content": "orthogonal", "embedding": [0.0, 1.0, 0.0] }
+                    ]),
+                ),
+            ]),
+        );
+        let hits = out
+            .update
+            .get("hits")
+            .and_then(|v| v.as_array())
+            .expect("hits array");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].get("id"), Some(&json!("near")));
+        let top = hits[0]
+            .get("score")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap();
+        let bottom = hits[1]
+            .get("score")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap();
+        assert!(top > bottom, "aligned chunk must outrank orthogonal one");
     }
 
     // --- retriever -----------------------------------------------------------
