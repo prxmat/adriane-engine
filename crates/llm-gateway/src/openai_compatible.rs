@@ -39,6 +39,27 @@ pub const MISTRAL_DEFAULT_MODEL: &str = "mistral-small-latest";
 pub const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 /// Default Ollama model when the request does not name one.
 pub const OLLAMA_DEFAULT_MODEL: &str = "mistral";
+/// OpenAI cloud base URL.
+pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// Default OpenAI model when the request does not name one.
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-4o-mini";
+/// OpenRouter base URL (aggregates many providers behind one OpenAI-shaped API).
+pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+/// Default OpenRouter model when the request does not name one (ids are namespaced).
+pub const OPENROUTER_DEFAULT_MODEL: &str = "openai/gpt-4o-mini";
+/// MiniMax cloud base URL.
+pub const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
+/// Default MiniMax model when the request does not name one.
+pub const MINIMAX_DEFAULT_MODEL: &str = "MiniMax-Text-01";
+/// Hugging Face inference router base URL (OpenAI-compatible).
+pub const HUGGINGFACE_BASE_URL: &str = "https://router.huggingface.co/v1";
+/// Default Hugging Face model when the request does not name one.
+pub const HUGGINGFACE_DEFAULT_MODEL: &str = "meta-llama/Llama-3.3-70B-Instruct";
+/// Local LM Studio OpenAI-compatible base URL.
+pub const LMSTUDIO_BASE_URL: &str = "http://localhost:1234/v1";
+/// Default LM Studio model id — LM Studio serves whatever model is loaded, so the
+/// request usually pins the id and this is only a keyless fallback label.
+pub const LMSTUDIO_DEFAULT_MODEL: &str = "local-model";
 
 // ---------------------------------------------------------------------------
 // Raw wire response (snake_case, matches the OpenAI chat-completions JSON)
@@ -110,19 +131,36 @@ pub trait OpenAiCompatiblePort: Send + Sync {
 // Adapter
 // ---------------------------------------------------------------------------
 
-/// One adapter for any OpenAI `/chat/completions`-compatible server. Registers
-/// under the [`LlmProvider::Mistral`] gateway slot (both Mistral cloud and a
-/// local Ollama route through it).
+/// One adapter for any OpenAI `/chat/completions`-compatible server. The gateway
+/// slot it registers under is carried by [`OpenAiCompatibleAdapter::provider`], so
+/// several OpenAI-compatible providers (OpenAI, Mistral, OpenRouter, MiniMax,
+/// Hugging Face, LM Studio, Ollama) can coexist in one gateway — each in its own slot.
 pub struct OpenAiCompatibleAdapter {
     port: Box<dyn OpenAiCompatiblePort>,
+    provider: LlmProvider,
     default_model: String,
 }
 
 impl OpenAiCompatibleAdapter {
-    /// Build an adapter over the given port with an explicit default model.
+    /// Build an adapter over the given port with an explicit default model,
+    /// registering under the [`LlmProvider::Mistral`] slot. Kept for the existing
+    /// call sites and tests; new providers use [`OpenAiCompatibleAdapter::with_provider`]
+    /// or a named constructor.
     pub fn new(port: Box<dyn OpenAiCompatiblePort>, default_model: impl Into<String>) -> Self {
+        Self::with_provider(port, LlmProvider::Mistral, default_model)
+    }
+
+    /// Build an adapter over the given port, naming the gateway slot it registers
+    /// under. The request's `provider` must match this slot for the gateway to route
+    /// to it.
+    pub fn with_provider(
+        port: Box<dyn OpenAiCompatiblePort>,
+        provider: LlmProvider,
+        default_model: impl Into<String>,
+    ) -> Self {
         OpenAiCompatibleAdapter {
             port,
+            provider,
             default_model: default_model.into(),
         }
     }
@@ -134,17 +172,77 @@ impl OpenAiCompatibleAdapter {
         let default_model = model.unwrap_or_else(|| MISTRAL_DEFAULT_MODEL.to_owned());
         OpenAiCompatibleAdapter {
             port: Box::new(HttpPort::new(MISTRAL_BASE_URL, api_key)),
+            provider: LlmProvider::Mistral,
             default_model,
         }
     }
 
-    /// A local Ollama server (keyless, [`OLLAMA_BASE_URL`] by default). `model`
-    /// overrides [`OLLAMA_DEFAULT_MODEL`]; `base_url` overrides the host.
+    /// A local Ollama server (keyless, [`OLLAMA_BASE_URL`] by default), registered
+    /// under the [`LlmProvider::Ollama`] slot. `model` overrides
+    /// [`OLLAMA_DEFAULT_MODEL`]; `base_url` overrides the host.
     pub fn ollama(model: Option<String>, base_url: Option<String>) -> Self {
         let default_model = model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_owned());
         let base = base_url.unwrap_or_else(|| OLLAMA_BASE_URL.to_owned());
         OpenAiCompatibleAdapter {
             port: Box::new(HttpPort::new(base, None)),
+            provider: LlmProvider::Ollama,
+            default_model,
+        }
+    }
+
+    /// OpenAI cloud: bearer-keyed, hosted at [`OPENAI_BASE_URL`]. `model` overrides
+    /// the [`OPENAI_DEFAULT_MODEL`] fallback.
+    pub fn openai(api_key: Option<String>, model: Option<String>) -> Self {
+        let default_model = model.unwrap_or_else(|| OPENAI_DEFAULT_MODEL.to_owned());
+        OpenAiCompatibleAdapter {
+            port: Box::new(HttpPort::new(OPENAI_BASE_URL, api_key)),
+            provider: LlmProvider::Openai,
+            default_model,
+        }
+    }
+
+    /// OpenRouter: bearer-keyed, hosted at [`OPENROUTER_BASE_URL`]. Model ids are
+    /// namespaced (e.g. `openai/gpt-4o`); `model` overrides [`OPENROUTER_DEFAULT_MODEL`].
+    pub fn openrouter(api_key: Option<String>, model: Option<String>) -> Self {
+        let default_model = model.unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_owned());
+        OpenAiCompatibleAdapter {
+            port: Box::new(HttpPort::new(OPENROUTER_BASE_URL, api_key)),
+            provider: LlmProvider::Openrouter,
+            default_model,
+        }
+    }
+
+    /// MiniMax cloud: bearer-keyed, hosted at [`MINIMAX_BASE_URL`]. `model` overrides
+    /// the [`MINIMAX_DEFAULT_MODEL`] fallback.
+    pub fn minimax(api_key: Option<String>, model: Option<String>) -> Self {
+        let default_model = model.unwrap_or_else(|| MINIMAX_DEFAULT_MODEL.to_owned());
+        OpenAiCompatibleAdapter {
+            port: Box::new(HttpPort::new(MINIMAX_BASE_URL, api_key)),
+            provider: LlmProvider::Minimax,
+            default_model,
+        }
+    }
+
+    /// Hugging Face inference router: bearer-keyed, hosted at [`HUGGINGFACE_BASE_URL`].
+    /// `model` overrides the [`HUGGINGFACE_DEFAULT_MODEL`] fallback.
+    pub fn huggingface(api_key: Option<String>, model: Option<String>) -> Self {
+        let default_model = model.unwrap_or_else(|| HUGGINGFACE_DEFAULT_MODEL.to_owned());
+        OpenAiCompatibleAdapter {
+            port: Box::new(HttpPort::new(HUGGINGFACE_BASE_URL, api_key)),
+            provider: LlmProvider::Huggingface,
+            default_model,
+        }
+    }
+
+    /// A local LM Studio server (keyless, [`LMSTUDIO_BASE_URL`] by default),
+    /// registered under the [`LlmProvider::Lmstudio`] slot. `model` overrides
+    /// [`LMSTUDIO_DEFAULT_MODEL`]; `base_url` overrides the host.
+    pub fn lmstudio(model: Option<String>, base_url: Option<String>) -> Self {
+        let default_model = model.unwrap_or_else(|| LMSTUDIO_DEFAULT_MODEL.to_owned());
+        let base = base_url.unwrap_or_else(|| LMSTUDIO_BASE_URL.to_owned());
+        OpenAiCompatibleAdapter {
+            port: Box::new(HttpPort::new(base, None)),
+            provider: LlmProvider::Lmstudio,
             default_model,
         }
     }
@@ -197,7 +295,7 @@ fn to_response(request: &LlmRequest, model: String, raw: OpenAiChatResponse) -> 
 #[async_trait]
 impl LlmProviderAdapter for OpenAiCompatibleAdapter {
     fn provider(&self) -> LlmProvider {
-        LlmProvider::Mistral
+        self.provider
     }
 
     async fn complete(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
@@ -291,6 +389,11 @@ fn resolve_model(model: &str, default_model: &str) -> String {
 fn looks_like_model_id(model: &str) -> bool {
     if model.is_empty() {
         return false;
+    }
+    // Namespaced ids (OpenRouter, Hugging Face) like `openai/gpt-4o` or
+    // `anthropic/claude-3.5-sonnet` are always explicit provider model ids.
+    if model.contains('/') {
+        return true;
     }
     if model.starts_with("claude-") {
         return false;
@@ -640,7 +743,7 @@ mod tests {
     #[test]
     fn ollama_constructor_uses_the_local_defaults() {
         let adapter = OpenAiCompatibleAdapter::ollama(None, None);
-        assert_eq!(adapter.provider(), LlmProvider::Mistral);
+        assert_eq!(adapter.provider(), LlmProvider::Ollama);
         assert_eq!(adapter.default_model, OLLAMA_DEFAULT_MODEL);
 
         let custom = OpenAiCompatibleAdapter::ollama(
@@ -648,6 +751,98 @@ mod tests {
             Some("http://example.test/v1".to_owned()),
         );
         assert_eq!(custom.default_model, "llama3");
+    }
+
+    #[test]
+    fn named_constructors_register_under_their_own_provider_slot() {
+        // Each hosted provider lands in its own gateway slot with its own default model.
+        let openai = OpenAiCompatibleAdapter::openai(Some("sk".to_owned()), None);
+        assert_eq!(openai.provider(), LlmProvider::Openai);
+        assert_eq!(openai.default_model, OPENAI_DEFAULT_MODEL);
+
+        let openrouter = OpenAiCompatibleAdapter::openrouter(Some("sk".to_owned()), None);
+        assert_eq!(openrouter.provider(), LlmProvider::Openrouter);
+        assert_eq!(openrouter.default_model, OPENROUTER_DEFAULT_MODEL);
+
+        let minimax = OpenAiCompatibleAdapter::minimax(Some("sk".to_owned()), None);
+        assert_eq!(minimax.provider(), LlmProvider::Minimax);
+        assert_eq!(minimax.default_model, MINIMAX_DEFAULT_MODEL);
+
+        let hf = OpenAiCompatibleAdapter::huggingface(Some("hf".to_owned()), None);
+        assert_eq!(hf.provider(), LlmProvider::Huggingface);
+        assert_eq!(hf.default_model, HUGGINGFACE_DEFAULT_MODEL);
+
+        let lmstudio = OpenAiCompatibleAdapter::lmstudio(None, None);
+        assert_eq!(lmstudio.provider(), LlmProvider::Lmstudio);
+        assert_eq!(lmstudio.default_model, LMSTUDIO_DEFAULT_MODEL);
+    }
+
+    #[tokio::test]
+    async fn two_openai_compatible_providers_coexist_in_one_gateway() {
+        // The whole point of the configurable provider slot: register OpenAI and
+        // OpenRouter side by side and route each request to its own adapter.
+        let (openai_port, _o) = recording_port(json!({
+            "choices": [{ "message": { "content": "from-openai" }, "finish_reason": "stop" }]
+        }));
+        let (router_port, _r) = recording_port(json!({
+            "choices": [{ "message": { "content": "from-openrouter" }, "finish_reason": "stop" }]
+        }));
+
+        let mut gateway = DefaultLlmGateway::new();
+        gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::with_provider(
+            openai_port,
+            LlmProvider::Openai,
+            OPENAI_DEFAULT_MODEL,
+        )));
+        gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::with_provider(
+            router_port,
+            LlmProvider::Openrouter,
+            OPENROUTER_DEFAULT_MODEL,
+        )));
+
+        let openai = gateway
+            .complete(LlmRequest {
+                provider: LlmProvider::Openai,
+                ..base_request()
+            })
+            .await
+            .unwrap();
+        let router = gateway
+            .complete(LlmRequest {
+                provider: LlmProvider::Openrouter,
+                ..base_request()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(openai.content, "from-openai");
+        assert_eq!(openai.provider, LlmProvider::Openai);
+        assert_eq!(router.content, "from-openrouter");
+        assert_eq!(router.provider, LlmProvider::Openrouter);
+    }
+
+    #[tokio::test]
+    async fn keeps_a_namespaced_model_id_verbatim() {
+        let (port, bodies) = recording_port(text_response());
+        let adapter = OpenAiCompatibleAdapter::with_provider(
+            port,
+            LlmProvider::Openrouter,
+            OPENROUTER_DEFAULT_MODEL,
+        );
+
+        let request = LlmRequest {
+            provider: LlmProvider::Openrouter,
+            model: "anthropic/claude-3.5-sonnet".to_owned(),
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        // A `/`-namespaced id is explicit and must not be rewritten to the default,
+        // even though it contains `claude-`.
+        assert_eq!(
+            bodies.lock().unwrap()[0]["model"],
+            json!("anthropic/claude-3.5-sonnet")
+        );
     }
 
     #[test]
