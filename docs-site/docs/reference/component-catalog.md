@@ -188,6 +188,21 @@ keep the top-`k`. Output items are `{ id, content, score }`.
 | `docs` | `{ id: string; content: string }[]` | — | The corpus to score. |
 | `k` | `number` | `4` | Number of results to keep. |
 
+### `semanticRetriever`
+
+Genuine **semantic** retrieval: rank PRE-EMBEDDED chunks by cosine similarity to a PRE-EMBEDDED
+query — both supplied on channels — and keep the top-`k`. Unlike `retriever` (a deterministic mock
+embedder), this consumes real embeddings produced by the gateway (e.g. Mistral), so the host seeds
+the corpus and query vector. The component owns only the cosine ranking. Output items are
+`{ id, content, score }`.
+
+| Param | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `queryEmbeddingFrom` | `string` | — | Channel holding the query's embedding (`number[]`). |
+| `chunksFrom` | `string` | — | Channel holding the corpus: `{ id, content, embedding }[]`. |
+| `into` | `string` | — | Channel receiving the top-`k` results. |
+| `k` | `number` | `4` | Number of results to keep. |
+
 ### `bm25Retriever`
 
 Lexical BM25 ranking of a corpus against a query; keep the top-`k`. Output items are

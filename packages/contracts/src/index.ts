@@ -14,3 +14,4 @@ export * from "./compliance.js";
 export * from "./knowledge.js";
 export * from "./node-metadata.js";
 export * from "./principal.js";
+export * from "./router.js";
