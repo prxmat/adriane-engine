@@ -92,13 +92,74 @@ impl Default for ModelPolicy {
                 (ModelTier::Creative, "mistral"),
             ]),
         );
+        table.insert(
+            LlmProvider::Openai,
+            tier_map(&[
+                (ModelTier::Frontier, "gpt-4o"),
+                (ModelTier::Balanced, "gpt-4o"),
+                (ModelTier::Fast, "gpt-4o-mini"),
+                (ModelTier::Creative, "gpt-4o"),
+            ]),
+        );
+        table.insert(
+            LlmProvider::Google,
+            tier_map(&[
+                (ModelTier::Frontier, "gemini-1.5-pro"),
+                (ModelTier::Balanced, "gemini-2.0-flash"),
+                (ModelTier::Fast, "gemini-2.0-flash"),
+                (ModelTier::Creative, "gemini-2.0-flash"),
+            ]),
+        );
+        table.insert(
+            LlmProvider::Openrouter,
+            tier_map(&[
+                (ModelTier::Frontier, "openai/gpt-4o"),
+                (ModelTier::Balanced, "openai/gpt-4o-mini"),
+                (ModelTier::Fast, "openai/gpt-4o-mini"),
+                (ModelTier::Creative, "openai/gpt-4o"),
+            ]),
+        );
+        table.insert(
+            LlmProvider::Minimax,
+            tier_map(&[
+                (ModelTier::Frontier, "MiniMax-Text-01"),
+                (ModelTier::Balanced, "MiniMax-Text-01"),
+                (ModelTier::Fast, "MiniMax-Text-01"),
+                (ModelTier::Creative, "MiniMax-Text-01"),
+            ]),
+        );
+        table.insert(
+            LlmProvider::Huggingface,
+            tier_map(&[
+                (ModelTier::Frontier, "meta-llama/Llama-3.3-70B-Instruct"),
+                (ModelTier::Balanced, "meta-llama/Llama-3.3-70B-Instruct"),
+                (ModelTier::Fast, "meta-llama/Llama-3.3-70B-Instruct"),
+                (ModelTier::Creative, "meta-llama/Llama-3.3-70B-Instruct"),
+            ]),
+        );
+        table.insert(
+            LlmProvider::Lmstudio,
+            tier_map(&[
+                (ModelTier::Frontier, "local-model"),
+                (ModelTier::Balanced, "local-model"),
+                (ModelTier::Fast, "local-model"),
+                (ModelTier::Creative, "local-model"),
+            ]),
+        );
 
         ModelPolicy {
             table,
+            // Hosted frontier providers first, local servers last.
             preference: vec![
                 LlmProvider::Anthropic,
+                LlmProvider::Openai,
+                LlmProvider::Google,
                 LlmProvider::Mistral,
+                LlmProvider::Openrouter,
+                LlmProvider::Minimax,
+                LlmProvider::Huggingface,
                 LlmProvider::Ollama,
+                LlmProvider::Lmstudio,
             ],
         }
     }
@@ -121,25 +182,38 @@ impl ModelPolicy {
     /// The model fallback used when no provider is available at all.
     pub const MOCK_MODEL: &'static str = "mock-model";
 
-    /// Which providers are usable given the current process environment:
-    /// `anthropic` iff `ANTHROPIC_API_KEY` is set; `mistral` iff
-    /// `MISTRAL_API_KEY` is set; `ollama` iff `ADRIANE_USE_OLLAMA=1`. Order
+    /// Which providers are usable given the current process environment, each gated
+    /// on its credential: `anthropic`←`ANTHROPIC_API_KEY`, `openai`←`OPENAI_API_KEY`,
+    /// `google`←`GEMINI_API_KEY`|`GOOGLE_API_KEY`, `mistral`←`MISTRAL_API_KEY`,
+    /// `openrouter`←`OPENROUTER_API_KEY`, `minimax`←`MINIMAX_API_KEY`,
+    /// `huggingface`←`HF_TOKEN`. The two keyless local servers are flag-gated:
+    /// `ollama`←`ADRIANE_USE_OLLAMA=1`, `lmstudio`←`ADRIANE_USE_LMSTUDIO=1`. Order
     /// follows the policy preference so callers get a deterministic list.
     pub fn available_from_env(&self) -> Vec<LlmProvider> {
         let anthropic = env_present("ANTHROPIC_API_KEY");
+        let openai = env_present("OPENAI_API_KEY");
+        let google = env_present("GEMINI_API_KEY") || env_present("GOOGLE_API_KEY");
         let mistral = env_present("MISTRAL_API_KEY");
-        let ollama = env::var("ADRIANE_USE_OLLAMA")
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let openrouter = env_present("OPENROUTER_API_KEY");
+        let minimax = env_present("MINIMAX_API_KEY");
+        let huggingface = env_present("HF_TOKEN");
+        let ollama = flag_enabled("ADRIANE_USE_OLLAMA");
+        let lmstudio = flag_enabled("ADRIANE_USE_LMSTUDIO");
 
         self.preference
             .iter()
             .copied()
             .filter(|p| match p {
                 LlmProvider::Anthropic => anthropic,
+                LlmProvider::Openai => openai,
+                LlmProvider::Google => google,
                 LlmProvider::Mistral => mistral,
+                LlmProvider::Openrouter => openrouter,
+                LlmProvider::Minimax => minimax,
+                LlmProvider::Huggingface => huggingface,
                 LlmProvider::Ollama => ollama,
-                _ => false,
+                LlmProvider::Lmstudio => lmstudio,
+                LlmProvider::Mock => false,
             })
             .collect()
     }
@@ -226,6 +300,11 @@ fn tier_map(entries: &[(ModelTier, &str)]) -> HashMap<ModelTier, String> {
 
 fn env_present(key: &str) -> bool {
     env::var(key).map(|v| !v.is_empty()).unwrap_or(false)
+}
+
+/// A keyless local server is opt-in via a `=1` flag.
+fn flag_enabled(key: &str) -> bool {
+    env::var(key).map(|v| v == "1").unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -411,9 +490,55 @@ mod tests {
             policy.preference,
             vec![
                 LlmProvider::Anthropic,
+                LlmProvider::Openai,
+                LlmProvider::Google,
                 LlmProvider::Mistral,
+                LlmProvider::Openrouter,
+                LlmProvider::Minimax,
+                LlmProvider::Huggingface,
                 LlmProvider::Ollama,
+                LlmProvider::Lmstudio,
             ]
         );
+    }
+
+    #[test]
+    fn each_new_provider_maps_its_tier_models() {
+        let policy = ModelPolicy::default();
+
+        let openai = policy.resolve(ModelTier::Fast, &[LlmProvider::Openai], None, None);
+        assert_eq!(openai.provider, LlmProvider::Openai);
+        assert_eq!(openai.model, "gpt-4o-mini");
+
+        let google = policy.resolve(ModelTier::Frontier, &[LlmProvider::Google], None, None);
+        assert_eq!(google.model, "gemini-1.5-pro");
+
+        let openrouter =
+            policy.resolve(ModelTier::Frontier, &[LlmProvider::Openrouter], None, None);
+        assert_eq!(openrouter.model, "openai/gpt-4o");
+
+        let minimax = policy.resolve(ModelTier::Balanced, &[LlmProvider::Minimax], None, None);
+        assert_eq!(minimax.model, "MiniMax-Text-01");
+
+        let hf = policy.resolve(ModelTier::Fast, &[LlmProvider::Huggingface], None, None);
+        assert_eq!(hf.model, "meta-llama/Llama-3.3-70B-Instruct");
+
+        let lmstudio = policy.resolve(ModelTier::Creative, &[LlmProvider::Lmstudio], None, None);
+        assert_eq!(lmstudio.model, "local-model");
+    }
+
+    #[test]
+    fn preference_prefers_anthropic_over_the_new_hosted_providers() {
+        let policy = ModelPolicy::default();
+        let available = [
+            LlmProvider::Openai,
+            LlmProvider::Google,
+            LlmProvider::Anthropic,
+        ];
+
+        let choice = policy.resolve(ModelTier::Frontier, &available, None, None);
+
+        assert_eq!(choice.provider, LlmProvider::Anthropic);
+        assert_eq!(choice.model, "claude-opus-4-8");
     }
 }
