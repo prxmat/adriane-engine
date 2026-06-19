@@ -6,7 +6,7 @@ description: Honest feature status (stable / experimental / reserved) and where 
 
 # Roadmap
 
-Adriane is **0.1.0 — alpha**. This page is the honest ledger: what you can rely on today, what
+Adriane is **0.2.0 — alpha**. This page is the honest ledger: what you can rely on today, what
 exists but isn't proven, what is reserved in the schema but **not implemented**, and where the
 project is headed. We'd rather under-promise here than have you discover a gap in production.
 
@@ -33,6 +33,9 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | TypeScript engine path (dev/test/uncovered platforms) | Stable | Not deprecated — it's the fallback when the native addon is absent. |
 | Python SDK (`pip install adriane-ai` → `import adriane_ai`) | Experimental | JSON-in/JSON-out: validate, compile, model policy, component & prebuilt runs. **No custom Python nodes, no streaming** — by design. See [one engine, two languages](/docs/sdk-parity/one-engine-two-languages). |
 | Adriane DSL (compile graph/agent/chain YAML) | Experimental | Compiles in both SDKs from the same Rust compiler. |
+| Multi-provider LLM gateway (Anthropic, Gemini, OpenAI-compatible family, local) | Stable | Native Anthropic & Gemini + OpenAI-compatible OpenAI/OpenRouter/MiniMax/Hugging&nbsp;Face/Mistral + local Ollama/LM&nbsp;Studio; env-selected (BYOM). New in 0.2.0. See [Providers](/docs/building/providers). |
+| Semantic retrieval (`semanticRetriever` component) | Experimental | Real-embedding cosine retrieval over a supplied corpus + query vector (vs the mock-embedding `retriever`). New in 0.2.0. |
+| MCP server (tools + knowledge-base resources) | Experimental | Run agents/graphs as MCP tools and read a knowledge base as MCP resources, over stdio. New in 0.2.0. See [MCP server](/docs/building/mcp-server). |
 | Streaming runs | Experimental | TypeScript only today. |
 | Rust incremental streaming | Reserved | The Rust path does not yet stream incrementally; streaming is a TS-SDK capability for now. |
 | Parallel fan-out (`NodeDefinition.fanOut`) | Reserved | Schema slot only — **not executed** by the runtime. |

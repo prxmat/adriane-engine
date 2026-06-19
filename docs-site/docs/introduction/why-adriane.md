@@ -35,6 +35,8 @@ the latest checkpoint.
 | **Resumable** | Every node completion and state mutation is checkpointed. A crashed or suspended run resumes from the latest checkpoint — no re-running completed work. |
 | **Observable** | Every node lifecycle transition emits an event. The event journal is the audit trail and the basis for live run views. |
 | **Governed** | Human gates suspend the run (`run_suspended`) and resume it (`run_resumed`). Sensitive tool calls route through an approval gate. An agent never approves its own output. |
+| **Provider-agnostic (BYOM)** | Any model via the environment — native Anthropic & Google Gemini, the OpenAI-compatible family (OpenAI, OpenRouter, MiniMax, Hugging Face, Mistral), and local servers (Ollama, LM Studio). Run on a hosted model or fully on-premise. See [Providers & BYOM](/docs/building/providers). |
+| **MCP-native** | Drive Adriane and read its knowledge over the Model Context Protocol: agents and graphs as MCP tools, a knowledge base as MCP resources. See [MCP server](/docs/building/mcp-server). |
 
 ## The mental model
 
