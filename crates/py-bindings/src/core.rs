@@ -25,8 +25,8 @@ use adriane_graph_runtime::{
     GraphRuntime, InMemoryConditionRegistry, InMemoryNodeRegistry, NodeRegistry,
 };
 use adriane_llm_gateway::{
-    AnthropicAdapter, DefaultLlmGateway, LlmProvider, LlmResponse, LlmUsage, MockAdapter,
-    ModelChoice, ModelPolicy, ModelTier, OpenAiCompatibleAdapter,
+    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, LlmProvider, LlmResponse, LlmUsage,
+    MockAdapter, ModelChoice, ModelPolicy, ModelTier, OpenAiCompatibleAdapter,
 };
 use serde_json::{json, Value};
 
@@ -365,8 +365,40 @@ fn build_gateway(resolved: &ModelChoice) -> Arc<DefaultLlmGateway> {
                 model.clone(),
             )));
         }),
+        LlmProvider::Openai => std::env::var("OPENAI_API_KEY").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::openai(
+                Some(key),
+                model.clone(),
+            )));
+        }),
+        LlmProvider::Openrouter => std::env::var("OPENROUTER_API_KEY").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::openrouter(
+                Some(key),
+                model.clone(),
+            )));
+        }),
+        LlmProvider::Minimax => std::env::var("MINIMAX_API_KEY").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::minimax(
+                Some(key),
+                model.clone(),
+            )));
+        }),
+        LlmProvider::Huggingface => std::env::var("HF_TOKEN").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::huggingface(
+                Some(key),
+                model.clone(),
+            )));
+        }),
         LlmProvider::Anthropic if std::env::var("ANTHROPIC_API_KEY").is_ok() => {
             AnthropicAdapter::from_env().ok().map(|adapter| {
+                gateway.register_adapter(Box::new(adapter));
+            })
+        }
+        LlmProvider::Google
+            if std::env::var("GEMINI_API_KEY").is_ok()
+                || std::env::var("GOOGLE_API_KEY").is_ok() =>
+        {
+            GeminiAdapter::from_env().ok().map(|adapter| {
                 gateway.register_adapter(Box::new(adapter));
             })
         }
@@ -377,7 +409,14 @@ fn build_gateway(resolved: &ModelChoice) -> Arc<DefaultLlmGateway> {
             )));
             Some(())
         }
-        // `Openai`, `Mock`, or a real provider whose env credentials are missing.
+        LlmProvider::Lmstudio if std::env::var("ADRIANE_USE_LMSTUDIO").as_deref() == Ok("1") => {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::lmstudio(
+                model.clone(),
+                None,
+            )));
+            Some(())
+        }
+        // `Mock`, or a real provider whose env credentials are missing.
         _ => None,
     };
 

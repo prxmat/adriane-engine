@@ -10,6 +10,11 @@ pub enum LlmProvider {
     Anthropic,
     Mistral,
     Ollama,
+    Google,
+    Minimax,
+    Openrouter,
+    Huggingface,
+    Lmstudio,
     Mock,
 }
 

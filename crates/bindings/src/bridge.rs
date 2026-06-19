@@ -35,8 +35,8 @@ use adriane_graph_runtime::{
     InMemoryConditionRegistry, InMemoryNodeRegistry, NodeOutput, NodeRegistry, RunEvent,
 };
 use adriane_llm_gateway::{
-    AnthropicAdapter, DefaultLlmGateway, LlmProvider, LlmResponse, LlmToolCall, LlmUsage,
-    MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter,
+    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, LlmProvider, LlmResponse, LlmToolCall,
+    LlmUsage, MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter,
 };
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -434,11 +434,13 @@ fn resolve_agent_model(agent_spec: &AgentSpec) -> ModelChoice {
 
 /// Build the gateway that backs the agent, registering an adapter that matches the
 /// RESOLVED provider so the request's provider slot always has an adapter:
-/// - `Mistral` -> Mistral (OpenAI-compatible) adapter, keyed off `MISTRAL_API_KEY`,
+/// - `Openai` / `Mistral` / `Openrouter` / `Minimax` / `Huggingface` -> the shared
+///   OpenAI-compatible adapter, keyed off that provider's env credential,
 /// - `Anthropic` -> Anthropic adapter (from env),
-/// - `Ollama` -> local Ollama (OpenAI-compatible) adapter,
-/// - `Openai` / `Mock` (or any real provider whose credentials are absent) -> a
-///   deterministic mock scripted to exercise the tool/approval path.
+/// - `Google` -> native Gemini adapter (from `GEMINI_API_KEY`/`GOOGLE_API_KEY`),
+/// - `Ollama` / `Lmstudio` -> the local (OpenAI-compatible) adapter, flag-gated,
+/// - `Mock` (or any real provider whose credentials are absent) -> a deterministic
+///   mock scripted to exercise the tool/approval path.
 ///
 /// The resolved model (when non-empty) is threaded in as the adapter's default model.
 /// If the chosen real provider's credentials are not actually present in env, the
@@ -459,11 +461,44 @@ fn build_gateway(agent_spec: &AgentSpec, resolved: &ModelChoice) -> Arc<DefaultL
                 model.clone(),
             )));
         }),
+        LlmProvider::Openai => std::env::var("OPENAI_API_KEY").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::openai(
+                Some(key),
+                model.clone(),
+            )));
+        }),
+        LlmProvider::Openrouter => std::env::var("OPENROUTER_API_KEY").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::openrouter(
+                Some(key),
+                model.clone(),
+            )));
+        }),
+        LlmProvider::Minimax => std::env::var("MINIMAX_API_KEY").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::minimax(
+                Some(key),
+                model.clone(),
+            )));
+        }),
+        LlmProvider::Huggingface => std::env::var("HF_TOKEN").ok().map(|key| {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::huggingface(
+                Some(key),
+                model.clone(),
+            )));
+        }),
         // The Anthropic adapter honours the request's model directly when it is a
         // `claude-*` id (which the agent sets via `with_model`), so the adapter's own
         // default model only matters as a non-Claude fallback — no override needed.
         LlmProvider::Anthropic if std::env::var("ANTHROPIC_API_KEY").is_ok() => {
             AnthropicAdapter::from_env().ok().map(|adapter| {
+                gateway.register_adapter(Box::new(adapter));
+            })
+        }
+        // The Gemini adapter likewise honours a `gemini-*` request model directly.
+        LlmProvider::Google
+            if std::env::var("GEMINI_API_KEY").is_ok()
+                || std::env::var("GOOGLE_API_KEY").is_ok() =>
+        {
+            GeminiAdapter::from_env().ok().map(|adapter| {
                 gateway.register_adapter(Box::new(adapter));
             })
         }
@@ -474,7 +509,14 @@ fn build_gateway(agent_spec: &AgentSpec, resolved: &ModelChoice) -> Arc<DefaultL
             )));
             Some(())
         }
-        // `Openai`, `Mock`, or a real provider whose env credentials are missing.
+        LlmProvider::Lmstudio if std::env::var("ADRIANE_USE_LMSTUDIO").as_deref() == Ok("1") => {
+            gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::lmstudio(
+                model.clone(),
+                None,
+            )));
+            Some(())
+        }
+        // `Mock`, or a real provider whose env credentials are missing.
         _ => None,
     };
 
@@ -536,7 +578,15 @@ fn final_text(answer: &str, provider: LlmProvider) -> LlmResponse {
 fn parse_provider(provider: &str) -> LlmProvider {
     match provider.to_ascii_lowercase().as_str() {
         "openai" => LlmProvider::Openai,
+        "anthropic" => LlmProvider::Anthropic,
+        "google" | "gemini" => LlmProvider::Google,
         "mistral" => LlmProvider::Mistral,
+        "openrouter" => LlmProvider::Openrouter,
+        "minimax" => LlmProvider::Minimax,
+        "huggingface" | "hf" => LlmProvider::Huggingface,
+        "ollama" => LlmProvider::Ollama,
+        "lmstudio" => LlmProvider::Lmstudio,
+        "mock" => LlmProvider::Mock,
         _ => LlmProvider::Anthropic,
     }
 }
