@@ -10,5 +10,7 @@ export * from "./observability.js";
 export * from "./fleet.js";
 export * from "./tenant.js";
 export * from "./catalog.js";
+export * from "./compliance.js";
+export * from "./knowledge.js";
 export * from "./node-metadata.js";
 export * from "./principal.js";

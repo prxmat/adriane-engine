@@ -19,7 +19,12 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema
+} from "@modelcontextprotocol/sdk/types.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -1030,12 +1035,63 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolRe
   compile_graph_yaml: compileGraphYaml
 };
 
+// --- Knowledge-base resources --------------------------------------------------
+// Expose the persistent OKF knowledge base (owned by the control plane) as MCP
+// RESOURCES, so any MCP client — Claude Desktop, an IDE, another agent — can read an
+// organization's knowledge through the open standard. The server holds no DB; it reads
+// the KB over the control-plane HTTP API. This is the "BKP extends MCP" surface.
+
+const KB_API_BASE = process.env.NEXT_PUBLIC_API_URL ?? process.env.API_BASE_URL ?? "http://localhost:3001";
+const KB_NAMESPACE = process.env.ADRIANE_MCP_KB_NAMESPACE ?? "adriane";
+const KB_URI_PREFIX = "adriane-kb://";
+
+type KbDoc = { id: string; content: string; type: string; title?: string };
+
+async function fetchKbDocs(): Promise<KbDoc[]> {
+  try {
+    const res = await fetch(`${KB_API_BASE}/knowledge/${encodeURIComponent(KB_NAMESPACE)}/documents`);
+    if (!res.ok) {
+      return [];
+    }
+    return (await res.json()) as KbDoc[];
+  } catch {
+    return [];
+  }
+}
+
+const kbUri = (id: string): string => `${KB_URI_PREFIX}${KB_NAMESPACE}/${id}`;
+
 // --- Server wiring -------------------------------------------------------------
 
 export function createServer(): Server {
-  const server = new Server({ name: "adriane", version: "0.1.0" }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { name: "adriane", version: "0.1.0" },
+    { capabilities: { tools: {}, resources: {} } }
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    const docs = await fetchKbDocs();
+    return {
+      resources: docs.map((doc) => ({
+        uri: kbUri(doc.id),
+        name: doc.title ?? doc.id,
+        description: `${doc.type} — Adriane knowledge base (${KB_NAMESPACE})`,
+        mimeType: "text/markdown"
+      }))
+    };
+  });
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const { uri } = request.params;
+    const docs = await fetchKbDocs();
+    const doc = docs.find((candidate) => kbUri(candidate.id) === uri);
+    if (doc === undefined) {
+      return { contents: [] };
+    }
+    return { contents: [{ uri, mimeType: "text/markdown", text: doc.content }] };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const handler = HANDLERS[request.params.name];
