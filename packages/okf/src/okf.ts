@@ -65,7 +65,6 @@ const parseRelations = (value: unknown): Array<{ type: string; target: string }>
     );
   return relations.length > 0 ? relations : undefined;
 };
-const LINK_RE = /\[[^\]]*\]\(([^)]+)\)/g;
 
 /** Strip a single layer of matching surrounding quotes. */
 const unquote = (raw: string): string => {
@@ -121,16 +120,40 @@ const parseFrontmatterBlock = (block: string): Record<string, unknown> => {
   return out;
 };
 
-/** Collect bundle-relative / relative markdown links from a body (external http links skipped). */
+/**
+ * Collect bundle-relative / relative markdown links from a body (external http links
+ * skipped). Hand-rolled single pass (no regex) — `[label](target)` where the label has
+ * no `]` and the target no `)`. Linear in the body length, so there is no
+ * regex-backtracking / ReDoS exposure on untrusted markdown.
+ */
 export const extractLinks = (body: string): string[] => {
   const links = new Set<string>();
-  let match: RegExpExecArray | null;
-  LINK_RE.lastIndex = 0;
-  while ((match = LINK_RE.exec(body)) !== null) {
-    const target = (match[1] ?? "").trim();
-    if (target.length > 0 && !target.startsWith("http://") && !target.startsWith("https://")) {
-      links.add(target);
+  const n = body.length;
+  let i = 0;
+  while (i < n) {
+    if (body[i] !== "[") {
+      i += 1;
+      continue;
     }
+    let j = i + 1;
+    while (j < n && body[j] !== "]") {
+      j += 1;
+    }
+    if (j + 1 < n && body[j] === "]" && body[j + 1] === "(") {
+      let k = j + 2;
+      while (k < n && body[k] !== ")") {
+        k += 1;
+      }
+      if (k < n) {
+        const target = body.slice(j + 2, k).trim();
+        if (target.length > 0 && !target.startsWith("http://") && !target.startsWith("https://")) {
+          links.add(target);
+        }
+        i = k + 1;
+        continue;
+      }
+    }
+    i += 1;
   }
   return [...links];
 };
