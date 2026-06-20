@@ -6,14 +6,15 @@ description: Honest feature status (stable / experimental / reserved) and where 
 
 # Roadmap
 
-Adriane is **0.2.0 — alpha**. This page is the honest ledger: what you can rely on today, what
-exists but isn't proven, what is reserved in the schema but **not implemented**, and where the
-project is headed. We'd rather under-promise here than have you discover a gap in production.
+Adriane is **1.0.0**. This page is the honest ledger: what you can rely on today, what exists
+but isn't proven, and where the project is headed. We'd rather under-promise here than have you
+discover a gap in production.
 
-:::warning Alpha — read before you build on it
-Treat anything not marked **Stable** as subject to change or absence. In particular, the
-**Reserved** rows below have slots in the type system but **no runtime behaviour** — do not
-design around them yet.
+:::note 1.0.0
+The Rust runtime now has parity with (and extends) the TypeScript runtime: concurrent fan-out,
+subgraphs, incremental streaming, durable timers + external signals, dynamic-message `send`, and
+the OKF + knowledge layer all landed in 1.0.0. Anything still marked **Experimental** or
+**Planned** below is exactly that — don't design around a Planned row yet.
 :::
 
 ## Feature status
@@ -36,19 +37,20 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | Multi-provider LLM gateway (Anthropic, Gemini, OpenAI-compatible family, local) | Stable | Native Anthropic & Gemini + OpenAI-compatible OpenAI/OpenRouter/MiniMax/Hugging&nbsp;Face/Mistral + local Ollama/LM&nbsp;Studio; env-selected (BYOM). New in 0.2.0. See [Providers](/docs/building/providers). |
 | Semantic retrieval (`semanticRetriever` component) | Experimental | Real-embedding cosine retrieval over a supplied corpus + query vector (vs the mock-embedding `retriever`). New in 0.2.0. |
 | MCP server (tools + knowledge-base resources) | Experimental | Run agents/graphs as MCP tools and read a knowledge base as MCP resources, over stdio. New in 0.2.0. See [MCP server](/docs/building/mcp-server). |
-| Streaming runs | Experimental | TypeScript only today. |
-| Rust incremental streaming | Reserved | The Rust path does not yet stream incrementally; streaming is a TS-SDK capability for now. |
-| Parallel fan-out (`NodeDefinition.fanOut`) | Reserved | Schema slot only — **not executed** by the runtime. |
-| Subgraph execution (`NodeDefinition.subgraphId`) | Reserved | Schema slot only — **not executed** by the runtime. |
-| Durable timers / signals | Planned | Not present in the engine. See below. |
+| Streaming runs (four modes, incremental) | Stable | `values` / `updates` / `messages` / `debug` stream incrementally on the Rust engine and the TS path. New in 1.0.0. See [Streaming](/docs/building/streaming-and-events). |
+| Parallel fan-out (`NodeDefinition.fanOut`) | Stable | Branches run **concurrently** off a shared pre-fan-out snapshot, merged in declared order (deterministic). New in 1.0.0. |
+| Subgraph execution (`subgraph` nodes) | Stable | A subgraph node runs a registered child graph, maps channels in/out, and propagates child suspension. New in 1.0.0. See [Subgraphs](/docs/building/subgraphs). |
+| Durable timers + external signals | Stable | `sleepUntil` / `waitForSignal` / `CompiledGraph.signal` — generalized suspend reasons; the engine stays clock-free (the scheduler is the control plane). New in 1.0.0. See [Durable timers and signals](/docs/building/durable-timers-and-signals). |
+| Dynamic-message `send` / inbox (map-reduce) | Stable | Pre-queue per-node inputs (`RunOptions.inbox`), consumed FIFO via `__injected`. New in 1.0.0. See [Dynamic messages](/docs/building/dynamic-message-send). |
+| Open Knowledge Format (`@adriane-ai/okf`) | Stable | Markdown + shallow-YAML frontmatter parser/serializer; byte-compatible TS + Rust. New in 1.0.0. See [OKF](/docs/knowledge/open-knowledge-format). |
+| Knowledge base + graph (`@adriane-ai/knowledge`) | Stable | KB/KG model, pure graph ops, and the `KnowledgeStore` seam (+ in-memory). New in 1.0.0. See [Knowledge base and graph](/docs/knowledge/knowledge-base-and-graph). |
 | Control plane, worker fleet & governance UI | Adriane Studio (commercial) | The control-plane API, the BullMQ worker fleet, durable Postgres checkpointing, and the governance Studio UI are **Adriane Studio**, the managed platform — not part of this open engine repo. The engine is a library you embed; there is no server to run for the engine itself. |
 | Polyglot SDKs beyond TS/Python (Go, Java, PHP, .NET, Ruby, native Rust) | Planned | The architecture is built for this; none are shipped. See below. |
 
-:::note Reserved means absent
-`fanOut` and `subgraphId` appear in `NodeDefinition` and the architecture
-[overview](/docs/architecture/overview) calls them out explicitly: the slots are there so the
-data model is stable, but **the runtime does not act on them**. A graph that sets them will not
-fan out or descend into a subgraph today.
+:::note Now executed
+`fanOut` and `subgraphId` were schema-only slots in earlier releases; as of 1.0.0 the runtime
+**executes both** — concurrent deterministic fan-out and subgraph nodes. See
+[Subgraphs](/docs/building/subgraphs).
 :::
 
 ## The vision
@@ -77,15 +79,15 @@ pyo3 binding. The same pattern — a thin, JSON-shaped binding over the Rust cor
 Go, Java, PHP, .NET, Ruby, and a native Rust SDK *tractable* rather than rewrites. They are
 **planned, not shipped**; the design exists to make them additive.
 
-### Durable timers and signals
+### Durable timers and signals — delivered in 1.0.0
 
-Today a run suspends at a human gate and resumes from a checkpoint (via the `Checkpointer`
-interface — `InMemoryCheckpointer` in-process, or your own/Adriane Studio for durability). The
-next step is time-and-event-driven durability: **durable timers** (resume after a delay that
-survives process restarts) and **signals** (resume on an external event), so a governed run can
-wait on the real world without holding a process. This moves Adriane toward the durability
-properties that tools like Temporal are known for — see
-[the comparison](/docs/introduction/comparison) for the honest gap today.
+A run suspends at a human gate, a **durable timer**, or an **external signal**, and resumes from
+a checkpoint. The engine stays clock-free: `wakeAt` is data and the *scheduler* (the control
+plane) resumes a timer run when due, while `CompiledGraph.signal(runId, name, payload)` resumes a
+signal wait on an external event — so a governed run can wait on the real world without holding a
+process. See [Durable timers and signals](/docs/building/durable-timers-and-signals). This brings
+Adriane the time-and-event-driven durability that tools like Temporal are known for; the
+remaining control-plane piece (a scheduler that calls `resume` at `wakeAt`) is **Adriane Studio**.
 
 ### The managed platform: Adriane Studio
 

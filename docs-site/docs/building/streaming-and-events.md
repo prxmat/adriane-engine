@@ -34,11 +34,12 @@ for await (const event of app.stream({ n: 1 }, "updates")) {
 `tool_call`, `debug`) — narrow on `event.type`.
 
 :::note Engine note
-The Rust engine has **no incremental stream surface yet**: on Rust, `stream()` drives a full
-run and yields a **single terminal** `state_value`. On the TypeScript engine it streams natively
-per `mode`. The signature and `StreamEvent` shapes are identical across engines — only the
-granularity differs. Check `app.usesRustEngine`; set `ADRIANE_SDK_ENGINE=ts` to force the TS
-engine for fine-grained streaming in development.
+On the **Rust engine** all four modes stream **incrementally** as the run executes:
+`updates` / `debug` map directly to the run-event feed; `values` accumulates a full snapshot
+per node (replaying each node delta through the channel reducers) plus a final authoritative
+snapshot; `messages` emits a `message_delta` per new `messages`-channel entry. Token-level
+message deltas (sub-message) still come from `streamAgentTokens`. The signature and
+`StreamEvent` shapes are identical across the Rust and TypeScript engines.
 :::
 
 ## Subscribing to lifecycle events
