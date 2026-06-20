@@ -226,6 +226,15 @@ importers:
         specifier: ^3.2.6
         version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
 
+  packages/knowledge:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
   packages/lang-adriane:
     dependencies:
       js-yaml:
@@ -275,6 +284,15 @@ importers:
       '@adriane-ai/graph-runtime':
         specifier: workspace:*
         version: link:../graph-runtime
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
+  packages/okf:
     devDependencies:
       typescript:
         specifier: ^5.8.3
