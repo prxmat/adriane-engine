@@ -171,7 +171,7 @@ export interface KnowledgeStore {
 /** In-memory {@link KnowledgeStore} — cosine search + graph traversal. Dev/test/standalone. */
 export class InMemoryKnowledgeStore implements KnowledgeStore {
   private readonly docs: Array<{ document: KbDocument; embedding: number[] }> = [];
-  private edges: KbGraphEdge[] = [];
+  private edges: Array<{ namespace: string; edge: KbGraphEdge }> = [];
 
   public async putDocument(document: KbDocument, embedding: number[]): Promise<void> {
     const slot = this.docs.find(
@@ -196,21 +196,22 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
       .map((entry) => entry.document);
   }
 
-  public async setRelations(_namespace: string, fromId: string, edges: KbGraphEdge[]): Promise<void> {
-    // Edge ids already encode their namespace, so the flat store keys outgoing edges by
-    // `from`: drop this document's prior edges, then append the new set (deduped).
-    this.edges = this.edges.filter((edge) => edge.from !== fromId);
-    const seen = new Set(this.edges.map(edgeKey));
+  public async setRelations(namespace: string, fromId: string, edges: KbGraphEdge[]): Promise<void> {
+    // Drop this document's prior edges in the namespace, then append the new set (deduped).
+    this.edges = this.edges.filter((e) => !(e.namespace === namespace && e.edge.from === fromId));
+    const seen = new Set(
+      this.edges.filter((e) => e.namespace === namespace).map((e) => edgeKey(e.edge))
+    );
     for (const edge of edges) {
       if (!seen.has(edgeKey(edge))) {
         seen.add(edgeKey(edge));
-        this.edges.push(edge);
+        this.edges.push({ namespace, edge });
       }
     }
   }
 
-  public async listRelations(_namespace: string): Promise<KbGraphEdge[]> {
-    return [...this.edges];
+  public async listRelations(namespace: string): Promise<KbGraphEdge[]> {
+    return this.edges.filter((e) => e.namespace === namespace).map((e) => e.edge);
   }
 
   public async search(namespace: string, queryEmbedding: number[], k: number): Promise<KbSearchHit[]> {
