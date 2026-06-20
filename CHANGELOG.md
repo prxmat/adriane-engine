@@ -3,6 +3,23 @@
 All notable changes to the Adriane engine are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.1.0
+
+A backward-compatible feature release: a **PII redaction seam** so personal data can be scrubbed
+from every LLM request before it reaches a provider — a no-op by default, wired to a redaction
+service via one env var.
+
+### Added
+
+- **PII redaction seam** — `PiiRedactor` trait + `RedactingGateway` wrapper + a generic
+  `HttpPiiRedactor` client in both the Rust gateway (`crates/llm-gateway`) and the TypeScript
+  fallback. Set `ADRIANE_PII_REDACTOR_URL` (and optionally `ADRIANE_PII_REDACTOR_TOKEN`) and every
+  outbound request — system prompt and intermediate messages (tool observations, prior turns) — is
+  scrubbed through a tiny `{ texts } → { texts, blocked }` HTTP contract before any provider sees
+  it. A `block`-level reply fails the call (`LlmError::PiiBlocked`) and the agent surfaces an error
+  instead of leaking data; a transport error fails open. Unset, the engine runs unchanged. See the
+  *PII redaction seam* page under Governance.
+
 ## 1.0.0
 
 First stable engine release. The Rust runtime reaches (and extends) parity with the
