@@ -1,0 +1,89 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import type { Message, MessageId } from "@adriane-ai/graph-core";
+
+import { createGraph, rustEngineAvailable, type RunId, type StreamEvent } from "./index.js";
+
+/**
+ * Incremental streaming over the Rust engine (ADR 0008): `values` accumulates a full
+ * snapshot per node via the channel reducers; `messages` emits a `message_delta` per new
+ * `messages` entry. `updates`/`debug` covered in subgraph.test.ts.
+ */
+
+const withRustEngine = () => {
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env.ADRIANE_SDK_ENGINE;
+    process.env.ADRIANE_SDK_ENGINE = "rust";
+  });
+  afterEach(() => {
+    if (saved === undefined) {
+      delete process.env.ADRIANE_SDK_ENGINE;
+    } else {
+      process.env.ADRIANE_SDK_ENGINE = saved;
+    }
+  });
+};
+
+const describeIfRust = rustEngineAvailable() ? describe : describe.skip;
+
+describeIfRust("@adriane-ai/graph-sdk — incremental streaming (Rust engine)", () => {
+  withRustEngine();
+
+  it("`values` accumulates a full snapshot per node step", async () => {
+    const app = createGraph({ name: "stream-values" })
+      .channel("a", { type: "number", default: 0 })
+      .channel("b", { type: "number", default: 0 })
+      .node("n1", async () => ({ a: 1 }))
+      .node("n2", async () => ({ b: 2 }))
+      .edge("n1", "n2")
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+    const events: StreamEvent[] = [];
+    for await (const event of app.stream({}, "values", { runId: "run_values" as RunId })) {
+      events.push(event);
+    }
+    const values = events.filter((e) => e.type === "state_value");
+    expect(values.length).toBeGreaterThanOrEqual(2);
+    // An intermediate snapshot after n1: a=1, b still at its default 0.
+    expect(
+      values.some(
+        (e) =>
+          e.type === "state_value" && e.state.channels.a === 1 && e.state.channels.b === 0
+      )
+    ).toBe(true);
+    // The final snapshot has both.
+    const last = values[values.length - 1];
+    expect(last?.type).toBe("state_value");
+    if (last?.type === "state_value") {
+      expect(last.state.channels.a).toBe(1);
+      expect(last.state.channels.b).toBe(2);
+    }
+  });
+
+  it("`messages` emits a message_delta per new messages-channel entry", async () => {
+    const message: Message = {
+      id: "m1" as MessageId,
+      createdAt: new Date(),
+      role: "ai",
+      content: "hello world"
+    };
+    const app = createGraph({ name: "stream-messages" })
+      .messagesChannel()
+      .node("say", async () => ({ messages: [message] }))
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+    const events: StreamEvent[] = [];
+    for await (const event of app.stream({}, "messages", { runId: "run_messages" as RunId })) {
+      events.push(event);
+    }
+    const deltas = events.filter((e) => e.type === "message_delta");
+    expect(deltas.length).toBe(1);
+    if (deltas[0]?.type === "message_delta") {
+      expect(deltas[0].delta).toBe("hello world");
+      expect(deltas[0].nodeId).toBe("say");
+    }
+  });
+});

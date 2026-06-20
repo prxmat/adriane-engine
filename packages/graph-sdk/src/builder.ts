@@ -92,6 +92,8 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
   private readonly agentApprovals = new Map<string, AgentApprovalBinding>();
   /** Per component node, the `{ kind, params }` carrier the Rust engine bridge needs. */
   private readonly componentConfigs = new Map<string, RustComponentConfig>();
+  /** Child graphs registered as `subgraph` nodes, keyed by their (global) graph id. */
+  private readonly subgraphDefs = new Map<string, GraphDefinition>();
   private entryNodeId: string | undefined;
 
   public constructor(options: CreateGraphOptions) {
@@ -260,6 +262,109 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
     return this;
   }
 
+  /**
+   * Add a **subgraph node**: nest another graph (built with its own
+   * {@link GraphBuilder}) as a single node. On entry the parent's channels are
+   * projected into the child via `inputMapping` (`childKey → parentKey`; omit to copy
+   * all parent channels); on completion the child's channels are merged back via
+   * `outputMapping` (`parentKey → childKey`; omit to spread all child channels onto
+   * the parent). If the child suspends (e.g. an internal human gate), the parent
+   * suspends at this node and a parent `resume` re-attaches to the child.
+   *
+   * The child's wiring (node handlers, conditions, agent/component configs) is merged
+   * into the parent — child runs share the parent's registries, keyed by GLOBAL node
+   * id — so child node ids must not collide with the parent's. Declare on the parent
+   * any channels the `outputMapping` writes into.
+   *
+   * ```ts
+   * const child = createGraph({ name: "double", id: "double" })
+   *   .channel("in", { type: "number", default: 0 })
+   *   .channel("out", { type: "number", default: 0 })
+   *   .node("calc", (s) => ({ out: (s.in as number) * 2 }));
+   * createGraph({ name: "parent" })
+   *   .channel("x", { type: "number", default: 21 })
+   *   .channel("y", { type: "number", default: 0 })
+   *   .subgraph("sub", child, { inputMapping: { in: "x" }, outputMapping: { y: "out" } });
+   * ```
+   */
+  public subgraph<TChild extends ChannelValues>(
+    id: string,
+    child: GraphBuilder<TChild>,
+    options?: {
+      inputMapping?: Record<string, string>;
+      outputMapping?: Record<string, string>;
+      label?: string;
+    }
+  ): this {
+    if (this.handlers.has(id) || this.nodes.some((node) => String(node.id) === id)) {
+      throw new DuplicateNodeError(id);
+    }
+    const childParts = child.toSubgraphParts();
+
+    // Merge the child's wiring into this builder. Child runs share the parent's
+    // registries (the Rust bridge and the TS runtime both look handlers up by global
+    // node id), so a child node id colliding with a parent node id is a hard error.
+    for (const [nodeId, handler] of childParts.handlers) {
+      if (this.handlers.has(nodeId)) {
+        throw new DuplicateNodeError(nodeId);
+      }
+      this.handlers.set(nodeId, handler);
+    }
+    for (const [name, fn] of childParts.conditions) {
+      this.conditions.set(name, fn);
+    }
+    for (const [nodeId, config] of childParts.agentConfigs) {
+      this.agentConfigs.set(nodeId, config);
+    }
+    for (const [nodeId, binding] of childParts.agentApprovals) {
+      this.agentApprovals.set(nodeId, binding);
+    }
+    for (const [nodeId, config] of childParts.componentConfigs) {
+      this.componentConfigs.set(nodeId, config);
+    }
+    // Register the child graph + any subgraphs it nested in turn.
+    this.subgraphDefs.set(String(childParts.definition.id), childParts.definition);
+    for (const [graphId, definition] of childParts.subgraphDefs) {
+      this.subgraphDefs.set(graphId, definition);
+    }
+
+    this.nodes.push({
+      id: id as NodeId,
+      type: "subgraph",
+      label: options?.label ?? id,
+      subgraphId: childParts.definition.id,
+      inputMapping: options?.inputMapping,
+      outputMapping: options?.outputMapping
+    });
+    this.entryNodeId ??= id;
+    return this;
+  }
+
+  /**
+   * @internal Extract this builder's wiring so it can be nested as a subgraph by a
+   * parent {@link GraphBuilder.subgraph}. Returns live maps (the parent merges them);
+   * not part of the public authoring API.
+   */
+  public toSubgraphParts(): {
+    definition: GraphDefinition;
+    handlers: Map<string, NodeHandler>;
+    conditions: Map<string, ConditionFn>;
+    agentConfigs: Map<string, RustAgentConfig>;
+    agentApprovals: Map<string, AgentApprovalBinding>;
+    componentConfigs: Map<string, RustComponentConfig>;
+    subgraphDefs: Map<string, GraphDefinition>;
+  } {
+    return {
+      definition: this.buildDefinition(),
+      handlers: this.handlers,
+      conditions: this.conditions,
+      agentConfigs: this.agentConfigs,
+      agentApprovals: this.agentApprovals,
+      componentConfigs: this.componentConfigs,
+      subgraphDefs: this.subgraphDefs
+    };
+  }
+
   /** Add an unconditional edge from one node to another. */
   public edge(from: string, to: string): this {
     this.edges.push({
@@ -315,8 +420,12 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
   /** Validate and compile, returning a {@link Result} instead of throwing. */
   public safeCompile(): Result<CompiledGraph<TState>, GraphCompileError> {
     const definition = this.buildDefinition();
-    // Validate via the Rust core when its native addon is present; otherwise TS.
-    const errors = tryRustValidate(definition) ?? validateGraph(definition);
+    const subgraphs = [...this.subgraphDefs.values()];
+    // Validate the parent AND every registered subgraph (each is a standalone graph),
+    // via the Rust core when its native addon is present; otherwise TS.
+    const errors = [definition, ...subgraphs].flatMap(
+      (graph) => tryRustValidate(graph) ?? validateGraph(graph)
+    );
     if (errors.length > 0) {
       return { success: false, error: new GraphCompileError(errors) };
     }
@@ -329,7 +438,8 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
         conditions: this.conditions,
         agentConfigs: this.agentConfigs,
         agentApprovals: this.agentApprovals,
-        componentConfigs: this.componentConfigs
+        componentConfigs: this.componentConfigs,
+        subgraphs
       })
     };
   }

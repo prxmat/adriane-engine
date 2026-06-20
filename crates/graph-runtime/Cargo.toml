@@ -10,6 +10,9 @@ adriane-graph-core = { path = "../graph-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# `join_all` for concurrent fan-out branches. Executor-agnostic (no tokio): the
+# crate stays async-runtime-agnostic — the embedder's executor drives the futures.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }

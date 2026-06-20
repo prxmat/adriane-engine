@@ -70,3 +70,19 @@ export function engineApproveAndResume(
   onCondition: EngineConditionCallback,
   onEvent: EngineEventCallback
 ): Promise<string>;
+
+/**
+ * Deliver an external signal to a suspended run, then resume. `signalName` is the
+ * signal a `waitForSignal` node is blocked on; `payloadJson` is its JSON payload
+ * (injected into `__signals[signalName]`). The run advances past the waiting node.
+ * `specJson.state` carries the serialized suspended `GraphState`. Resolves to a JSON
+ * `RunOutcome`.
+ */
+export function engineSignal(
+  specJson: string,
+  signalName: string,
+  payloadJson: string,
+  onNode: EngineNodeCallback,
+  onCondition: EngineConditionCallback,
+  onEvent: EngineEventCallback
+): Promise<string>;

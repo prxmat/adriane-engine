@@ -50,11 +50,17 @@ use crate::spec::{AgentSpec, ApprovedTool, EngineSpec, RunOutcome};
 type StringTsfn = ThreadsafeFunction<String, ErrorStrategy::Fatal>;
 
 /// Which entry point the caller asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum Entry {
     Start,
     Resume,
     Approve,
+    /// Deliver an external signal `name` carrying `payload`, then resume — the run
+    /// advances past the node that was awaiting it (see `GraphRuntime::resume_with_signal`).
+    Signal {
+        name: String,
+        payload: Value,
+    },
 }
 
 /// The three JS callbacks, as TSFNs cloned into every seam closure.
@@ -115,6 +121,7 @@ async fn drive(
     match entry {
         Entry::Start => {
             let run_id = RunId::from(spec.run_id.clone().unwrap_or_else(|| "run".to_owned()));
+            seed_inbox(runtime, &run_id, &spec.inbox);
             runtime
                 .start(run_id, spec.initial_data.clone())
                 .await
@@ -155,13 +162,45 @@ async fn drive(
             // `resume` can load it, then resume — the runtime advances past the gate
             // / re-runs the agent node from the latest checkpoint.
             seed_checkpoint(runtime, state);
+            seed_inbox(runtime, &run_id, &spec.inbox);
             runtime.resume(&run_id).await.map_err(runtime_err)
+        }
+        Entry::Signal { name, payload } => {
+            // Deliver an external signal to a suspended run: seed the suspended state,
+            // then resume_with_signal injects the payload under `__signals[name]` and
+            // advances past the node that awaited it.
+            let state = spec.state.clone().ok_or_else(|| {
+                napi::Error::from_reason(
+                    "signal requires `state` (the serialized suspended GraphState)".to_owned(),
+                )
+            })?;
+            let run_id = state.run_id.clone();
+            seed_checkpoint(runtime, state);
+            seed_inbox(runtime, &run_id, &spec.inbox);
+            runtime
+                .resume_with_signal(&run_id, &name, payload)
+                .await
+                .map_err(runtime_err)
         }
     }
 }
 
 fn runtime_err(error: adriane_graph_runtime::RuntimeError) -> napi::Error {
     napi::Error::from_reason(format!("runtime error: {error}"))
+}
+
+/// Pre-queue the spec's dynamic-message inbox into the runtime before driving: each
+/// `nodeId -> [inputs]` is `send`-queued FIFO for that node (the `__injected` seam).
+fn seed_inbox(
+    runtime: &GraphRuntime,
+    run_id: &RunId,
+    inbox: &std::collections::BTreeMap<String, Vec<Value>>,
+) {
+    for (node_id, inputs) in inbox {
+        for input in inputs {
+            runtime.send(run_id, &NodeId::from(node_id.clone()), input.clone());
+        }
+    }
 }
 
 /// Validate the governance invariant for every granted tool and return the sorted,
@@ -219,7 +258,16 @@ fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<Grap
 
     let registry = ComponentRegistry::new();
     let mut nodes = InMemoryNodeRegistry::new();
-    for node in &spec.graph.nodes {
+    // Register handlers for the parent graph's nodes AND every subgraph's nodes:
+    // child runs share this runtime's node registry, so a child node handler must be
+    // present here too. The agent / component / js maps are keyed by GLOBAL node id,
+    // so a child node is configured the same way as a parent node.
+    let all_nodes = spec
+        .graph
+        .nodes
+        .iter()
+        .chain(spec.subgraphs.iter().flat_map(|graph| graph.nodes.iter()));
+    for node in all_nodes {
         let id = node.id.0.clone();
         if let Some(component) = spec.component_nodes.get(&id) {
             // A component node runs a NATIVE Rust handler built from the component
@@ -247,7 +295,13 @@ fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<Grap
 
     let mut conditions = InMemoryConditionRegistry::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for edge in &spec.graph.edges {
+    // Conditions from the parent graph AND every subgraph's conditional edges.
+    let all_edges = spec
+        .graph
+        .edges
+        .iter()
+        .chain(spec.subgraphs.iter().flat_map(|graph| graph.edges.iter()));
+    for edge in all_edges {
         if edge.edge_type != EdgeType::Conditional {
             continue;
         }
@@ -260,7 +314,8 @@ fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<Grap
         conditions.register(name.clone(), js_condition(name.clone(), &callbacks));
     }
 
-    let runtime = GraphRuntime::new(spec.graph.clone(), nodes, conditions);
+    let runtime = GraphRuntime::new(spec.graph.clone(), nodes, conditions)
+        .with_subgraphs(spec.subgraphs.clone());
 
     // Forward every run-lifecycle event to JS, fire-and-forget. The observer runs
     // synchronously inside `emit`; we only enqueue a non-blocking TSFN call (no
@@ -291,7 +346,7 @@ fn js_node_handler(node_id: String, callbacks: &JsCallbacks) -> adriane_graph_ru
                 "state": channels_value(&state),
             });
             match call_js_string(&on_node, payload).await {
-                Ok(update) => NodeOutput::update(parse_update(&update)),
+                Ok(update) => js_update_to_output(&update),
                 Err(error) => NodeOutput::failure(format!("js node handler '{node_id}': {error}")),
             }
         })
@@ -670,6 +725,32 @@ fn parse_update(text: &str) -> BTreeMap<String, Value> {
     }
 }
 
+/// Build a [`NodeOutput`] from a JS node handler's returned update JSON. Two reserved
+/// keys let a JS handler request a durable timer / signal wait without a structured
+/// return: `__sleepUntil` (an opaque deadline string) and `__waitForSignal` (a signal
+/// name). Either makes the run suspend after applying the remaining keys as the channel
+/// update; together they are a signal-or-timeout. The SDK exposes them via `sleepUntil`
+/// / `waitForSignal` helpers.
+fn js_update_to_output(text: &str) -> NodeOutput {
+    let mut update = parse_update(text);
+    let sleep_until = take_reserved_string(&mut update, "__sleepUntil");
+    let wait_for_signal = take_reserved_string(&mut update, "__waitForSignal");
+    NodeOutput {
+        update,
+        sleep_until,
+        wait_for_signal,
+        ..NodeOutput::default()
+    }
+}
+
+/// Remove a reserved string-valued key from the update map, returning it if present.
+fn take_reserved_string(update: &mut BTreeMap<String, Value>, key: &str) -> Option<String> {
+    match update.remove(key) {
+        Some(Value::String(value)) => Some(value),
+        _ => None,
+    }
+}
+
 /// Parse a JS-returned tool-result JSON string into a value; an unparsable result
 /// is surfaced verbatim as a string.
 fn parse_value(text: &str) -> Value {
@@ -871,6 +952,8 @@ mod tests {
 
         let spec = EngineSpec {
             graph: graph.clone(),
+            subgraphs: vec![],
+            inbox: BTreeMap::new(),
             run_id: Some("run-gated".to_owned()),
             initial_data: BTreeMap::new(),
             state: None,
@@ -1305,6 +1388,8 @@ mod tests {
         };
         let spec = EngineSpec {
             graph: graph.clone(),
+            subgraphs: vec![],
+            inbox: BTreeMap::new(),
             run_id: Some("run-guard".to_owned()),
             initial_data: BTreeMap::new(),
             state: Some(suspended),
@@ -1365,6 +1450,8 @@ mod tests {
         };
         let spec = EngineSpec {
             graph: graph.clone(),
+            subgraphs: vec![],
+            inbox: BTreeMap::new(),
             run_id: Some("run-guard-resume".to_owned()),
             initial_data: BTreeMap::new(),
             state: Some(suspended),

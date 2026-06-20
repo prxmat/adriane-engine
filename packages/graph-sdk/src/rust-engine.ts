@@ -51,6 +51,14 @@ type NativeEngine = {
     onCondition: EngineConditionCallback,
     onEvent: EngineEventCallback
   ): Promise<string>;
+  engineSignal(
+    specJson: string,
+    signalName: string,
+    payloadJson: string,
+    onNode: EngineNodeCallback,
+    onCondition: EngineConditionCallback,
+    onEvent: EngineEventCallback
+  ): Promise<string>;
 };
 
 let cachedNative: NativeEngine | null | undefined;
@@ -60,7 +68,8 @@ const hasEngineFns = (mod: unknown): mod is NativeEngine =>
   mod !== null &&
   typeof (mod as NativeEngine).engineRun === "function" &&
   typeof (mod as NativeEngine).engineResume === "function" &&
-  typeof (mod as NativeEngine).engineApproveAndResume === "function";
+  typeof (mod as NativeEngine).engineApproveAndResume === "function" &&
+  typeof (mod as NativeEngine).engineSignal === "function";
 
 const loadNativeEngine = (): NativeEngine | null => {
   if (cachedNative !== undefined) {
@@ -100,6 +109,13 @@ export type AsyncToolFn = (input: unknown) => Promise<unknown>;
  */
 export type RustRunnerParts<TState extends ChannelValues> = {
   definition: GraphDefinition;
+  /**
+   * Child graphs for `subgraph`-type nodes (Rust `EngineSpec.subgraphs`). Their node
+   * handlers / conditions are flattened into {@link RustRunnerParts.nodeFns} /
+   * {@link RustRunnerParts.conditions} (by global node id); these definitions tell the
+   * Rust engine how to traverse each child. Empty for graphs with no subgraphs.
+   */
+  subgraphs: GraphDefinition[];
   /** Async node-update producers, keyed by node id (Rust `on_node`, `kind:"node"`). */
   nodeFns: Map<string, AsyncNodeFn<TState>>;
   /** Async tool executes, keyed by tool name (Rust `on_node`, `kind:"tool"`). */
@@ -159,6 +175,10 @@ export type ApprovedToolWire = {
 /** The `EngineSpec` shape the Rust bridge deserializes (camelCase). */
 type EngineSpecWire = {
   graph: GraphDefinition;
+  /** Child graphs for `subgraph`-type nodes; the bridge registers their nodes too. */
+  subgraphs: GraphDefinition[];
+  /** Dynamic-message inbox to pre-queue (`send`): per node id, FIFO inputs. */
+  inbox?: Record<string, unknown[]>;
   runId?: string;
   initialData?: Record<string, unknown>;
   state?: GraphState;
@@ -312,10 +332,11 @@ export class RustGraphRunner<TState extends ChannelValues> {
 
   private baseSpec(): Pick<
     EngineSpecWire,
-    "graph" | "agents" | "componentNodes" | "jsNodeIds" | "jsToolNames"
+    "graph" | "subgraphs" | "agents" | "componentNodes" | "jsNodeIds" | "jsToolNames"
   > {
     return {
       graph: this.parts.definition,
+      subgraphs: this.parts.subgraphs,
       agents: this.buildAgentsWire(),
       componentNodes: this.buildComponentsWire(),
       jsNodeIds: [...this.parts.jsNodeIds],
@@ -326,9 +347,10 @@ export class RustGraphRunner<TState extends ChannelValues> {
   /** Start a fresh run on the Rust engine. */
   public async run(
     runId: RunId,
-    initialData: Record<string, unknown>
+    initialData: Record<string, unknown>,
+    inbox: Record<string, unknown[]> = {}
   ): Promise<TypedGraphState<TState>> {
-    const spec: EngineSpecWire = { ...this.baseSpec(), runId, initialData };
+    const spec: EngineSpecWire = { ...this.baseSpec(), runId, initialData, inbox };
     const outcomeJson = await this.native.engineRun(
       JSON.stringify(spec),
       this.onNode,
@@ -374,6 +396,28 @@ export class RustGraphRunner<TState extends ChannelValues> {
     const spec: EngineSpecWire = { ...this.baseSpec(), state, approvedTools };
     const outcomeJson = await this.native.engineApproveAndResume(
       JSON.stringify(spec),
+      this.onNode,
+      this.onCondition,
+      this.onEvent
+    );
+    return this.outcomeToState(outcomeJson);
+  }
+
+  /**
+   * Deliver an external signal to a suspended run, then resume it. The Rust engine
+   * injects `payload` into `__signals[name]` and advances past the node that awaited
+   * the signal (a `waitForSignal` suspension is one-shot).
+   */
+  public async signal(
+    state: GraphState,
+    name: string,
+    payload: unknown
+  ): Promise<TypedGraphState<TState>> {
+    const spec: EngineSpecWire = { ...this.baseSpec(), state };
+    const outcomeJson = await this.native.engineSignal(
+      JSON.stringify(spec),
+      name,
+      JSON.stringify(payload ?? null),
       this.onNode,
       this.onCondition,
       this.onEvent

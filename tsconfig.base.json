@@ -29,6 +29,8 @@
       "@adriane-ai/graph-adriane": ["packages/graph-adriane/src/index.ts"],
       "@adriane-ai/cli": ["packages/adriane-cli/src/cli.ts"],
       "@adriane-ai/contracts": ["packages/contracts/src/index.ts"],
+      "@adriane-ai/okf": ["packages/okf/src/index.ts"],
+      "@adriane-ai/knowledge": ["packages/knowledge/src/index.ts"],
       "@adriane-ai/config": ["packages/config/src/index.ts"]
     }
   }

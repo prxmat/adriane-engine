@@ -9,7 +9,7 @@
  *   - an AGENT node carries `node.metadata.agent = { provider?, model?, tier?, system?,
  *     toolNames?, maxIterations?, suspendForApproval?, approvalToolNames?, outputChannel? }`
  *
- * This is the seam a control plane uses to EXECUTE a graph built from
+ * This is the seam the control plane (`apps/api`) uses to EXECUTE a graph built from
  * the catalog: it reads each node's metadata, assembles the engine's
  * `EngineSpec.componentNodes` + `agents` maps + the `jsNodeIds` for plain
  * action/tool nodes, and drives the run on the **Rust engine** via `@adriane-ai/napi`.
@@ -197,6 +197,8 @@ const assembleParts = (
 
   return {
     definition,
+    // Catalog graphs (assembled from node-metadata carriers) carry no subgraph nodes.
+    subgraphs: [],
     nodeFns: new Map(jsNodeIds.size === 0 ? [] : [...jsNodeIds].map((id) => [id, async () => ({})])),
     toolFns: new Map(),
     conditions: new Map(),
@@ -250,7 +252,7 @@ export const resumeCatalogGraph = async (
      * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
      * resolvedBy }` provenance. Passed straight through to the Rust bridge, which
      * re-validates the no-self-approval invariant per tool on `Entry::Resume` and writes
-     * only the validated names into `__approvedTools`. A control plane
+     * only the validated names into `__approvedTools`. The control plane (`apps/api`)
      * is the authority on which tools were approved (drawn from the ApprovalEngine), but
      * the engine re-checks the provenance here — defence in depth on the PRODUCTION
      * resume path. Omitted/empty: an ordinary resume that unlocks no tools.

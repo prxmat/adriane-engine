@@ -21,9 +21,16 @@ pub struct Checkpoint {
 }
 
 /// Lifecycle events emitted for every node transition. The `type` tag matches the
-/// TS event vocabulary (`node_started`, `run_suspended`, …).
+/// TS event vocabulary (`node_started`, `run_suspended`, …); the variant FIELDS
+/// serialize camelCase (`runId`/`nodeId`) to match the TS `RunEvent` shape the SDK
+/// parses across the napi boundary (`rename_all_fields`). Without this the fields
+/// would emit snake_case and `event.nodeId` would be `undefined` on the JS side.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum RunEvent {
     NodeStarted {
         run_id: RunId,
@@ -66,4 +73,27 @@ pub enum RunEvent {
         error: String,
         timestamp: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_event_serializes_snake_case_tag_with_camel_case_fields() {
+        let event = RunEvent::NodeCompleted {
+            run_id: RunId::from("r"),
+            node_id: NodeId::from("n"),
+            output: BTreeMap::new(),
+            timestamp: "0".to_owned(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        // Variant tag stays snake_case; fields are camelCase to match the TS `RunEvent`
+        // the SDK parses over napi (so `event.nodeId` is defined on the JS side).
+        assert!(json.contains("\"type\":\"node_completed\""));
+        assert!(json.contains("\"runId\":\"r\""));
+        assert!(json.contains("\"nodeId\":\"n\""));
+        assert!(!json.contains("run_id"));
+        assert!(!json.contains("node_id"));
+    }
 }
