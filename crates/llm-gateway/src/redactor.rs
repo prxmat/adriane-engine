@@ -24,8 +24,10 @@ use crate::types::{LlmRequest, LlmResponse};
 #[async_trait]
 pub trait PiiRedactor: Send + Sync {
     /// Return a copy of `request` with personal data removed from its system prompt and
-    /// message contents.
-    async fn redact_request(&self, request: LlmRequest) -> LlmRequest;
+    /// message contents. Returns `Err(LlmError::PiiBlocked)` when a `block`-level policy
+    /// detects personal data — the run then fails instead of silently continuing (the
+    /// gate stops; full human-resume mid-loop is a later refinement).
+    async fn redact_request(&self, request: LlmRequest) -> Result<LlmRequest, LlmError>;
 
     /// Restore the user's own values in a response. Defaults to identity — the control
     /// plane re-hydrates the final answer from the per-run vault.
@@ -40,8 +42,8 @@ pub struct NoopPiiRedactor;
 
 #[async_trait]
 impl PiiRedactor for NoopPiiRedactor {
-    async fn redact_request(&self, request: LlmRequest) -> LlmRequest {
-        request
+    async fn redact_request(&self, request: LlmRequest) -> Result<LlmRequest, LlmError> {
+        Ok(request)
     }
 }
 
@@ -62,7 +64,7 @@ impl RedactingGateway {
 #[async_trait]
 impl LlmGateway for RedactingGateway {
     async fn complete(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let redacted = self.redactor.redact_request(request).await;
+        let redacted = self.redactor.redact_request(request).await?;
         let response = self.inner.complete(redacted).await?;
         Ok(self.redactor.hydrate_response(response).await)
     }
@@ -76,6 +78,9 @@ struct RedactBatchRequest {
 #[derive(Deserialize)]
 struct RedactBatchResponse {
     texts: Vec<String>,
+    /// True when a `block`-level policy matched — the seam then fails the call.
+    #[serde(default)]
+    blocked: bool,
 }
 
 /// Calls an external redaction service over HTTP. Configure with `ADRIANE_PII_REDACTOR_URL`
@@ -116,25 +121,24 @@ impl HttpPiiRedactor {
         Some(Self::new(url, token))
     }
 
-    async fn redact_texts(&self, texts: Vec<String>) -> Result<Vec<String>, reqwest::Error> {
+    async fn redact_texts(&self, texts: Vec<String>) -> Result<RedactBatchResponse, reqwest::Error> {
         let mut builder = self.client.post(&self.url);
         if let Some(token) = &self.token {
             builder = builder.bearer_auth(token);
         }
-        let response: RedactBatchResponse = builder
+        builder
             .json(&RedactBatchRequest { texts })
             .send()
             .await?
             .error_for_status()?
             .json()
-            .await?;
-        Ok(response.texts)
+            .await
     }
 }
 
 #[async_trait]
 impl PiiRedactor for HttpPiiRedactor {
-    async fn redact_request(&self, mut request: LlmRequest) -> LlmRequest {
+    async fn redact_request(&self, mut request: LlmRequest) -> Result<LlmRequest, LlmError> {
         // Collect system + every message content, redact as one batch, write back in the
         // same order. Guard each write so a short/garbled response never drops content.
         let mut texts: Vec<String> = Vec::with_capacity(request.messages.len() + 1);
@@ -146,12 +150,19 @@ impl PiiRedactor for HttpPiiRedactor {
         }
 
         if texts.is_empty() {
-            return request;
+            return Ok(request);
         }
 
         match self.redact_texts(texts).await {
-            Ok(redacted) => {
-                let mut next = redacted.into_iter();
+            Ok(response) => {
+                // A `block`-level policy matched → fail the call (fail-closed): block is an
+                // explicit owner choice to STOP, not to silently scrub-and-continue.
+                if response.blocked {
+                    return Err(LlmError::PiiBlocked(
+                        "personal data detected in an intermediate message".to_owned()
+                    ));
+                }
+                let mut next = response.texts.into_iter();
                 if request.system.is_some() {
                     if let Some(value) = next.next() {
                         request.system = Some(value);
@@ -162,11 +173,13 @@ impl PiiRedactor for HttpPiiRedactor {
                         message.content = value;
                     }
                 }
-                request
+                Ok(request)
             }
+            // Transport error → fail-open (the hard block lives at the control-plane input
+            // gate; a flaky redaction service must not abort an otherwise-valid run).
             Err(error) => {
                 eprintln!("[pii] redaction service error, passing text through: {error}");
-                request
+                Ok(request)
             }
         }
     }
@@ -208,14 +221,24 @@ mod tests {
 
     #[async_trait]
     impl PiiRedactor for UpperRedactor {
-        async fn redact_request(&self, mut request: LlmRequest) -> LlmRequest {
+        async fn redact_request(&self, mut request: LlmRequest) -> Result<LlmRequest, LlmError> {
             if let Some(system) = request.system.take() {
                 request.system = Some(system.to_uppercase());
             }
             for message in request.messages.iter_mut() {
                 message.content = message.content.to_uppercase();
             }
-            request
+            Ok(request)
+        }
+    }
+
+    /// A redactor that always blocks, to prove `complete()` propagates the block as an error.
+    struct BlockingRedactor;
+
+    #[async_trait]
+    impl PiiRedactor for BlockingRedactor {
+        async fn redact_request(&self, _request: LlmRequest) -> Result<LlmRequest, LlmError> {
+            Err(LlmError::PiiBlocked("test".to_owned()))
         }
     }
 
@@ -223,8 +246,20 @@ mod tests {
     async fn noop_redactor_passes_through() {
         let redactor = NoopPiiRedactor;
         let req = request_with(vec![], Some("hello user@example.com"));
-        let out = redactor.redact_request(req.clone()).await;
+        let out = redactor.redact_request(req.clone()).await.unwrap();
         assert_eq!(out.system, req.system);
+    }
+
+    #[tokio::test]
+    async fn redacting_gateway_propagates_a_block() {
+        let mut inner = DefaultLlmGateway::new();
+        inner.register_adapter(Box::new(MockAdapter::new(
+            LlmProvider::Anthropic,
+            vec![response("ok")],
+        )));
+        let gateway = RedactingGateway::new(Arc::new(inner), Arc::new(BlockingRedactor));
+        let result = gateway.complete(request_with(vec![], Some("x"))).await;
+        assert!(matches!(result, Err(LlmError::PiiBlocked(_))));
     }
 
     #[tokio::test]

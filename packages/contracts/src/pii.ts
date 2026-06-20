@@ -45,5 +45,9 @@ export const PiiRedactBatchDtoSchema = z.object({
 });
 export type PiiRedactBatchDto = z.infer<typeof PiiRedactBatchDtoSchema>;
 
-export const PiiRedactBatchResultDtoSchema = PiiRedactBatchDtoSchema;
+/** `blocked` is true when a `block`-level policy matched — the engine then fails the call. */
+export const PiiRedactBatchResultDtoSchema = z.object({
+  texts: z.array(z.string()),
+  blocked: z.boolean()
+});
 export type PiiRedactBatchResultDto = z.infer<typeof PiiRedactBatchResultDtoSchema>;

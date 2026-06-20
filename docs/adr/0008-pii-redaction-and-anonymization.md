@@ -110,6 +110,13 @@ re-hydrated from the vault so the user sees real values while the model never di
    `ADRIANE_PII_REDACTOR_TOKEN`. Distinct from the control plane's own `PII_REDACTOR_URL` (which
    points at a Presidio `/detect` service) so the two never collide.
 
+   **Block is fail-closed.** The batch endpoint returns `{ texts, blocked }`; on a `block`-level
+   match the Rust seam returns `LlmError::PiiBlocked` and the agent node surfaces an error result
+   instead of an answer (the agent node catches it — a blocked agent does not crash the graph; the
+   PII never reaches a provider). `redact`-level scrubs and continues. A transport error to the
+   redaction service is fail-OPEN (the hard block lives at the input gate; a flaky service must not
+   abort a valid run). The remaining refinement is `block` as a true **human gate-and-resume**
+   mid-loop (suspend → approve), vs the current stop-with-error.
+
    **Runtime activation:** the seam is compiled into the napi addon, so taking it live requires a
-   **napi rebuild** (`napi build`/per-platform artifacts). The `block`-as-gate-and-resume on
-   intermediate calls (vs the current scrub-and-continue) remains a later refinement.
+   **napi rebuild** (`napi build`/per-platform artifacts).

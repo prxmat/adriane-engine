@@ -20,9 +20,11 @@ describeIfRust("@adriane-ai/graph-sdk — native PII redactor seam", () => {
   const saved: Record<string, string | undefined> = {};
   let server: Server;
   let received: string[][] = [];
+  let shouldBlock = false;
 
   beforeEach(async () => {
     received = [];
+    shouldBlock = false;
     server = createServer((req, res) => {
       let body = "";
       req.on("data", (chunk) => {
@@ -34,7 +36,7 @@ describeIfRust("@adriane-ai/graph-sdk — native PII redactor seam", () => {
         // Redact emails so the round-trip is observably transformed.
         const texts = parsed.texts.map((text) => text.replace(/[\w.]+@[\w.]+/g, "[EMAIL]"));
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ texts }));
+        res.end(JSON.stringify({ texts, blocked: shouldBlock }));
       });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -81,5 +83,26 @@ describeIfRust("@adriane-ai/graph-sdk — native PII redactor seam", () => {
     // ...and the agent's system prompt (with its email) was in the outbound payload.
     const allTexts = received.flat();
     expect(allTexts.some((text) => text.includes("alice@example.com"))).toBe(true);
+  });
+
+  it("fails the run when the redaction service blocks (block-level policy)", async () => {
+    shouldBlock = true;
+    const app = createGraph({ name: "rust-agent-pii-block" })
+      .agentNode("assistant", {
+        llm: new DefaultLLMGateway(),
+        prompt: { system: "Reach me at alice@example.com when done." },
+        maxIterations: 1
+      })
+      .compile();
+
+    // The agent node catches a failed agent run and writes the error to its output channel
+    // (graceful degradation — a blocked agent does not crash the whole graph). So the block
+    // surfaces as an error result instead of a normal answer: the PII never reached a provider.
+    const result = await app.run({ question: "hi" }, { runId: "run_pii_block" as never });
+    const agentResult = (result.channels as Record<string, { error?: string }>).agentResult;
+
+    expect(received.length).toBeGreaterThan(0);
+    expect(typeof agentResult?.error).toBe("string");
+    expect(agentResult?.error ?? "").toMatch(/block/i);
   });
 });
