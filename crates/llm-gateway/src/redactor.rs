@@ -121,7 +121,10 @@ impl HttpPiiRedactor {
         Some(Self::new(url, token))
     }
 
-    async fn redact_texts(&self, texts: Vec<String>) -> Result<RedactBatchResponse, reqwest::Error> {
+    async fn redact_texts(
+        &self,
+        texts: Vec<String>,
+    ) -> Result<RedactBatchResponse, reqwest::Error> {
         let mut builder = self.client.post(&self.url);
         if let Some(token) = &self.token {
             builder = builder.bearer_auth(token);
@@ -159,7 +162,7 @@ impl PiiRedactor for HttpPiiRedactor {
                 // explicit owner choice to STOP, not to silently scrub-and-continue.
                 if response.blocked {
                     return Err(LlmError::PiiBlocked(
-                        "personal data detected in an intermediate message".to_owned()
+                        "personal data detected in an intermediate message".to_owned(),
                     ));
                 }
                 let mut next = response.texts.into_iter();

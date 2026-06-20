@@ -31,7 +31,6 @@ pub use gemini::{
 };
 pub use mock::MockAdapter;
 pub use model_policy::{ModelChoice, ModelPolicy, ModelTier};
-pub use redactor::{HttpPiiRedactor, NoopPiiRedactor, PiiRedactor, RedactingGateway};
 pub use openai_compatible::{
     build_request_body as build_openai_request_body, HttpPort, OpenAiChatResponse,
     OpenAiCompatibleAdapter, OpenAiCompatiblePort, RawChoice, RawFunctionCall, RawMessage,
@@ -40,6 +39,7 @@ pub use openai_compatible::{
     MISTRAL_DEFAULT_MODEL, OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL, OPENAI_BASE_URL,
     OPENAI_DEFAULT_MODEL, OPENROUTER_BASE_URL, OPENROUTER_DEFAULT_MODEL,
 };
+pub use redactor::{HttpPiiRedactor, NoopPiiRedactor, PiiRedactor, RedactingGateway};
 pub use types::{
     LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk, LlmToolCall, LlmToolDef,
     LlmUsage,
