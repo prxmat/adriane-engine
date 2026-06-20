@@ -182,7 +182,7 @@ export const parseOkfDocument = (raw: string): ParsedOkf => {
 /** Quote a scalar only when YAML would need it (contains `:` / `#` / leading-trailing space). */
 const yamlScalar = (value: string): string => {
   if (value === "" || /[:#]|^\s|\s$|^[[{]/.test(value)) {
-    return `"${value.replace(/"/g, '\\"')}"`;
+    return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   }
   return value;
 };
