@@ -99,6 +99,13 @@ one into the repo. Agents reference prompts by id/version and models by **tier**
 your graph nor your prompts carry a secret. See
 [best practices](/docs/production/best-practices#pin-tiers-not-hardcoded-models).
 
+## Redacting PII before the model
+
+To scrub personal data from every LLM request, set `ADRIANE_PII_REDACTOR_URL` (and optionally
+`ADRIANE_PII_REDACTOR_TOKEN`) to a redaction service. Unset, the engine sends prompts through
+unchanged. See the [PII redaction seam](/docs/governance/pii-redaction) for the wire contract,
+fail-open/block behavior, and a minimal reference service.
+
 ## The Rust addon ships with the SDK
 
 The native Rust engine loads through the `@adriane-ai/napi` addon. When a prebuilt binary

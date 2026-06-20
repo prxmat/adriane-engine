@@ -70,6 +70,13 @@ export const ComplianceSourceSchema = z.object({
 });
 
 /** Per-run AI Act report: decision traceability + human supervision + data provenance. */
+/** PII-handling evidence for the run (ADR 0008): detections, redactions, blocks. */
+export const CompliancePiiEventSchema = z.object({
+  type: z.string(),
+  count: z.number().int().optional(),
+  timestamp: z.string()
+});
+
 export const ComplianceRunReportDtoSchema = z.object({
   runId: z.string(),
   graphId: z.string(),
@@ -78,6 +85,7 @@ export const ComplianceRunReportDtoSchema = z.object({
   traceability: z.array(ComplianceEventSchema),
   humanSupervision: z.array(ComplianceApprovalSchema),
   dataSources: z.array(ComplianceSourceSchema),
+  piiEvents: z.array(CompliancePiiEventSchema),
   generatedAt: z.string().datetime()
 });
 
@@ -88,4 +96,5 @@ export type ComplianceTenantReportDto = z.infer<typeof ComplianceTenantReportDto
 export type ComplianceEvent = z.infer<typeof ComplianceEventSchema>;
 export type ComplianceApproval = z.infer<typeof ComplianceApprovalSchema>;
 export type ComplianceSource = z.infer<typeof ComplianceSourceSchema>;
+export type CompliancePiiEvent = z.infer<typeof CompliancePiiEventSchema>;
 export type ComplianceRunReportDto = z.infer<typeof ComplianceRunReportDtoSchema>;

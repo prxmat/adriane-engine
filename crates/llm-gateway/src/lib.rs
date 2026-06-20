@@ -14,6 +14,7 @@ pub mod gemini;
 pub mod mock;
 pub mod model_policy;
 pub mod openai_compatible;
+pub mod redactor;
 pub mod types;
 
 pub use anthropic::{
@@ -38,6 +39,7 @@ pub use openai_compatible::{
     MISTRAL_DEFAULT_MODEL, OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL, OPENAI_BASE_URL,
     OPENAI_DEFAULT_MODEL, OPENROUTER_BASE_URL, OPENROUTER_DEFAULT_MODEL,
 };
+pub use redactor::{HttpPiiRedactor, NoopPiiRedactor, PiiRedactor, RedactingGateway};
 pub use types::{
     LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk, LlmToolCall, LlmToolDef,
     LlmUsage,

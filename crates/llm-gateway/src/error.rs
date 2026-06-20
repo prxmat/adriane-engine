@@ -8,4 +8,6 @@ pub enum LlmError {
     ProviderNotFound(LlmProvider),
     #[error("provider error: {0}")]
     Provider(String),
+    #[error("blocked by PII policy: {0}")]
+    PiiBlocked(String),
 }
