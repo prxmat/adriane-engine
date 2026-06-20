@@ -65,6 +65,11 @@ existing `rust-validator.ts` pattern):
   callback's **synchronous** return value — it does not await a returned Promise (a
   returned thenable aborts the process). Every callback returns synchronously: a JSON
   string for node/tool seams, a boolean for conditions.
+  > **SUPERSEDED by [ADR 0004](0004-approval-enforcement-on-rust-golden-path.md).**
+  > This synchronous description is out of date. As of Phase F the seam is
+  > **asynchronous**: the Rust side awaits the JS callback's returned `Promise` via
+  > `call_async::<Promise<T>>(..).await?.await?`. ADR 0004 is the authority for the
+  > boundary contract.
 - Agent config is threaded across the boundary as a serializable `RustAgentConfig`
   (provider, model, resolved system-prompt string, tool names, max iterations,
   approval settings, output channel, per-tool JS execute bindings) via

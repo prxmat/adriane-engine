@@ -14,6 +14,7 @@ pub mod gemini;
 pub mod mock;
 pub mod model_policy;
 pub mod openai_compatible;
+pub mod redactor;
 pub mod types;
 
 pub use anthropic::{
@@ -30,6 +31,7 @@ pub use gemini::{
 };
 pub use mock::MockAdapter;
 pub use model_policy::{ModelChoice, ModelPolicy, ModelTier};
+pub use redactor::{HttpPiiRedactor, NoopPiiRedactor, PiiRedactor, RedactingGateway};
 pub use openai_compatible::{
     build_request_body as build_openai_request_body, HttpPort, OpenAiChatResponse,
     OpenAiCompatibleAdapter, OpenAiCompatiblePort, RawChoice, RawFunctionCall, RawMessage,

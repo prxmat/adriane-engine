@@ -28,7 +28,7 @@ const EnvironmentSchema = z.object({
    * routes are reachable via AUTH_DISABLED there), but REQUIRED and non-empty everywhere
    * else — see the fail-secure superRefine below.
    */
-  WORKER_TOKEN: z.string().min(1).optional(),
+  WORKER_TOKEN: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(1).optional()),
   OPENAI_API_KEY: z.string().min(1).optional(),
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
   MISTRAL_API_KEY: z.string().min(1).optional(),
