@@ -113,9 +113,21 @@ name = "adriane-graph-runtime"
 version = "0.2.0"
 dependencies = [
  "adriane-graph-core",
+ "futures-util",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "adriane-knowledge"
+version = "0.2.0"
+dependencies = [
+ "adriane-okf",
+ "async-trait",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -180,6 +192,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "adriane-okf"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

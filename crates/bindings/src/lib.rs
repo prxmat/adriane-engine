@@ -36,6 +36,7 @@ use adriane_graph_adriane::compile_graph_yaml;
 use adriane_graph_core::{validate_graph, GraphDefinition};
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction};
 use napi_derive::napi;
+use serde_json::Value;
 
 /// A JS callback taking one string argument. Declared as a napi `ThreadsafeFunction`
 /// (which is `Send + Sync`) so the async run future can capture it across `.await`
@@ -125,4 +126,36 @@ pub async fn engine_approve_and_resume(
 ) -> napi::Result<String> {
     let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
     bridge::run(spec_json, callbacks, bridge::Entry::Approve).await
+}
+
+/// Deliver an external signal to a suspended run, then resume it. `signalName` is the
+/// signal a `waitForSignal` node is blocked on; `payloadJson` is its payload (injected
+/// into the run's `__signals[signalName]` channel). The run advances PAST the waiting
+/// node. `specJson.state` carries the serialized suspended `GraphState`; callbacks are
+/// the same as [`engine_run`].
+#[napi(
+    ts_args_type = "specJson: string, signalName: string, payloadJson: string, onNode: (payloadJson: string) => string | Promise<string>, onCondition: (payloadJson: string) => boolean | string | Promise<boolean | string>, onEvent: (payloadJson: string) => void",
+    ts_return_type = "Promise<string>"
+)]
+pub async fn engine_signal(
+    spec_json: String,
+    signal_name: String,
+    payload_json: String,
+    on_node: StringCallback,
+    on_condition: StringCallback,
+    on_event: StringCallback,
+) -> napi::Result<String> {
+    let payload: Value = serde_json::from_str(&payload_json).map_err(|error| {
+        napi::Error::from_reason(format!("invalid signal payload JSON: {error}"))
+    })?;
+    let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
+    bridge::run(
+        spec_json,
+        callbacks,
+        bridge::Entry::Signal {
+            name: signal_name,
+            payload,
+        },
+    )
+    .await
 }

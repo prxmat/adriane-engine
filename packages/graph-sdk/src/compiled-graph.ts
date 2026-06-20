@@ -80,12 +80,25 @@ export type CompiledGraphParts = {
    * graphs with no component nodes.
    */
   componentConfigs?: Map<string, RustComponentConfig>;
+  /**
+   * Child graphs that `subgraph`-type nodes resolve into (their node handlers /
+   * conditions / agent / component configs are already merged into the maps above, by
+   * global node id). Carried to the Rust engine as `EngineSpec.subgraphs` and to the TS
+   * engine as a `subgraphResolver`. Empty for graphs with no subgraph nodes.
+   */
+  subgraphs?: GraphDefinition[];
 };
 
 /** Options accepted by {@link CompiledGraph.run} / {@link CompiledGraph.stream}. */
 export type RunOptions = {
   /** Provide a stable run id (e.g. to correlate with an external system). */
   runId?: RunId;
+  /**
+   * Pre-queue dynamic-message inputs (`send`) before the run: per node id, a FIFO list
+   * each consumed by that node's next execution via the reserved `__injected` channel
+   * (read it with {@link import("./send.js").readInjected}). The map-reduce seam.
+   */
+  inbox?: Record<string, unknown[]>;
 };
 
 /**
@@ -165,12 +178,23 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     this.checkpointer = new InMemoryCheckpointer();
     this.eventBus = new InMemoryEventBus();
 
+    // Resolve subgraph nodes (TS engine path): child runs share these registries, so
+    // their handlers/conditions are already in the maps above; the resolver just maps a
+    // subgraphId to its GraphDefinition.
+    const subgraphsById = new Map<string, GraphDefinition>(
+      (parts.subgraphs ?? []).map((graph) => [String(graph.id), graph])
+    );
+
     this.runtime = new GraphRuntime({
       graph: parts.definition,
       nodeRegistry,
       conditionRegistry,
       checkpointer: this.checkpointer,
-      eventBus: this.eventBus
+      eventBus: this.eventBus,
+      subgraphResolver:
+        subgraphsById.size === 0
+          ? undefined
+          : (graphId) => subgraphsById.get(String(graphId))
     });
 
     this.rustRunner = this.maybeCreateRustRunner(parts);
@@ -258,6 +282,7 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
 
     const runnerParts: RustRunnerParts<ChannelValues> = {
       definition: parts.definition,
+      subgraphs: parts.subgraphs ?? [],
       nodeFns: this.buildNodeFns(jsHandlerNodeIds, parts.handlers),
       toolFns,
       conditions: this.buildConditionFns(parts.conditions),
@@ -332,11 +357,21 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   ): Promise<TypedGraphState<TState>> {
     const runId = options?.runId ?? generateRunId();
     if (this.rustRunner !== null) {
-      const state = await this.rustRunner.run(runId, initialData as Record<string, unknown>);
+      const state = await this.rustRunner.run(
+        runId,
+        initialData as Record<string, unknown>,
+        options?.inbox ?? {}
+      );
       this.captureSuspension(state);
       return state as unknown as TypedGraphState<TState>;
     }
     warnTsEngineOnce();
+    // TS fallback: pre-queue the inbox onto the in-process runtime before starting.
+    for (const [nodeId, inputs] of Object.entries(options?.inbox ?? {})) {
+      for (const input of inputs) {
+        await this.runtime.send(runId, nodeId as NodeId, input);
+      }
+    }
     const state = await this.runtime.start(runId, initialData);
     return state as TypedGraphState<TState>;
   }
@@ -387,6 +422,33 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     const names = [...new Set(options.approvedTools)].sort();
     await this.runtime.updateState(runId, { [APPROVED_TOOLS_CHANNEL]: names });
     return this.resume(runId);
+  }
+
+  /**
+   * Deliver an external signal to a run suspended on a `waitForSignal` node, then
+   * resume it: the payload is injected into the `__signals` channel under `name` and
+   * the run advances past the waiting node. The seam a control plane uses to wake a
+   * run on an external event (a webhook, a message, an approval-out-of-band).
+   *
+   * Durable timers + external signals run on the **Rust engine** (the production
+   * runtime); the in-process TypeScript fallback does not model them, so this throws
+   * on the TS path. Run with the native addon (or `ADRIANE_SDK_ENGINE=rust`).
+   */
+  public async signal(
+    runId: RunId,
+    name: string,
+    payload?: unknown
+  ): Promise<TypedGraphState<TState>> {
+    if (this.rustRunner === null) {
+      throw new Error(
+        "CompiledGraph.signal requires the Rust engine (durable timers/signals are not " +
+          "supported on the in-process TypeScript fallback). Install @adriane-ai/napi."
+      );
+    }
+    const suspended = this.requireSuspendedState(runId);
+    const state = await this.rustRunner.signal(suspended, name, payload);
+    this.captureSuspension(state);
+    return state as unknown as TypedGraphState<TState>;
   }
 
   /**
@@ -444,9 +506,16 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
 
   /**
    * Stream events as the graph executes. See {@link StreamMode} for the available
-   * shapes. The Rust engine has no incremental stream surface yet, so when running on
-   * Rust this drives a full run and yields a single terminal `state_value`. On the TS
-   * engine it streams natively.
+   * shapes. On the TS engine all four modes stream natively. On the **Rust engine** the
+   * modes are projected — incrementally — over the run-event feed that already crosses
+   * napi:
+   * - `updates` — a `state_update` per node completion (`delta` = the node's output).
+   * - `values` — a full `state_value` per node completion, accumulated by replaying the
+   *   node deltas through the channel reducers (the SDK mirrors the engine's reducers),
+   *   plus a final authoritative `state_value` from the resolved run.
+   * - `messages` — a `message_delta` per new entry appended to the `messages` channel
+   *   (message-level; token-level deltas need gateway token streaming — still deferred).
+   * - `debug` — every run-lifecycle event wrapped as a `debug` payload.
    */
   public stream(
     initialData: InitialData<TState>,
@@ -455,20 +524,151 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   ): AsyncIterable<StreamEvent> {
     const runId = options?.runId ?? generateRunId();
     if (this.rustRunner !== null) {
-      return this.streamViaRust(runId, initialData);
+      return this.streamViaRust(runId, initialData, mode);
     }
     warnTsEngineOnce();
     return this.runtime.stream(runId, initialData, mode);
   }
 
-  /** Single-shot stream for the Rust path: run to terminal state, emit it once. */
+  /** Seed a running channel map from the graph's channel defaults + the run's input. */
+  private seedChannels(initialData: InitialData<TState>): Record<string, unknown> {
+    const running: Record<string, unknown> = {};
+    for (const [name, def] of Object.entries(this.definition.channels)) {
+      running[name] = (initialData as Record<string, unknown>)[name] ?? def.default ?? null;
+    }
+    for (const [key, value] of Object.entries(initialData as Record<string, unknown>)) {
+      if (!(key in running)) {
+        running[key] = value;
+      }
+    }
+    return running;
+  }
+
+  /** Apply a node delta to the running channels via the declared reducers (engine parity). */
+  private applyDelta(running: Record<string, unknown>, delta: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(delta)) {
+      const reducer = this.definition.channels[key]?.reducer ?? "replace";
+      if (reducer === "append") {
+        const current = running[key];
+        const existing = Array.isArray(current) ? current : current == null ? [] : [current];
+        running[key] = Array.isArray(value) ? [...existing, ...value] : [...existing, value];
+      } else if (reducer === "merge" && value !== null && typeof value === "object" && !Array.isArray(value)) {
+        const current = running[key];
+        const base =
+          current !== null && typeof current === "object" && !Array.isArray(current)
+            ? (current as Record<string, unknown>)
+            : {};
+        running[key] = { ...base, ...(value as Record<string, unknown>) };
+      } else {
+        running[key] = value;
+      }
+    }
+  }
+
+  /**
+   * Drive the Rust run and project its forwarded run-event feed into {@link StreamEvent}s,
+   * incrementally for every mode. Events arrive via the runner's subscriber while the run
+   * promise is in flight; a small wake/queue interleaves them with the run's completion.
+   */
   private async *streamViaRust(
     runId: RunId,
-    initialData: InitialData<TState>
+    initialData: InitialData<TState>,
+    mode: StreamMode
   ): AsyncIterable<StreamEvent> {
-    const state = await this.rustRunner!.run(runId, initialData as Record<string, unknown>);
-    this.captureSuspension(state);
-    yield { type: "state_value", state: state as unknown as GraphState };
+    const queue: StreamEvent[] = [];
+    let notify: (() => void) | null = null;
+    const wake = (): void => {
+      const resume = notify;
+      notify = null;
+      resume?.();
+    };
+
+    // For `values`/`messages` we accumulate channel state across node deltas.
+    const running = this.seedChannels(initialData);
+    let seenMessages = Array.isArray(running.messages) ? running.messages.length : 0;
+
+    const shape = (event: RunEvent): StreamEvent[] => {
+      if (event.type === "node_completed") {
+        const delta = (event.output ?? {}) as Record<string, unknown>;
+        if (mode === "updates") {
+          return [{ type: "state_update", delta, nodeId: event.nodeId }];
+        }
+        this.applyDelta(running, delta);
+        if (mode === "values") {
+          return [{ type: "state_value", state: this.syntheticState(runId, event.nodeId, running) }];
+        }
+        if (mode === "messages") {
+          const messages = Array.isArray(running.messages) ? running.messages : [];
+          const fresh = messages.slice(seenMessages);
+          seenMessages = messages.length;
+          return fresh.flatMap((message) => messageDeltas(message, event.nodeId));
+        }
+      }
+      if (mode === "debug") {
+        const nodeId = ("nodeId" in event ? event.nodeId : ("" as NodeId)) as NodeId;
+        return [{ type: "debug", payload: event, nodeId }];
+      }
+      return [];
+    };
+
+    const unsubscribe = this.rustRunner!.subscribe((event) => {
+      const shaped = shape(event);
+      if (shaped.length > 0) {
+        queue.push(...shaped);
+        wake();
+      }
+    });
+
+    let done = false;
+    const runPromise = this.rustRunner!.run(runId, initialData as Record<string, unknown>, {})
+      .then((state) => {
+        this.captureSuspension(state);
+        return state;
+      })
+      .finally(() => {
+        done = true;
+        wake();
+      });
+
+    try {
+      for (;;) {
+        while (queue.length > 0) {
+          yield queue.shift() as StreamEvent;
+        }
+        if (done) {
+          break;
+        }
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+        });
+      }
+      const finalState = await runPromise;
+      // A final authoritative snapshot (carries engine-internal channels the accumulator
+      // can't see, e.g. __suspend) — only for `values`.
+      if (mode === "values") {
+        yield { type: "state_value", state: finalState as unknown as GraphState };
+      }
+    } finally {
+      unsubscribe();
+    }
+  }
+
+  /** A channels-only synthetic GraphState for a `values` stream step. */
+  private syntheticState(
+    runId: RunId,
+    nodeId: NodeId,
+    channels: Record<string, unknown>
+  ): GraphState {
+    return {
+      runId,
+      graphId: this.definition.id,
+      currentNodeId: nodeId,
+      status: "running",
+      channels: { ...channels },
+      version: 0,
+      createdAt: "",
+      updatedAt: ""
+    };
   }
 
   /** Subscribe to the run-event lifecycle stream. Returns an unsubscribe function. */
@@ -539,6 +739,37 @@ const syntheticContext = (): NodeExecutionContext =>
  * feature; build conditional edges instead). `null` / primitives yield an empty
  * update, matching Rust's tolerant `parse_update`.
  */
+/**
+ * Project a `messages`-channel entry into stream events for the `messages` mode: a
+ * `message_delta` for string content, and a `tool_call` per tool call. Message-level
+ * (one delta per whole message) — token-level deltas need gateway token streaming.
+ */
+const messageDeltas = (message: unknown, nodeId: NodeId): StreamEvent[] => {
+  if (message === null || typeof message !== "object") {
+    return [];
+  }
+  const msg = message as { id?: unknown; content?: unknown; toolCalls?: unknown };
+  const out: StreamEvent[] = [];
+  const messageId = typeof msg.id === "string" ? msg.id : "";
+  if (typeof msg.content === "string" && msg.content.length > 0) {
+    out.push({ type: "message_delta", delta: msg.content, nodeId, messageId });
+  }
+  if (Array.isArray(msg.toolCalls)) {
+    for (const call of msg.toolCalls) {
+      if (call !== null && typeof call === "object") {
+        const c = call as { id?: unknown; name?: unknown; args?: unknown; input?: unknown };
+        out.push({
+          type: "tool_call",
+          toolId: typeof c.id === "string" ? c.id : typeof c.name === "string" ? c.name : "",
+          input: c.args ?? c.input ?? null,
+          nodeId
+        });
+      }
+    }
+  }
+  return out;
+};
+
 const toUpdateObject = (value: unknown): Record<string, unknown> => {
   if (value === null || typeof value !== "object") {
     return {};

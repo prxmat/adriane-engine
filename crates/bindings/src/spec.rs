@@ -87,6 +87,18 @@ pub struct ApprovedTool {
 #[serde(rename_all = "camelCase")]
 pub struct EngineSpec {
     pub graph: GraphDefinition,
+    /// Child graphs that `subgraph`-type nodes resolve into, keyed by their own
+    /// graph id. Their node handlers / agent / component configs are flattened into
+    /// the same `jsNodeIds` / `agents` / `componentNodes` maps (by global node id),
+    /// and their conditional edges into the same condition registry — so the bridge
+    /// registers them alongside the parent's. Empty for a graph with no subgraphs.
+    #[serde(default)]
+    pub subgraphs: Vec<GraphDefinition>,
+    /// Dynamic-message inbox to pre-queue before the run: per node id, a FIFO list of
+    /// inputs (`send`). Each is consumed by that node's next execution via the reserved
+    /// `__injected` channel. Empty for runs that don't use `send`.
+    #[serde(default)]
+    pub inbox: BTreeMap<String, Vec<Value>>,
     #[serde(default)]
     pub run_id: Option<String>,
     #[serde(default)]
@@ -240,6 +252,35 @@ mod tests {
         let agent = spec.agents.get("assistant").expect("agent present");
         assert_eq!(agent.tier, Some(ModelTier::Fast));
         assert!(agent.model.is_none());
+    }
+
+    #[test]
+    fn subgraphs_default_to_empty_and_round_trip_child_definitions() {
+        // Omitted → empty (an ordinary graph with no subgraph nodes).
+        let spec: EngineSpec =
+            serde_json::from_value(json!({ "graph": minimal_graph_json() })).expect("spec parses");
+        assert!(spec.subgraphs.is_empty());
+
+        // Present → each child GraphDefinition is carried verbatim, keyed elsewhere by
+        // its own id. The bridge flattens child node ids into `jsNodeIds`/`agents`.
+        let child = json!({
+            "id": "child",
+            "version": "0.0.0",
+            "name": "child",
+            "channels": {},
+            "nodes": [{ "id": "c1", "type": "action", "label": "c1" }],
+            "edges": [],
+            "entryNodeId": "c1"
+        });
+        let spec: EngineSpec = serde_json::from_value(json!({
+            "graph": minimal_graph_json(),
+            "subgraphs": [child],
+            "jsNodeIds": ["a", "c1"]
+        }))
+        .expect("spec parses");
+        assert_eq!(spec.subgraphs.len(), 1);
+        assert_eq!(spec.subgraphs[0].id.0, "child");
+        assert_eq!(spec.js_node_ids, vec!["a".to_owned(), "c1".to_owned()]);
     }
 
     #[test]

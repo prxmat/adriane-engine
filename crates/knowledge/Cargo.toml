@@ -1,0 +1,15 @@
+[package]
+name = "adriane-knowledge"
+description = "Knowledge base + knowledge graph model, pure graph ops, and a KnowledgeStore seam (Rust port of @adriane-ai/knowledge)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+adriane-okf = { path = "../okf" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

@@ -23,8 +23,8 @@ pub struct Interrupt {
 }
 
 /// What a node returns: a partial channel update, optionally overriding routing,
-/// an interrupt that suspends the run, or a failure that triggers the node's
-/// retry policy.
+/// an interrupt that suspends the run, a durable timer / signal wait, or a failure
+/// that triggers the node's retry policy.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NodeOutput {
     pub update: BTreeMap<String, Value>,
@@ -36,6 +36,19 @@ pub struct NodeOutput {
     /// advance, and the runtime retries per the node's `retryPolicy` (the TS
     /// analogue of a handler throwing).
     pub failure: Option<String>,
+    /// Durable timer: when set, the run applies this node's update, then SUSPENDS until
+    /// an external scheduler resumes it — `wake_at` (an opaque deadline string, e.g.
+    /// ISO-8601 / epoch-millis) is **data**, the engine never reads a clock or sleeps.
+    /// Unlike [`Interrupt`], resume ADVANCES past this node (a one-shot sleep, like a
+    /// gate opening). The embedder's scheduler (the control-plane worker) reads `wake_at`
+    /// from the suspended run and calls `resume` at that time.
+    pub sleep_until: Option<String>,
+    /// External signal wait: when set, the run applies this node's update, then SUSPENDS
+    /// awaiting a named signal. [`GraphRuntime::resume_with_signal`] injects the signal's
+    /// payload and advances past this node. Combine with [`Self::sleep_until`] for a
+    /// signal-or-timeout (whichever resume fires first; downstream inspects which channel
+    /// was populated).
+    pub wait_for_signal: Option<String>,
 }
 
 impl NodeOutput {
@@ -64,6 +77,36 @@ impl NodeOutput {
     pub fn failure(reason: impl Into<String>) -> Self {
         NodeOutput {
             failure: Some(reason.into()),
+            ..NodeOutput::default()
+        }
+    }
+
+    /// A durable-timer output: suspend until `wake_at`, then advance. `wake_at` is an
+    /// opaque deadline (the engine never reads a clock); the embedder's scheduler
+    /// resumes the run at that time.
+    pub fn sleep(wake_at: impl Into<String>) -> Self {
+        NodeOutput {
+            sleep_until: Some(wake_at.into()),
+            ..NodeOutput::default()
+        }
+    }
+
+    /// A signal-wait output: suspend until a `resume_with_signal(name, payload)`, then
+    /// advance with the payload injected into the `__signals` channel.
+    pub fn wait_for_signal(name: impl Into<String>) -> Self {
+        NodeOutput {
+            wait_for_signal: Some(name.into()),
+            ..NodeOutput::default()
+        }
+    }
+
+    /// A signal-OR-timeout output: suspend awaiting `name`, but also wake at `wake_at`
+    /// if the signal never arrives. Downstream inspects whether the signal channel was
+    /// populated to tell which fired.
+    pub fn wait_for_signal_or_timeout(name: impl Into<String>, wake_at: impl Into<String>) -> Self {
+        NodeOutput {
+            wait_for_signal: Some(name.into()),
+            sleep_until: Some(wake_at.into()),
             ..NodeOutput::default()
         }
     }

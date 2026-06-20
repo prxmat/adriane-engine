@@ -23,6 +23,20 @@ export type { CreateGraphOptions, ChannelInput, NodeInput } from "./builder.js";
 export { CompiledGraph } from "./compiled-graph.js";
 export type { CompiledGraphParts, RunOptions, ApproveAndResumeOptions } from "./compiled-graph.js";
 
+export {
+  sleepUntil,
+  waitForSignal,
+  readSuspendMeta,
+  readSignal,
+  SLEEP_UNTIL_KEY,
+  WAIT_FOR_SIGNAL_KEY,
+  SUSPEND_META_KEY,
+  SIGNALS_KEY
+} from "./durable.js";
+export type { SuspendMeta } from "./durable.js";
+
+export { readInjected, INJECTED_KEY } from "./send.js";
+
 export { exampleGraphs } from "./example-graphs.js";
 export type { ExampleGraph } from "./example-graphs.js";
 
