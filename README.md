@@ -1,5 +1,10 @@
 # Adriane
 
+[![CI](https://github.com/prxmat/adriane-engine/actions/workflows/unit.yml/badge.svg)](https://github.com/prxmat/adriane-engine/actions/workflows/unit.yml)
+[![Rust](https://github.com/prxmat/adriane-engine/actions/workflows/rust.yml/badge.svg)](https://github.com/prxmat/adriane-engine/actions/workflows/rust.yml)
+[![CodeQL](https://github.com/prxmat/adriane-engine/actions/workflows/codeql.yml/badge.svg)](https://github.com/prxmat/adriane-engine/actions/workflows/codeql.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 **The open framework for stateful, resumable agent graphs — with a governed studio on top.**
 
 Adriane orchestrates agents, tools, human-approval gates, artifacts and
@@ -8,7 +13,7 @@ long-running workflows as a **graph**. The execution engine is written in **Rust
 Every run is deterministic by default, checkpointed after every step, and resumable
 from where it stopped — including across process restarts and human approvals.
 
-Think of it the way [Haystack](https://haystack.deepset.ai/) splits its world:
+Adriane is split in two — an open framework and a commercial studio built on it:
 
 | | Adriane |
 | --- | --- |
@@ -85,7 +90,7 @@ pnpm --filter @adriane-ai/graph-sdk example:startup   # Advanced — idea → sh
 pnpm --filter @adriane-ai/graph-sdk example:finance   # Advanced — optimisation des flux finance (export Sage)
 ```
 
-See the Haystack-style tutorials index in
+See the tutorials index in
 [`packages/graph-sdk/examples/README.md`](packages/graph-sdk/examples/README.md). Channel value
 types flow through the builder, so handler state and the result of `run`/`resume`
 are fully typed with no manual annotation.
