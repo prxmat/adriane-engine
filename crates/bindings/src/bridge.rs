@@ -35,9 +35,9 @@ use adriane_graph_runtime::{
     InMemoryConditionRegistry, InMemoryNodeRegistry, NodeOutput, NodeRegistry, RunEvent,
 };
 use adriane_llm_gateway::{
-    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpPiiRedactor, LlmGateway, LlmProvider,
-    LlmResponse, LlmToolCall, LlmUsage, MockAdapter, ModelChoice, ModelPolicy,
-    OpenAiCompatibleAdapter, RedactingGateway,
+    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort, HttpGeminiPort,
+    HttpPiiRedactor, LlmGateway, LlmProvider, LlmResponse, LlmToolCall, LlmUsage, MockAdapter,
+    ModelChoice, ModelPolicy, OpenAiCompatibleAdapter, RedactingGateway,
 };
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -382,7 +382,7 @@ fn build_agent_handler(
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
     // mistral-only env -> mistral-small-latest through the Mistral adapter).
     let resolved = resolve_agent_model(agent_spec);
-    let gateway = wrap_with_redactor(build_gateway(agent_spec, &resolved));
+    let gateway = wrap_with_redactor(build_gateway(agent_spec, &resolved, &spec.provider_keys));
 
     let approval_tools: HashSet<&str> = agent_spec
         .approval_tool_names
@@ -501,7 +501,11 @@ fn resolve_agent_model(agent_spec: &AgentSpec) -> ModelChoice {
 /// The resolved model (when non-empty) is threaded in as the adapter's default model.
 /// If the chosen real provider's credentials are not actually present in env, the
 /// build falls back to the mock so a run still completes deterministically offline.
-fn build_gateway(agent_spec: &AgentSpec, resolved: &ModelChoice) -> Arc<DefaultLlmGateway> {
+fn build_gateway(
+    agent_spec: &AgentSpec,
+    resolved: &ModelChoice,
+    keys: &BTreeMap<String, String>,
+) -> Arc<DefaultLlmGateway> {
     let mut gateway = DefaultLlmGateway::new();
 
     let model = if resolved.model.is_empty() {
@@ -510,69 +514,87 @@ fn build_gateway(agent_spec: &AgentSpec, resolved: &ModelChoice) -> Arc<DefaultL
         Some(resolved.model.clone())
     };
 
+    // Resolve a provider's API key: the control-plane-injected tenant key (ADR 0010) first,
+    // then the process env. So admin-managed per-tenant keys win, with env as the fallback.
+    let key_for = |provider: &str, env: &str| -> Option<String> {
+        keys.get(provider)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .or_else(|| std::env::var(env).ok().filter(|value| !value.is_empty()))
+    };
+
     let registered = match resolved.provider {
-        LlmProvider::Mistral => std::env::var("MISTRAL_API_KEY").ok().map(|key| {
+        LlmProvider::Mistral => key_for("mistral", "MISTRAL_API_KEY").map(|key| {
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::mistral(
                 Some(key),
                 model.clone(),
             )));
         }),
-        LlmProvider::Openai => std::env::var("OPENAI_API_KEY").ok().map(|key| {
+        LlmProvider::Openai => key_for("openai", "OPENAI_API_KEY").map(|key| {
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::openai(
                 Some(key),
                 model.clone(),
             )));
         }),
-        LlmProvider::Openrouter => std::env::var("OPENROUTER_API_KEY").ok().map(|key| {
+        LlmProvider::Openrouter => key_for("openrouter", "OPENROUTER_API_KEY").map(|key| {
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::openrouter(
                 Some(key),
                 model.clone(),
             )));
         }),
-        LlmProvider::Minimax => std::env::var("MINIMAX_API_KEY").ok().map(|key| {
+        LlmProvider::Minimax => key_for("minimax", "MINIMAX_API_KEY").map(|key| {
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::minimax(
                 Some(key),
                 model.clone(),
             )));
         }),
-        LlmProvider::Huggingface => std::env::var("HF_TOKEN").ok().map(|key| {
+        LlmProvider::Huggingface => key_for("huggingface", "HF_TOKEN").map(|key| {
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::huggingface(
                 Some(key),
                 model.clone(),
             )));
         }),
-        // The Anthropic adapter honours the request's model directly when it is a
-        // `claude-*` id (which the agent sets via `with_model`), so the adapter's own
-        // default model only matters as a non-Claude fallback — no override needed.
-        LlmProvider::Anthropic if std::env::var("ANTHROPIC_API_KEY").is_ok() => {
-            AnthropicAdapter::from_env().ok().map(|adapter| {
-                gateway.register_adapter(Box::new(adapter));
+        // The Anthropic adapter honours the request's model directly when it is a `claude-*` id.
+        LlmProvider::Anthropic => key_for("anthropic", "ANTHROPIC_API_KEY").map(|key| {
+            gateway.register_adapter(Box::new(AnthropicAdapter::new(Box::new(
+                HttpAnthropicPort::new(key),
+            ))));
+        }),
+        // Gemini likewise honours a `gemini-*` request model directly; also accepts GOOGLE_API_KEY.
+        LlmProvider::Google => key_for("google", "GEMINI_API_KEY")
+            .or_else(|| {
+                std::env::var("GOOGLE_API_KEY")
+                    .ok()
+                    .filter(|value| !value.is_empty())
             })
-        }
-        // The Gemini adapter likewise honours a `gemini-*` request model directly.
-        LlmProvider::Google
-            if std::env::var("GEMINI_API_KEY").is_ok()
-                || std::env::var("GOOGLE_API_KEY").is_ok() =>
-        {
-            GeminiAdapter::from_env().ok().map(|adapter| {
-                gateway.register_adapter(Box::new(adapter));
-            })
-        }
+            .map(|key| {
+                gateway.register_adapter(Box::new(GeminiAdapter::new(Box::new(
+                    HttpGeminiPort::new(key),
+                ))));
+            }),
         LlmProvider::Ollama if std::env::var("ADRIANE_USE_OLLAMA").as_deref() == Ok("1") => {
+            // `ADRIANE_OLLAMA_BASE_URL` targets a remote Ollama (e.g. a self-hosted Fly app at
+            // `http://adriane-ollama.internal:11434/v1`); unset → the adapter's localhost default.
+            let base_url = std::env::var("ADRIANE_OLLAMA_BASE_URL")
+                .ok()
+                .filter(|value| !value.is_empty());
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::ollama(
                 model.clone(),
-                None,
+                base_url,
             )));
             Some(())
         }
         LlmProvider::Lmstudio if std::env::var("ADRIANE_USE_LMSTUDIO").as_deref() == Ok("1") => {
+            let base_url = std::env::var("ADRIANE_LMSTUDIO_BASE_URL")
+                .ok()
+                .filter(|value| !value.is_empty());
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::lmstudio(
                 model.clone(),
-                None,
+                base_url,
             )));
             Some(())
         }
-        // `Mock`, or a real provider whose env credentials are missing.
+        // `Mock`, or a real provider whose credentials are missing.
         _ => None,
     };
 
@@ -846,7 +868,11 @@ mod tests {
             output_channel: None,
         };
 
-        let gateway = build_gateway(&agent_spec, &resolve_agent_model(&agent_spec));
+        let gateway = build_gateway(
+            &agent_spec,
+            &resolve_agent_model(&agent_spec),
+            &BTreeMap::new(),
+        );
         let mut registry = InMemoryToolRegistry::new();
         registry.register(
             ToolDefinition {
@@ -914,7 +940,11 @@ mod tests {
             approval_tool_names: vec!["refund".to_owned()],
             output_channel: None,
         };
-        let gateway = build_gateway(&agent_spec, &resolve_agent_model(&agent_spec));
+        let gateway = build_gateway(
+            &agent_spec,
+            &resolve_agent_model(&agent_spec),
+            &BTreeMap::new(),
+        );
 
         let mut registry = InMemoryToolRegistry::new();
         registry.register(
@@ -971,6 +1001,7 @@ mod tests {
             approved_tools: vec![],
             agents: [("assistant".to_owned(), agent_spec)].into_iter().collect(),
             component_nodes: BTreeMap::new(),
+            provider_keys: BTreeMap::new(),
             js_node_ids: vec![],
             js_tool_names: vec![],
         };
@@ -1112,7 +1143,7 @@ mod tests {
 
         // The gateway registers a real adapter (not the mock) for the resolved
         // Mistral provider, since MISTRAL_API_KEY is present.
-        let gateway = build_gateway(&agent_spec, &resolved);
+        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new());
         assert!(Arc::strong_count(&gateway) >= 1);
 
         // Restore env so other tests see a pristine environment.
@@ -1166,7 +1197,7 @@ mod tests {
             "no keys + tier should resolve to Mock"
         );
 
-        let gateway = build_gateway(&agent_spec, &resolved);
+        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new());
         let mut registry = InMemoryToolRegistry::new();
         registry.register(
             ToolDefinition {
@@ -1411,6 +1442,7 @@ mod tests {
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
+            provider_keys: BTreeMap::new(),
             js_node_ids: vec![],
             js_tool_names: vec![],
         };
@@ -1473,6 +1505,7 @@ mod tests {
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
+            provider_keys: BTreeMap::new(),
             js_node_ids: vec![],
             js_tool_names: vec![],
         };

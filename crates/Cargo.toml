@@ -3,7 +3,7 @@ resolver = "2"
 members = ["graph-core", "graph-runtime", "approval-engine", "llm-gateway", "agents-core", "components", "graph-adriane", "memory-store", "artifact-store", "callbacks", "lang-adriane", "observability", "runnable", "config", "rag-pipeline", "okf", "knowledge", "adriane-cli", "py-bindings", "bindings"]
 
 [workspace.package]
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 license = "Apache-2.0"
 

@@ -134,6 +134,13 @@ export type RustRunnerParts<TState extends ChannelValues> = {
   jsNodeIds: Set<string>;
   /** Tool names that are backed by a JS `execute` (in {@link toolFns}). */
   jsToolNames: Set<string>;
+  /**
+   * Per-provider API keys injected by the control plane (ADR 0010), keyed by provider
+   * slug (`openai`, `anthropic`, `mistral`, …). The Rust gateway resolves each agent's
+   * provider key tenant-key-first, then process env. Omitted for runs that rely purely
+   * on the host env (e.g. local dev, tests).
+   */
+  providerKeys?: Record<string, string>;
 };
 
 /** The `agents` map serialized for the wire (matches Rust `AgentSpec`, camelCase). */
@@ -193,6 +200,11 @@ type EngineSpecWire = {
   componentNodes: Record<string, ComponentNodeSpecWire>;
   jsNodeIds: string[];
   jsToolNames: string[];
+  /**
+   * Per-provider API keys (ADR 0010), keyed by provider slug. The Rust bridge resolves
+   * each agent's key tenant-key-first then env; an empty map means env-only resolution.
+   */
+  providerKeys: Record<string, string>;
 };
 
 /** The `RunOutcome` shape the Rust bridge serializes back. */
@@ -332,7 +344,13 @@ export class RustGraphRunner<TState extends ChannelValues> {
 
   private baseSpec(): Pick<
     EngineSpecWire,
-    "graph" | "subgraphs" | "agents" | "componentNodes" | "jsNodeIds" | "jsToolNames"
+    | "graph"
+    | "subgraphs"
+    | "agents"
+    | "componentNodes"
+    | "jsNodeIds"
+    | "jsToolNames"
+    | "providerKeys"
   > {
     return {
       graph: this.parts.definition,
@@ -340,7 +358,8 @@ export class RustGraphRunner<TState extends ChannelValues> {
       agents: this.buildAgentsWire(),
       componentNodes: this.buildComponentsWire(),
       jsNodeIds: [...this.parts.jsNodeIds],
-      jsToolNames: [...this.parts.jsToolNames]
+      jsToolNames: [...this.parts.jsToolNames],
+      providerKeys: this.parts.providerKeys ?? {}
     };
   }
 

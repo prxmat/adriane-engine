@@ -2,10 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "../.."
+    "rootDir": "../../.."
   },
   "include": [
     "src/**/*",
+    "../../../product/packages/db/src/index.ts",
+    "../../../product/packages/db/src/client.ts",
+    "../../../product/packages/db/src/pg-shim.d.ts",
+    "../../../product/packages/db/src/schema.ts",
     "../config/src/index.ts",
     "../config/src/errors.ts",
     "../config/src/env.ts",
