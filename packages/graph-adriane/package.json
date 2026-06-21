@@ -2,7 +2,7 @@
   "name": "@adriane-ai/graph-adriane",
   "private": true,
   "license": "Apache-2.0",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "[DEPRECATED — execution moved to the Rust engine in crates/; the TS engine remains only as a fallback when the @adriane-ai/napi native addon is absent] Adriane DSL compiler for graph YAML into a GraphDefinition (parser → ast → validator → transformer → compiler). Superseded by the crates/graph-adriane Rust crate.",
   "type": "module",
   "main": "./dist/index.js",

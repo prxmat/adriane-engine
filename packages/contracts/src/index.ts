@@ -1,4 +1,5 @@
 export * from "./error-envelope.js";
+export * from "./connectors.js";
 export * from "./graphs.js";
 export * from "./runs.js";
 export * from "./artifacts.js";
@@ -13,5 +14,6 @@ export * from "./catalog.js";
 export * from "./compliance.js";
 export * from "./knowledge.js";
 export * from "./node-metadata.js";
+export * from "./pii.js";
 export * from "./principal.js";
 export * from "./router.js";

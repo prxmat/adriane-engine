@@ -35,8 +35,9 @@ use adriane_graph_runtime::{
     InMemoryConditionRegistry, InMemoryNodeRegistry, NodeOutput, NodeRegistry, RunEvent,
 };
 use adriane_llm_gateway::{
-    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, LlmProvider, LlmResponse, LlmToolCall,
-    LlmUsage, MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter,
+    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpPiiRedactor, LlmGateway, LlmProvider,
+    LlmResponse, LlmToolCall, LlmUsage, MockAdapter, ModelChoice, ModelPolicy,
+    OpenAiCompatibleAdapter, RedactingGateway,
 };
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -381,7 +382,7 @@ fn build_agent_handler(
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
     // mistral-only env -> mistral-small-latest through the Mistral adapter).
     let resolved = resolve_agent_model(agent_spec);
-    let gateway = build_gateway(agent_spec, &resolved);
+    let gateway = wrap_with_redactor(build_gateway(agent_spec, &resolved));
 
     let approval_tools: HashSet<&str> = agent_spec
         .approval_tool_names
@@ -584,6 +585,16 @@ fn build_gateway(agent_spec: &AgentSpec, resolved: &ModelChoice) -> Arc<DefaultL
     }
 
     Arc::new(gateway)
+}
+
+/// Wrap the gateway with PII redaction when `ADRIANE_PII_REDACTOR_URL` is configured, so
+/// every intermediate LLM call is scrubbed before it reaches a provider (ADR 0008 phase 2).
+/// Unset → the bare gateway, so the OSS default stays inert (no redaction, no extra hop).
+fn wrap_with_redactor(inner: Arc<DefaultLlmGateway>) -> Arc<dyn LlmGateway> {
+    match HttpPiiRedactor::from_env() {
+        Some(redactor) => Arc::new(RedactingGateway::new(inner, Arc::new(redactor))),
+        None => inner,
+    }
 }
 
 /// A deterministic mock: emit a `tool_use` for each declared tool (so a gated tool

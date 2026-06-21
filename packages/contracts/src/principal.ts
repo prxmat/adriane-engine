@@ -32,6 +32,12 @@ export const LoginDtoSchema = z.object({
   password: z.string().min(1)
 });
 
+/** Accept an invitation: the signed invite token + the password the new member chooses. */
+export const AcceptInviteDtoSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8)
+});
+
 /** Issued session: the bearer token plus its absolute expiry (ISO 8601). */
 export const SessionDtoSchema = z.object({
   token: z.string().min(1),
@@ -41,4 +47,5 @@ export const SessionDtoSchema = z.object({
 export type TenantRole = z.infer<typeof TenantRoleSchema>;
 export type PrincipalDto = z.infer<typeof PrincipalDtoSchema>;
 export type LoginDto = z.infer<typeof LoginDtoSchema>;
+export type AcceptInviteDto = z.infer<typeof AcceptInviteDtoSchema>;
 export type SessionDto = z.infer<typeof SessionDtoSchema>;
