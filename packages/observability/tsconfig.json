@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "../.."
+    "rootDir": "../../.."
   },
   "include": [
     "src/**/*",
@@ -13,6 +13,7 @@
     "../agents-core/src/**/*",
     "../artifact-store/src/**/*",
     "../callbacks/src/**/*",
+    "../../../product/packages/db/src/**/*",
     "../config/src/**/*"
   ]
 }

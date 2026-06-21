@@ -1,3 +1,4 @@
+export * from "./admin.js";
 export * from "./error-envelope.js";
 export * from "./connectors.js";
 export * from "./graphs.js";
@@ -17,3 +18,4 @@ export * from "./node-metadata.js";
 export * from "./pii.js";
 export * from "./principal.js";
 export * from "./router.js";
+export * from "./search.js";

@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "../.."
+    "rootDir": "../../.."
   },
   "include": [
     "src/**/*",
@@ -16,9 +16,11 @@
     "../memory-store/src/**/*",
     "../callbacks/src/**/*",
     "../artifact-store/src/**/*",
-    "../config/src/**/*"
+    "../config/src/**/*",
+    "../../../product/packages/db/src/**/*"
   ],
   "exclude": [
-    "../*/src/**/*.test.ts"
+    "../*/src/**/*.test.ts",
+    "../../../product/packages/db/src/**/*.test.ts"
   ]
 }

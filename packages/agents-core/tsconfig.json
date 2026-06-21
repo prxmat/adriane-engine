@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "../.."
+    "rootDir": "../../.."
   },
   "include": [
     "src/**/*",
@@ -13,6 +13,10 @@
     "../graph-core/src/schemas.ts",
     "../graph-core/src/errors.ts",
     "../graph-core/src/validator.ts",
+    "../../../product/packages/db/src/index.ts",
+    "../../../product/packages/db/src/client.ts",
+    "../../../product/packages/db/src/pg-shim.d.ts",
+    "../../../product/packages/db/src/schema.ts",
     "../callbacks/src/**/*",
     "../llm-gateway/src/**/*",
     "../graph-runtime/src/**/*",

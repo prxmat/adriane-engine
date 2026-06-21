@@ -319,6 +319,15 @@ importers:
         specifier: ^3.2.6
         version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
 
+  packages/search:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
   plugin/mcp:
     dependencies:
       '@adriane-ai/approval-engine':

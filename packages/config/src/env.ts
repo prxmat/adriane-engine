@@ -32,6 +32,13 @@ const EnvironmentSchema = z.object({
   OPENAI_API_KEY: z.string().min(1).optional(),
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
   MISTRAL_API_KEY: z.string().min(1).optional(),
+  /**
+   * Resource search (ADR 0011). When set, the control plane indexes/queries graphs, agents and
+   * KB docs in Elasticsearch; unset = the in-memory fallback provider (dev/test/no-ES deploy).
+   * `ELASTICSEARCH_API_KEY` is the optional base64 `id:api_key` for managed ES (Elastic Cloud).
+   */
+  ELASTICSEARCH_URL: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(1).optional()),
+  ELASTICSEARCH_API_KEY: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(1).optional()),
   OTEL_ENDPOINT: z.string().min(1).optional(),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 }).superRefine((env, ctx) => {

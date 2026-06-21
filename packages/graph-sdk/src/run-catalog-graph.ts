@@ -90,6 +90,13 @@ export type RunCatalogGraphOptions = {
    * ungoverned (the legacy channel-only behaviour).
    */
   approvalEngine?: ApprovalEngine;
+  /**
+   * Per-provider API keys injected by the control plane (ADR 0010), keyed by provider
+   * slug (`openai`, `anthropic`, `mistral`, …). Threaded into the Rust `EngineSpec` so
+   * the gateway resolves each agent's key tenant-key-first then host env. Omit to rely
+   * purely on the host env (local dev, tests).
+   */
+  providerKeys?: Record<string, string>;
 };
 
 /** Raised when the native engine is unavailable — catalog graphs require it. */
@@ -168,7 +175,8 @@ const generateRunId = (): RunId => {
  */
 const assembleParts = (
   definition: GraphDefinition,
-  usesApprovalEngine: boolean
+  usesApprovalEngine: boolean,
+  providerKeys: Record<string, string> | undefined
 ): RustRunnerParts<ChannelValues> => {
   const components = new Map<string, RustComponentConfig>();
   const agents = new Map<string, RustAgentConfig>();
@@ -205,7 +213,8 @@ const assembleParts = (
     agents,
     components,
     jsNodeIds,
-    jsToolNames: new Set()
+    jsToolNames: new Set(),
+    providerKeys
   };
 };
 
@@ -223,7 +232,7 @@ export const runCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined)
+    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
@@ -247,7 +256,7 @@ export const runCatalogGraph = async (
 export const resumeCatalogGraph = async (
   definition: GraphDefinition,
   state: GraphState,
-  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine"> & {
+  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine" | "providerKeys"> & {
     /**
      * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
      * resolvedBy }` provenance. Passed straight through to the Rust bridge, which
@@ -264,7 +273,7 @@ export const resumeCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined)
+    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();

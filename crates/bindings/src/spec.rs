@@ -130,6 +130,13 @@ pub struct EngineSpec {
     /// Tool names whose `execute` is a JS closure.
     #[serde(default)]
     pub js_tool_names: Vec<String>,
+    /// Per-provider API keys the control plane injects for this run (ADR 0010), keyed by
+    /// provider id (`"openai" | "anthropic" | "mistral" | "google" | "openrouter" | ...`).
+    /// `bridge::build_gateway` uses a key here when present, falling back to the process env —
+    /// so admin-managed, per-tenant keys reach the engine without going through `.env`. Empty
+    /// for runs that rely on env (dev/self-host with deploy secrets).
+    #[serde(default)]
+    pub provider_keys: BTreeMap<String, String>,
 }
 
 /// What a run/resume/approve call returns to JS: the final state plus, when
