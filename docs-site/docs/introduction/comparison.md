@@ -99,16 +99,32 @@ On identical prompts, Adriane and LangGraph consume the **same input tokens** (e
 single node matches a bare native call exactly (1-node 1874 ≈ native monolith 1950 tokens). Token
 cost is a function of **prompts and model, never the engine**.
 
-Where Adriane helps on tokens is by making efficiency **the default**: built-in output trimming, terse
-output, inter-stage context trimming, prompt caching and per-stage **model tiering**. Measured single
-levers (Gemini): LLMLingua-style input compression **−50%**, context trim **−43% input**, terse output
-**−32% output (and −31% latency)**, prompt caching **~−24% input cost** on a repeated prefix. Stacked,
-they comfortably halve a prose-heavy workflow's tokens — and the developer gets them for free.
+Adriane ships token-optimisation levers you flip on (env / per-stage): **terse output**, **inter-stage
+context trimming**, **LLMLingua input compression**, **prompt caching**, and per-stage **model tiering**.
+Measured single-lever best cases (Gemini): LLMLingua input **−50%**, context trim **−43% input**, terse
+output **−32% output (−31% latency)**, caching **~−24% input cost** on a repeated prefix.
+
+But — measured honestly across all 8 workflows with **everything on**, the levers are **lossy and not
+free**. Total tokens fell **−19%**, yet an LLM judge found the optimised output **degraded on 5 of 8**:
+
+| workflow | tokens saved | output quality |
+| --- | --: | --- |
+| finance-analysis | −18% | ★★★★★ nothing lost |
+| code-migration | −30% | ★★★★ holds (end truncated) |
+| rag-doc-qa | +2% | ★★★★ fine |
+| observability | −19% | ★★★ lost impact/cost analysis |
+| support-triage | −17% | ★★★ lost empathy/tone |
+| contract-review | −28% | ★★ dropped a clause; maybe hallucinated numbers |
+| incident-postmortem | −31% | ★★ **factual errors** (lossy compression corrupted the timeline) |
+| product-flow (code) | −1% | ★★ code/UX scope lost |
+
+So the honest rule: apply terse to **prose-summary** stages, **never** lossy compression on **fact /
+legal / code** inputs, keep code verbatim, and validate quality per workflow. Efficiency is **opt-in, not
+a free default** — you trade tokens for substance and must choose where that trade is safe.
 
 > A 3-stage governed pipeline costs more tokens than a one-shot monolith (it re-sends context between
-> stages) — that is the price of per-stage checkpointing, governance and resume, a choice you make, not
-> engine overhead. With the built-in levers a governed Adriane pipeline still beats a naive staged
-> LangGraph workflow by ~31% on tokens.
+> stages) — the price of per-stage checkpointing, governance and resume, a choice you make, not engine
+> overhead. Reduce to a single node and Adriane matches the bare call exactly.
 
 ## When to choose Adriane
 
