@@ -132,6 +132,20 @@ describe("@adriane-ai/graph-sdk agent node — writeTodos durable channel (ADR 0
     expect(config.todosChannel).toBeUndefined();
   });
 
+  it("threads enableFs through toRustAgentConfig (ADR 0024 phase 2b)", () => {
+    const on = toRustAgentConfig("worker", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "Use the filesystem." },
+      enableFs: true
+    });
+    expect(on.enableFs).toBe(true);
+    const off = toRustAgentConfig("plain", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "No fs." }
+    });
+    expect(off.enableFs).toBeUndefined();
+  });
+
   it("carries todosChannel + ADR 0014 knobs on the persisted metadata.agent carrier", () => {
     // The persisted GraphDefinition must run identically on the catalog/Studio path,
     // so the metadata.agent carrier has to include these (otherwise they are dropped).

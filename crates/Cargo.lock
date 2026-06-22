@@ -185,7 +185,9 @@ version = "1.1.1"
 dependencies = [
  "adriane-agents-core",
  "adriane-approval-engine",
+ "adriane-artifact-store",
  "adriane-components",
+ "adriane-fs-backend",
  "adriane-graph-adriane",
  "adriane-graph-core",
  "adriane-graph-runtime",

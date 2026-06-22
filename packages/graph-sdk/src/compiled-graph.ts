@@ -17,6 +17,7 @@ import {
 
 import {
   type AgentApprovalBinding,
+  type FsPolicyRule,
   type RustAgentConfig
 } from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
@@ -84,6 +85,12 @@ export type CompiledGraphParts = {
    * engine as a `subgraphResolver`. Empty for graphs with no subgraph nodes.
    */
   subgraphs?: GraphDefinition[];
+  /**
+   * Per-path filesystem permission rules (ADR 0024 phase 2b) applied run-wide to every
+   * fs-enabled agent. Carried to the Rust engine as `EngineSpec.fsPolicy`. Empty/omitted
+   * = fail-closed read-only everywhere.
+   */
+  fsPolicy?: FsPolicyRule[];
 };
 
 /** Options accepted by {@link CompiledGraph.run} / {@link CompiledGraph.stream}. */
@@ -299,7 +306,8 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
       agents: agentConfigs,
       components: componentConfigs,
       jsNodeIds: jsHandlerNodeIds,
-      jsToolNames: new Set(toolFns.keys())
+      jsToolNames: new Set(toolFns.keys()),
+      fsPolicy: parts.fsPolicy ?? []
     };
     return tryCreateRustRunner<ChannelValues>(runnerParts);
   }
