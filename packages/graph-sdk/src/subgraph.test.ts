@@ -5,7 +5,7 @@ import { createGraph, rustEngineAvailable, type RunId, type StreamEvent } from "
 /**
  * Subgraph nesting + streaming through the SDK. The subgraph + streaming behaviour
  * runs end-to-end on the **Rust engine** (the only runtime — the TS fallback was
- * removed) when the native addon is present. ADR 0008.
+ * removed) when the native addon is present. ADR 0015.
  */
 
 /** Child graph that doubles its mapped-in `in` channel into `out`. */

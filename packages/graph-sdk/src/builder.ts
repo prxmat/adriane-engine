@@ -376,7 +376,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
    * **concurrently** on the Rust engine, then join at `joinAt`. Each branch executes
    * from the same pre-fan-out state snapshot and the branch updates are merged in the
    * declared `parallelTo` order (deterministic, regardless of which branch finishes
-   * first — ADR 0008). The `from` node runs first (its handler/agent), then its branches
+   * first — ADR 0015). The `from` node runs first (its handler/agent), then its branches
    * scatter; control resumes at `joinAt` once every branch completes.
    *
    * This is the supported way to run **N parallel LLM calls** (each branch an

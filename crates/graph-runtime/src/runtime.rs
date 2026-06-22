@@ -7,7 +7,7 @@
 //! suspend, default + conditional edges, channel reducers, DynamicInterrupt +
 //! `update_state`, fan-out → join (branches run CONCURRENTLY off a shared
 //! pre-fan-out snapshot, updates merged in declared order — deterministic; see
-//! ADR 0008), recursion limit, retries (`retryPolicy` —
+//! ADR 0015), recursion limit, retries (`retryPolicy` —
 //! backoff *timing* is deferred: the crate stays async-runtime-agnostic with no
 //! timer dependency, so `backoffMs` round-trips but no sleep happens between
 //! attempts), time-travel (`checkpoints` / `replay_from`), subgraphs (a
@@ -767,7 +767,7 @@ impl GraphRuntime {
 
         // Fan-out: run the parallel branches CONCURRENTLY, then continue at the
         // declared join node. Two invariants make this deterministic despite the
-        // concurrency (see ADR 0008):
+        // concurrency (see ADR 0015):
         //   1. Every branch handler is called with the SAME pre-fan-out snapshot —
         //      no branch observes another's update mid-flight (map-reduce, not a
         //      chain). This matches the TS `executeFanOut` semantics; the previous
@@ -1438,7 +1438,7 @@ mod tests {
     #[tokio::test]
     async fn fan_out_merges_branch_updates_in_declared_order() {
         // Two branches append to the same channel. The deterministic-merge invariant
-        // (ADR 0008) requires the result to fold in `parallel_to` order — b1 then b2 —
+        // (ADR 0015) requires the result to fold in `parallel_to` order — b1 then b2 —
         // no matter which branch future settles first.
         let mut nodes = InMemoryNodeRegistry::new();
         nodes.register(

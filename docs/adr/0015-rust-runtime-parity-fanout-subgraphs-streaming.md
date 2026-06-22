@@ -1,4 +1,7 @@
-# ADR 0008 — Rust runtime parity: concurrent fan-out, subgraphs, streaming over napi
+# ADR 0015 — Rust runtime parity: concurrent fan-out, subgraphs, streaming over napi
+
+> Renumbered from 0008 (number collided with the PII ADR, authored in parallel). Older code
+> comments / commits may still say "ADR 0008" for fan-out/subgraph/streaming — they mean this.
 
 - Status: Proposed
 - Date: 2026-06-20

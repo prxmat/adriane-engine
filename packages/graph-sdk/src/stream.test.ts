@@ -5,7 +5,7 @@ import type { Message, MessageId } from "@adriane-ai/graph-core";
 import { createGraph, rustEngineAvailable, type RunId, type StreamEvent } from "./index.js";
 
 /**
- * Incremental streaming over the Rust engine (ADR 0008): `values` accumulates a full
+ * Incremental streaming over the Rust engine (ADR 0015): `values` accumulates a full
  * snapshot per node via the channel reducers; `messages` emits a `message_delta` per new
  * `messages` entry. `updates`/`debug` covered in subgraph.test.ts.
  */
