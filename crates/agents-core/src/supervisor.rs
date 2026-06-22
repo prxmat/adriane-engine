@@ -123,12 +123,10 @@ impl SupervisorAgent {
             .complete(LlmRequest {
                 provider: self.provider,
                 model: self.model.clone(),
-                messages: vec![LlmMessage {
-                    role: "user".to_owned(),
-                    content: format!(
-                        "Objective: {objective}\nAgents:\n{candidates}\nReply with AGENT:<id> or FINISH"
-                    ),
-                }],
+                messages: vec![LlmMessage::text(
+                    "user",
+                    format!("Objective: {objective}\nAgents:\n{candidates}\nReply with AGENT:<id> or FINISH"),
+                )],
                 system: None,
                 tools: None,
                 max_tokens: None,

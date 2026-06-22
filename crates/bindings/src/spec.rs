@@ -45,6 +45,14 @@ pub struct AgentSpec {
     /// agents-core `DEFAULT_AGENT_OUTPUT_CHANNEL` (`agentResult`).
     #[serde(default)]
     pub output_channel: Option<String>,
+    /// Token-efficiency knobs (ADR 0014). `"terse"` appends a compact-output directive to
+    /// the system prompt (cuts output tokens on prose; lossy — not for code). `None` = off.
+    #[serde(default)]
+    pub output_style: Option<String>,
+    /// Cap (in chars) on the serialized `State` the agent injects into its first message —
+    /// don't re-feed an unbounded channel map. `None` = no cap.
+    #[serde(default)]
+    pub context_budget: Option<u32>,
 }
 
 /// A graph node backed by a native Rust component, keyed in

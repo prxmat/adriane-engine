@@ -113,14 +113,14 @@ impl Reranker for LlmReranker {
             let request = LlmRequest {
                 provider: LlmProvider::Openai,
                 model: "mock-reranker".to_string(),
-                messages: vec![LlmMessage {
-                    role: "user".to_string(),
-                    content: format!(
+                messages: vec![LlmMessage::text(
+                    "user",
+                    format!(
                         "Score relevance from 0 to 1.\nQuery: {}\nText: {}",
                         query,
                         result.chunk.content()
                     ),
-                }],
+                )],
                 system: None,
                 tools: None,
                 max_tokens: None,

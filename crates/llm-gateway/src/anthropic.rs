@@ -510,10 +510,7 @@ mod tests {
         LlmRequest {
             provider: LlmProvider::Anthropic,
             model: "claude-opus-4-8".to_owned(),
-            messages: vec![LlmMessage {
-                role: "user".to_owned(),
-                content: "Hi".to_owned(),
-            }],
+            messages: vec![LlmMessage::text("user", "Hi")],
             system: None,
             tools: None,
             max_tokens: None,
@@ -630,14 +627,8 @@ mod tests {
             model: "claude-haiku-4-5".to_owned(),
             system: Some("Base.".to_owned()),
             messages: vec![
-                LlmMessage {
-                    role: "system".to_owned(),
-                    content: "Extra rule.".to_owned(),
-                },
-                LlmMessage {
-                    role: "user".to_owned(),
-                    content: "Go".to_owned(),
-                },
+                LlmMessage::text("system", "Extra rule."),
+                LlmMessage::text("user", "Go"),
             ],
             ..base_request()
         };

@@ -155,6 +155,9 @@ type AgentSpecWire = {
   suspendForApproval: boolean;
   approvalToolNames: string[];
   outputChannel: string;
+  /** ADR 0014 token-efficiency knobs (camelCase → Rust AgentSpec `outputStyle`/`contextBudget`). */
+  outputStyle?: "terse";
+  contextBudget?: number;
 };
 
 /**
@@ -321,7 +324,9 @@ export class RustGraphRunner<TState extends ChannelValues> {
         maxIterations: config.maxIterations,
         suspendForApproval: config.suspendForApproval,
         approvalToolNames: config.approvalToolNames,
-        outputChannel: config.outputChannel
+        outputChannel: config.outputChannel,
+        outputStyle: config.outputStyle,
+        contextBudget: config.contextBudget
       };
     }
     return out;

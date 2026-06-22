@@ -4,9 +4,8 @@ import { createGraph, rustEngineAvailable, type RunId, type StreamEvent } from "
 
 /**
  * Subgraph nesting + streaming through the SDK. The subgraph + streaming behaviour
- * runs end-to-end on the **Rust engine** (the canonical runtime) when the native
- * addon is present, and a parity slice runs on the **TS engine** (forced) so the
- * feature holds on both paths. ADR 0008.
+ * runs end-to-end on the **Rust engine** (the only runtime — the TS fallback was
+ * removed) when the native addon is present. ADR 0008.
  */
 
 /** Child graph that doubles its mapped-in `in` channel into `out`. */
@@ -119,40 +118,5 @@ describeIfRust("@adriane-ai/graph-sdk — subgraphs + streaming (Rust engine)", 
     }
     expect(events.every((event) => event.type === "debug")).toBe(true);
     expect(events.length).toBeGreaterThan(0);
-  });
-});
-
-describe("@adriane-ai/graph-sdk — subgraphs (TS engine, parity)", () => {
-  withEngine("ts");
-
-  it("runs a subgraph node on the TS engine via the subgraph resolver", async () => {
-    const app = createGraph({ name: "parent-double-ts" })
-      .channel("x", { type: "number", default: 5 })
-      .channel("y", { type: "number", default: 0 })
-      .subgraph("sub", buildDoubler(), {
-        inputMapping: { in: "x" },
-        outputMapping: { y: "out" }
-      })
-      .compile();
-
-    expect(app.usesRustEngine).toBe(false);
-    const result = await app.run({ x: 5 }, { runId: "run_sub_ts" as RunId });
-    expect(result.status).toBe("completed");
-    expect(result.channels.y).toBe(10);
-  });
-
-  it("propagates a subgraph internal-gate suspension on the TS engine", async () => {
-    const app = createGraph({ name: "parent-gated-ts" })
-      .channel("result", { type: "string", default: "" })
-      .subgraph("sub", buildGatedChild(), { outputMapping: { result: "out" } })
-      .compile();
-
-    expect(app.usesRustEngine).toBe(false);
-    const suspended = await app.run({}, { runId: "run_sub_gate_ts" as RunId });
-    expect(suspended.status).toBe("suspended");
-
-    const resumed = await app.resume(suspended.runId);
-    expect(resumed.status).toBe("completed");
-    expect(resumed.channels.result).toBe("published");
   });
 });

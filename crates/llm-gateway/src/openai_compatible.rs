@@ -330,7 +330,32 @@ pub fn build_request_body(req: &LlmRequest, default_model: &str) -> Value {
     }
 
     for message in &req.messages {
-        messages.push(json!({ "role": message.role, "content": message.content }));
+        let mut m = Map::new();
+        m.insert("role".to_owned(), json!(message.role));
+        m.insert("content".to_owned(), json!(message.content));
+        // Assistant tool calls → OpenAI `tool_calls` (function `arguments` is a JSON string).
+        if let Some(calls) = &message.tool_calls {
+            m.insert(
+                "tool_calls".to_owned(),
+                Value::Array(
+                    calls
+                        .iter()
+                        .map(|c| {
+                            json!({
+                                "id": c.id,
+                                "type": "function",
+                                "function": { "name": c.name, "arguments": c.input.to_string() }
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        // Tool-result message → link it back to the assistant's call id.
+        if let Some(id) = &message.tool_call_id {
+            m.insert("tool_call_id".to_owned(), json!(id));
+        }
+        messages.push(Value::Object(m));
     }
 
     let mut body = Map::new();
@@ -528,10 +553,7 @@ mod tests {
         LlmRequest {
             provider: LlmProvider::Mistral,
             model: "mistral-small-latest".to_owned(),
-            messages: vec![LlmMessage {
-                role: "user".to_owned(),
-                content: "Hi".to_owned(),
-            }],
+            messages: vec![LlmMessage::text("user", "Hi")],
             system: None,
             tools: None,
             max_tokens: None,

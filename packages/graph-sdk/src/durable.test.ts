@@ -104,28 +104,3 @@ describeIfRust("@adriane-ai/graph-sdk — durable timers + signals (Rust engine)
     expect(resumed.channels.viaSignal).toBe(false);
   });
 });
-
-describe("@adriane-ai/graph-sdk — signal() is Rust-only", () => {
-  let saved: string | undefined;
-  beforeEach(() => {
-    saved = process.env.ADRIANE_SDK_ENGINE;
-    process.env.ADRIANE_SDK_ENGINE = "ts";
-  });
-  afterEach(() => {
-    if (saved === undefined) {
-      delete process.env.ADRIANE_SDK_ENGINE;
-    } else {
-      process.env.ADRIANE_SDK_ENGINE = saved;
-    }
-  });
-
-  it("throws a clear error when delivering a signal on the TS fallback", async () => {
-    const app = createGraph({ name: "signal-ts" })
-      .channel("ok", { type: "boolean", default: false })
-      .node("n", async () => ({ ok: true }))
-      .compile();
-
-    expect(app.usesRustEngine).toBe(false);
-    await expect(app.signal("whatever" as RunId, "approval", "x")).rejects.toThrow(/Rust engine/);
-  });
-});

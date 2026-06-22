@@ -35,9 +35,10 @@ use adriane_graph_runtime::{
     InMemoryConditionRegistry, InMemoryNodeRegistry, NodeOutput, NodeRegistry, RunEvent,
 };
 use adriane_llm_gateway::{
-    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort, HttpGeminiPort,
-    HttpPiiRedactor, LlmGateway, LlmProvider, LlmResponse, LlmToolCall, LlmUsage, MockAdapter,
-    ModelChoice, ModelPolicy, OpenAiCompatibleAdapter, RedactingGateway,
+    AnthropicAdapter, CompressingGateway, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort,
+    HttpGeminiPort, HttpPiiRedactor, HttpPromptCompressor, LlmGateway, LlmProvider, LlmResponse,
+    LlmToolCall, LlmUsage, MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter,
+    RedactingGateway,
 };
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -382,7 +383,11 @@ fn build_agent_handler(
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
     // mistral-only env -> mistral-small-latest through the Mistral adapter).
     let resolved = resolve_agent_model(agent_spec);
-    let gateway = wrap_with_redactor(build_gateway(agent_spec, &resolved, &spec.provider_keys));
+    let gateway = wrap_with_compressor(wrap_with_redactor(build_gateway(
+        agent_spec,
+        &resolved,
+        &spec.provider_keys,
+    )));
 
     let approval_tools: HashSet<&str> = agent_spec
         .approval_tool_names
@@ -419,11 +424,25 @@ fn build_agent_handler(
         .with_model(resolved.model.clone())
         .with_tools(Arc::new(registry));
 
-    if let Some(system) = &agent_spec.system {
-        agent = agent.with_system(system.clone());
+    // ADR 0014 terse: append a compact-output directive to the system prompt.
+    const TERSE_SUFFIX: &str = " Respond in a terse, telegraphic style: sentence fragments, no \
+        filler, no pleasantries. Preserve ALL technical substance, numbers, code and exact values.";
+    let terse = agent_spec.output_style.as_deref() == Some("terse");
+    let system = match (&agent_spec.system, terse) {
+        (Some(s), true) => Some(format!("{s}{TERSE_SUFFIX}")),
+        (Some(s), false) => Some(s.clone()),
+        (None, true) => Some(TERSE_SUFFIX.trim().to_owned()),
+        (None, false) => None,
+    };
+    if let Some(system) = system {
+        agent = agent.with_system(system);
     }
     if let Some(max) = agent_spec.max_iterations {
         agent = agent.with_max_iterations(max as usize);
+    }
+    // ADR 0014 trim: cap the serialized state injected into the agent's first message.
+    if let Some(budget) = agent_spec.context_budget {
+        agent = agent.with_context_budget(budget as usize);
     }
 
     let output_channel = agent_spec
@@ -615,6 +634,16 @@ fn build_gateway(
 fn wrap_with_redactor(inner: Arc<DefaultLlmGateway>) -> Arc<dyn LlmGateway> {
     match HttpPiiRedactor::from_env() {
         Some(redactor) => Arc::new(RedactingGateway::new(inner, Arc::new(redactor))),
+        None => inner,
+    }
+}
+
+/// Wrap the gateway with LLMLingua input compression when `ADRIANE_LLMLINGUA_URL` is set
+/// (ADR 0014): user-message content is shrunk before the provider call. Unset → the bare
+/// gateway (OSS default inert). Lossy — opt-in.
+fn wrap_with_compressor(inner: Arc<dyn LlmGateway>) -> Arc<dyn LlmGateway> {
+    match HttpPromptCompressor::from_env() {
+        Some(compressor) => Arc::new(CompressingGateway::new(inner, Arc::new(compressor))),
         None => inner,
     }
 }
@@ -866,6 +895,8 @@ mod tests {
             suspend_for_approval: false,
             approval_tool_names: vec![],
             output_channel: None,
+            output_style: None,
+            context_budget: None,
         };
 
         let gateway = build_gateway(
@@ -939,6 +970,8 @@ mod tests {
             suspend_for_approval: true,
             approval_tool_names: vec!["refund".to_owned()],
             output_channel: None,
+            output_style: None,
+            context_budget: None,
         };
         let gateway = build_gateway(
             &agent_spec,
@@ -1089,6 +1122,8 @@ mod tests {
             suspend_for_approval: false,
             approval_tool_names: vec![],
             output_channel: None,
+            output_style: None,
+            context_budget: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1135,6 +1170,8 @@ mod tests {
             suspend_for_approval: false,
             approval_tool_names: vec![],
             output_channel: None,
+            output_style: None,
+            context_budget: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1188,6 +1225,8 @@ mod tests {
             suspend_for_approval: false,
             approval_tool_names: vec![],
             output_channel: None,
+            output_style: None,
+            context_budget: None,
         };
 
         let resolved = resolve_agent_model(&agent_spec);
