@@ -83,6 +83,13 @@ export type AgentNodeConfig = {
    */
   todosChannel?: string;
   /**
+   * Opt this agent into the governed virtual filesystem tools (ADR 0024 phase 2b):
+   * `read_file`/`ls`/`glob`/`grep`/`write_file`/`edit_file`/`delete_file`/`move_file`,
+   * run-scoped over a versioned artifact store and enforced by the graph's
+   * {@link GraphBuilder.fsPolicy} (fail-closed read-only by default). Default off.
+   */
+  enableFs?: boolean;
+  /**
    * When true, the node suspends the whole run (a dynamic interrupt) the moment the
    * agent needs approval, instead of just flagging `requiresHumanReview`. Resume with
    * `CompiledGraph.approveAndResume(runId, { approvedTools })` to continue. Default false.
@@ -97,6 +104,16 @@ export type AgentNodeConfig = {
   approvalEngine?: ApprovalEngine;
   label?: string;
 };
+
+/** A filesystem permission verb (ADR 0024): `deny` < `read` < `gate` < `write`. */
+export type FsPermVerb = "deny" | "read" | "write" | "gate";
+
+/**
+ * A per-path filesystem permission rule (ADR 0024 phase 2b): a glob (`*` within a
+ * path segment, `**` across) mapped to a verb. Compiled into the run's fail-closed
+ * path policy ({@link GraphBuilder.fsPolicy}). An unmatched path resolves to `read`.
+ */
+export type FsPolicyRule = { glob: string; verb: FsPermVerb };
 
 /** Config for {@link GraphBuilder.toolNode}. */
 export type ToolNodeConfig = {
@@ -178,6 +195,8 @@ export type RustAgentConfig = {
   contextBudget?: number;
   /** ADR 0022/0023 — durable channel the `writeTodos` list is persisted into. */
   todosChannel?: string;
+  /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
+  enableFs?: boolean;
   /** JS-backed tool executes, one per tool in the registry. */
   toolBindings: RustToolBinding[];
   /**
@@ -264,6 +283,7 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
     outputStyle: config.outputStyle,
     contextBudget: config.contextBudget,
     todosChannel: config.todosChannel,
+    enableFs: config.enableFs,
     toolBindings: toolBindingsOf(config.tools),
     usesApprovalEngine: config.approvalEngine !== undefined
   };

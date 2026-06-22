@@ -186,6 +186,8 @@ export type {
   AgentApprovalBinding,
   AgentNodeConfig,
   AgentPromptSource,
+  FsPermVerb,
+  FsPolicyRule,
   RustAgentConfig,
   RustToolBinding,
   StreamAgentConfig,
