@@ -28,9 +28,14 @@ pub struct LlmMessage {
     /// provider sees a coherent function-calling transcript (no redundant re-calls).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<LlmToolCall>>,
-    /// Links a `role:"tool"` result back to the assistant tool call that produced it.
+    /// Links a `role:"tool"` result back to the assistant tool call that produced it
+    /// (the OpenAI / Anthropic id; Anthropic's `tool_result.tool_use_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Name of the tool a `role:"tool"` result answers — Gemini links its `functionResponse`
+    /// by function name, not by id, so the result must carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
 }
 
 impl LlmMessage {
@@ -41,6 +46,7 @@ impl LlmMessage {
             content: content.into(),
             tool_calls: None,
             tool_call_id: None,
+            tool_name: None,
         }
     }
 }

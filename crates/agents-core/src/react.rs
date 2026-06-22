@@ -190,6 +190,7 @@ impl ReActAgent {
                     content: content.clone(),
                     tool_calls: Some(tool_calls.clone()),
                     tool_call_id: None,
+                    tool_name: None,
                 });
                 for call in &tool_calls {
                     let outcome = self
@@ -305,6 +306,7 @@ impl ReActAgent {
                 content: output,
                 tool_calls: None,
                 tool_call_id: Some(id.to_owned()),
+                tool_name: Some(name.to_owned()),
             }),
             // Text protocol: no structured id — feed the observation back as user text.
             None => conversation.push(LlmMessage::text("user", format!("observation:{output}"))),

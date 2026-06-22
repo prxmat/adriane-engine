@@ -4,9 +4,10 @@
   OpenAI-compat path), P2 (prompt caching — Anthropic emits `cache_control`; all three adapters read
   cached-prompt tokens into `LlmUsage`), P3 (terse output via `AgentNodeConfig.outputStyle`), P4
   (context-budget via `AgentNodeConfig.contextBudget`), and the **LLMLingua input-compression seam**
-  (`compressor`, env-gated `ADRIANE_LLMLINGUA_URL`, −44% input verified). **Pending**: native
-  tool-transcript in `gemini.rs`/`anthropic.rs` (P1 covered only the OpenAI-compat adapter — the
-  native Gemini/Anthropic agent paths still use the legacy observation format) + the TS `LlmMessage`
+  (`compressor`, env-gated `ADRIANE_LLMLINGUA_URL`, −44% input verified). **Native Gemini transcript
+  done + validated** (`provider:"google"` → `gemini.rs` functionCall/functionResponse; `LlmMessage`
+  gained `tool_name` since Gemini links by function name). **Pending**: native Anthropic transcript
+  (needs the `AnthropicMessage` String→content-block refactor, deferred by design) + the TS `LlmMessage`
   mirror. Whole engine green (38 cargo suites, clippy clean, napi rebuilt).
 - Date: 2026-06-22
 - Deciders: Mathieu (owner)
