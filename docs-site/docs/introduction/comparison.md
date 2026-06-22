@@ -67,6 +67,49 @@ Python nodes, no streaming**). The full contract is in
 [one engine, two languages](/docs/sdk-parity/one-engine-two-languages). Read it before assuming
 Python can do everything TypeScript can — it can't, by design.
 
+## Benchmarks — speed & tokens
+
+Measured against **LangGraph.js** and **Haystack**, same machine, warmed, sequential. The Adriane
+engine runs on a Rust core; peers run on Node / Python. Reproduce with `benchmarks/run-all.sh` and
+`benchmarks/run-compare.sh`. The takeaway is **ratios and scaling**, not absolute milliseconds.
+
+### Orchestration overhead (no LLM)
+
+Pure per-node engine cost — scheduling, channel update, checkpoint:
+
+| framework | per node | runs/s | vs Adriane |
+| --- | --: | --: | --: |
+| **Adriane** (Rust) | **~44 µs** | 574 | 1.0× |
+| Haystack (Python) | ~103 µs | 243 | 2.4× heavier |
+| LangGraph.js (Node) | ~109 µs | 230 | 2.5× heavier |
+
+Per-feature vs LangGraph.js: chain **2.4×** lighter, suspend/resume **2.4×**, conditional 1.7×.
+
+### Real workflows are LLM-bound
+
+On 8 business workflows (same prompts, same model on both engines), total wall-time is dominated by
+the model — engine choice is **invisible end-to-end**. The fair measure is **engine overhead**
+(total − LLM time): the orchestration cost the engine itself adds. Adriane is **1.2–4.2× lighter**
+per workflow (e.g. support-triage 4.4 ms vs LangGraph 17.5 ms).
+
+### Tokens: the engine is token-neutral
+
+On identical prompts, Adriane and LangGraph consume the **same input tokens** (e.g. product-flow
+1197 = 1197) — the graph is orchestration, it adds **zero token tax**. An Adriane graph reduced to a
+single node matches a bare native call exactly (1-node 1874 ≈ native monolith 1950 tokens). Token
+cost is a function of **prompts and model, never the engine**.
+
+Where Adriane helps on tokens is by making efficiency **the default**: built-in output trimming, terse
+output, inter-stage context trimming, prompt caching and per-stage **model tiering**. Measured single
+levers (Gemini): LLMLingua-style input compression **−50%**, context trim **−43% input**, terse output
+**−32% output (and −31% latency)**, prompt caching **~−24% input cost** on a repeated prefix. Stacked,
+they comfortably halve a prose-heavy workflow's tokens — and the developer gets them for free.
+
+> A 3-stage governed pipeline costs more tokens than a one-shot monolith (it re-sends context between
+> stages) — that is the price of per-stage checkpointing, governance and resume, a choice you make, not
+> engine overhead. With the built-in levers a governed Adriane pipeline still beats a naive staged
+> LangGraph workflow by ~31% on tokens.
+
 ## When to choose Adriane
 
 Reach for Adriane when the **hard part of your problem is governance over an agentic graph**, and
