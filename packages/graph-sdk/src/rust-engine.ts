@@ -158,6 +158,8 @@ type AgentSpecWire = {
   /** ADR 0014 token-efficiency knobs (camelCase → Rust AgentSpec `outputStyle`/`contextBudget`). */
   outputStyle?: "terse";
   contextBudget?: number;
+  /** ADR 0022/0023 — durable channel the `writeTodos` list is persisted into (→ Rust `todosChannel`). */
+  todosChannel?: string;
 };
 
 /**
@@ -326,7 +328,8 @@ export class RustGraphRunner<TState extends ChannelValues> {
         approvalToolNames: config.approvalToolNames,
         outputChannel: config.outputChannel,
         outputStyle: config.outputStyle,
-        contextBudget: config.contextBudget
+        contextBudget: config.contextBudget,
+        todosChannel: config.todosChannel
       };
     }
     return out;

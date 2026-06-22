@@ -53,6 +53,12 @@ pub struct AgentSpec {
     /// don't re-feed an unbounded channel map. `None` = no cap.
     #[serde(default)]
     pub context_budget: Option<u32>,
+    /// Durable channel the agent's `writeTodos` list is persisted into (ADR 0022/0023,
+    /// phase 1). When set and the agent has the `writeTodos` tool, the node handler
+    /// writes the authoritative todo list here in the same checkpointed update as the
+    /// result. `None` = no durable todos sink (the list still appears in the result).
+    #[serde(default)]
+    pub todos_channel: Option<String>,
 }
 
 /// A graph node backed by a native Rust component, keyed in
@@ -253,6 +259,37 @@ mod tests {
         assert_eq!(spec.js_tool_names, vec!["refund".to_owned()]);
         assert!(agent.tier.is_none());
         assert!(spec.component_nodes.is_empty());
+    }
+
+    #[test]
+    fn deserializes_the_todos_channel_from_camel_case() {
+        let spec_json = json!({
+            "graph": minimal_graph_json(),
+            "agents": {
+                "assistant": {
+                    "provider": "anthropic",
+                    "toolNames": ["writeTodos"],
+                    "todosChannel": "__todos"
+                }
+            }
+        });
+        let spec: EngineSpec = serde_json::from_value(spec_json).expect("spec parses");
+        let agent = spec.agents.get("assistant").expect("agent present");
+        assert_eq!(agent.todos_channel.as_deref(), Some("__todos"));
+        assert_eq!(agent.tool_names, vec!["writeTodos".to_owned()]);
+
+        // Omitted → None (no durable sink).
+        let bare: EngineSpec = serde_json::from_value(json!({
+            "graph": minimal_graph_json(),
+            "agents": { "assistant": { "provider": "anthropic" } }
+        }))
+        .expect("spec parses");
+        assert!(bare
+            .agents
+            .get("assistant")
+            .expect("agent present")
+            .todos_channel
+            .is_none());
     }
 
     #[test]

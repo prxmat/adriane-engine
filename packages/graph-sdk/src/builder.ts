@@ -27,6 +27,7 @@ import {
   type AgentApprovalBinding,
   type AgentNodeConfig,
   type RustAgentConfig,
+  type TaskNodeConfig,
   type ToolNodeConfig
 } from "./agent-node.js";
 import type { ComponentDescriptor, RustComponentConfig } from "./components.js";
@@ -214,7 +215,12 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
           maxIterations: rustConfig.maxIterations,
           suspendForApproval: rustConfig.suspendForApproval,
           approvalToolNames: rustConfig.approvalToolNames,
-          outputChannel: rustConfig.outputChannel
+          outputChannel: rustConfig.outputChannel,
+          // ADR 0014 (terse/trim) + ADR 0022/0023 (durable todos channel): carried so the
+          // persisted GraphDefinition runs identically on the catalog/Studio path.
+          outputStyle: rustConfig.outputStyle,
+          contextBudget: rustConfig.contextBudget,
+          todosChannel: rustConfig.todosChannel
         }
       }
     });
@@ -344,6 +350,59 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
     });
     this.entryNodeId ??= id;
     return this;
+  }
+
+  /**
+   * Add a **task node** (ADR 0022/0023, phase 1): spawn a sub-agent in an isolated
+   * context that returns a single compressed report. It is sugar over
+   * {@link GraphBuilder.subgraph} — the sub-agent runs as a one-node child graph, so
+   * the spawn is a real node: **checkpointed, audited, and human-gate-preserving**.
+   * If the sub-agent suspends for approval, the whole run suspends and a parent
+   * `resume`/`approveAndResume` re-attaches to it. No new runtime path is added.
+   *
+   * Isolation: only `objectiveChannel` crosses into the child (`inputMapping`), and
+   * only the child's `reportChannel` crosses back (`outputMapping`) — the sub-agent
+   * never sees the parent's other channels, and the parent never sees the child's
+   * intermediate work. With `compress` (default), the sub-agent runs
+   * `outputStyle: "terse"` so the report is a summary, not a full transcript.
+   *
+   * ```ts
+   * createGraph({ name: "research" })
+   *   .channel("objective", { type: "string", default: "" })
+   *   .taskNode("dig", { subAgent: { llm, prompt: { system: "Research deeply." } } });
+   *   // -> state.report : AgentResult
+   * ```
+   */
+  public taskNode<TReport extends string = "report">(
+    id: string,
+    config: TaskNodeConfig & { reportChannel?: TReport }
+  ): GraphBuilder<TState & { [K in TReport]: AgentResult }> {
+    const objectiveChannel = config.objectiveChannel ?? "objective";
+    const reportChannel = (config.reportChannel ?? "report") as TReport;
+    const compress = config.compress ?? true;
+
+    // The sub-agent runs as a one-node child graph. Its id is namespaced under the task
+    // node id so it cannot collide with parent node ids when the child wiring is merged.
+    const childAgentId = `${id}__agent`;
+    const child = createGraph({ name: `${id}-task`, id: `${id}-task` })
+      .channel(objectiveChannel, { type: "string", default: "" })
+      .agentNode(childAgentId, {
+        ...config.subAgent,
+        outputChannel: reportChannel,
+        outputStyle: compress ? "terse" : config.subAgent.outputStyle
+      });
+
+    // The parent must declare the channel the outputMapping writes into; the objective
+    // source channel is ensured too (idempotent) for ergonomics.
+    this.ensureChannel(objectiveChannel, { type: "string", reducer: "replace", default: "" });
+    this.ensureChannel(reportChannel, { type: "agentResult", reducer: "replace" });
+
+    this.subgraph(id, child, {
+      inputMapping: { [objectiveChannel]: objectiveChannel },
+      outputMapping: { [reportChannel]: reportChannel },
+      label: config.label ?? id
+    });
+    return this.widen<TState & { [K in TReport]: AgentResult }>();
   }
 
   /**

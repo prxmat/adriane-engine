@@ -60,6 +60,12 @@ export type AgentCarrier = {
   suspendForApproval?: boolean;
   approvalToolNames?: string[];
   outputChannel?: string;
+  /** ADR 0014 — terse output directive on the system prompt. */
+  outputStyle?: "terse";
+  /** ADR 0014 — cap (chars) on the serialized state injected into the agent. */
+  contextBudget?: number;
+  /** ADR 0022/0023 — durable channel the agent's `writeTodos` list is persisted into. */
+  todosChannel?: string;
 };
 
 /** Outcome of a catalog-graph run: the terminal/suspended state and a flat status. */
@@ -156,6 +162,12 @@ const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean
   suspendForApproval: carrier.suspendForApproval === true,
   approvalToolNames: carrier.approvalToolNames ?? [],
   outputChannel: carrier.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL,
+  // ADR 0014 token-efficiency knobs + ADR 0022/0023 durable todos channel: carried on
+  // the persisted node so the catalog/Studio run path reaches parity with the in-process
+  // SDK builder path (toRustAgentConfig), which forwards the same fields.
+  outputStyle: carrier.outputStyle,
+  contextBudget: carrier.contextBudget,
+  todosChannel: carrier.todosChannel,
   // The catalog path carries no JS tool closures — the agent's tools are native
   // (no-op stubs in the bridge unless a name is also in jsToolNames, which it never is here).
   toolBindings: [],

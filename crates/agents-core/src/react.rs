@@ -19,6 +19,7 @@ use adriane_llm_gateway::{LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequ
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::todos::{TodoItem, WRITE_TODOS_TOOL};
 use crate::tools::InMemoryToolRegistry;
 
 /// Default model, matching the TS `DEFAULT_MODEL`.
@@ -44,6 +45,12 @@ pub struct AgentResult {
     pub reasoning: String,
     pub approval_requests: Vec<ApprovalRequestItem>,
     pub requires_human_review: bool,
+    /// The authoritative todo list from the most recent `writeTodos` call this run,
+    /// if any (ADR 0022/0023, phase 1). Additive + optional: omitted from the wire
+    /// when absent (`skip_serializing_if`), so existing `AgentResult` consumers stay
+    /// compatible. The node handler persists it into the durable todos channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todos: Option<Vec<TodoItem>>,
 }
 
 /// Outcome of the shared tool-execution path (native and `ACTION:` calls).
@@ -138,6 +145,9 @@ impl ReActAgent {
     ) -> Result<AgentResult, LlmError> {
         let mut trace: Vec<String> = Vec::new();
         let mut approval_requests: Vec<ApprovalRequestItem> = Vec::new();
+        // The latest `writeTodos` result this run (ADR 0022/0023). The node handler
+        // sinks it into the durable todos channel.
+        let mut last_todos: Option<Vec<TodoItem>> = None;
         let tool_defs = self.build_tool_defs();
 
         // `Value`'s Display is compact JSON — same output as `serde_json::to_string`.
@@ -202,6 +212,7 @@ impl ReActAgent {
                             &mut trace,
                             &mut approval_requests,
                             &mut conversation,
+                            &mut last_todos,
                         )
                         .await;
                     if outcome == ToolOutcome::Approval {
@@ -225,6 +236,7 @@ impl ReActAgent {
                         &mut trace,
                         &mut approval_requests,
                         &mut conversation,
+                        &mut last_todos,
                     )
                     .await;
                 if outcome == ToolOutcome::Approval {
@@ -251,6 +263,7 @@ impl ReActAgent {
             reasoning: trace.join("\n"),
             requires_human_review: !approval_requests.is_empty(),
             approval_requests,
+            todos: last_todos,
         })
     }
 
@@ -270,6 +283,9 @@ impl ReActAgent {
         trace: &mut Vec<String>,
         approval_requests: &mut Vec<ApprovalRequestItem>,
         conversation: &mut Vec<LlmMessage>,
+        // When the tool is `writeTodos`, its normalized list is captured here so the
+        // node handler can persist it into the durable todos channel (ADR 0022/0023).
+        last_todos: &mut Option<Vec<TodoItem>>,
     ) -> ToolOutcome {
         let resolved = self.tools.as_ref().and_then(|tools| tools.resolve(name));
         let Some((definition, handler)) = resolved else {
@@ -294,7 +310,16 @@ impl ReActAgent {
         // A handler error is data, not a crash: it goes back to the model as an
         // observation so the loop can recover or finalize.
         let output = match handler(input).await {
-            Ok(value) => value.to_string(),
+            Ok(value) => {
+                // `writeTodos` returns the authoritative normalized list — capture it
+                // (last write wins) for the node handler to persist durably.
+                if name == WRITE_TODOS_TOOL {
+                    if let Ok(todos) = serde_json::from_value::<Vec<TodoItem>>(value.clone()) {
+                        *last_todos = Some(todos);
+                    }
+                }
+                value.to_string()
+            }
             Err(message) => Value::String(format!("tool_error:{message}")).to_string(),
         };
         trace.push(format!("observation:{output}"));
@@ -631,11 +656,62 @@ mod tests {
                 reason: "Tool 'deploy' requires human approval before execution.".to_owned(),
             }],
             requires_human_review: true,
+            todos: None,
         };
         let wire = serde_json::to_string(&result).expect("serializes");
         assert!(wire.contains("\"approvalRequests\""));
         assert!(wire.contains("\"requiresHumanReview\":true"));
+        // `todos` is omitted from the wire when absent — keeps old payloads valid.
+        assert!(!wire.contains("\"todos\""));
         let back: AgentResult = serde_json::from_str(&wire).expect("round-trips");
         assert_eq!(back, result);
+    }
+
+    #[tokio::test]
+    async fn write_todos_tool_call_populates_result_todos() {
+        use crate::todos::{write_todos_tool, TodoStatus};
+
+        let mut registry = InMemoryToolRegistry::new();
+        let (definition, handler) = write_todos_tool();
+        registry.register(definition, handler);
+
+        // Native tool call carrying a todo payload, then a final answer.
+        let tool_call = LlmResponse {
+            content: String::new(),
+            tool_calls: Some(vec![LlmToolCall {
+                id: "tu1".to_owned(),
+                name: "writeTodos".to_owned(),
+                input: json!({
+                    "todos": [
+                        { "text": "plan", "status": "in_progress" },
+                        { "text": "build", "status": "pending" }
+                    ]
+                }),
+            }]),
+            stop_reason: Some("tool_use".to_owned()),
+            usage: LlmUsage::default(),
+            model: "mock".to_owned(),
+            provider: LlmProvider::Anthropic,
+        };
+
+        let agent = ReActAgent::new(
+            "a",
+            "planner",
+            gateway_with(vec![tool_call, text("FINAL: done")]),
+        )
+        .with_tools(Arc::new(registry));
+
+        let result = agent
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .await
+            .unwrap();
+
+        let todos = result.todos.expect("todos captured");
+        assert_eq!(todos.len(), 2);
+        assert_eq!(todos[0].id, "todo-1");
+        assert_eq!(todos[0].status, TodoStatus::InProgress);
+        assert_eq!(todos[1].id, "todo-2");
+        assert!(result.reasoning.contains("final:done"));
+        assert!(!result.requires_human_review);
     }
 }
