@@ -198,6 +198,13 @@ pub fn run_prebuilt(
 
     let mut registry = InMemoryToolRegistry::new();
     for tool_name in &agent_def.tool_names {
+        // `writeTodos` has a real Rust impl (ADR 0022/0023) — register it verbatim,
+        // never the no-op stub, so a Python agent gets the real planning tool too.
+        if tool_name == adriane_agents_core::WRITE_TODOS_TOOL {
+            let (definition, handler) = adriane_agents_core::write_todos_tool();
+            registry.register(definition, handler);
+            continue;
+        }
         let requires_approval = agent_def.suspend_for_approval;
         registry.register(
             ToolDefinition {
@@ -229,6 +236,9 @@ pub fn run_prebuilt(
         Arc::new(agent),
         output_channel.clone(),
         agent_def.suspend_for_approval,
+        // The Python prebuilt agent has no durable todos channel yet (TS-SDK parity is
+        // phase 1; a Python todosChannel surface is future parity work) — no sink.
+        None,
     );
 
     let node_id = "agent";
