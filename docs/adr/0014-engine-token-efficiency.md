@@ -4,11 +4,13 @@
   OpenAI-compat path), P2 (prompt caching — Anthropic emits `cache_control`; all three adapters read
   cached-prompt tokens into `LlmUsage`), P3 (terse output via `AgentNodeConfig.outputStyle`), P4
   (context-budget via `AgentNodeConfig.contextBudget`), and the **LLMLingua input-compression seam**
-  (`compressor`, env-gated `ADRIANE_LLMLINGUA_URL`, −44% input verified). **Native Gemini transcript
-  done + validated** (`provider:"google"` → `gemini.rs` functionCall/functionResponse; `LlmMessage`
-  gained `tool_name` since Gemini links by function name). **Pending**: native Anthropic transcript
-  (needs the `AnthropicMessage` String→content-block refactor, deferred by design) + the TS `LlmMessage`
-  mirror. Whole engine green (38 cargo suites, clippy clean, napi rebuilt).
+  (`compressor`, env-gated `ADRIANE_LLMLINGUA_URL`, −44% input verified). **Native tool transcript
+  complete across all three adapters**: OpenAI-compat (`tool_calls` + `tool` role), Gemini
+  (functionCall/functionResponse, validated live), Anthropic (`tool_use`/`tool_result` content blocks —
+  `AnthropicMessage.content` is now a JSON Value). `LlmMessage` carries `tool_calls` / `tool_call_id` /
+  `tool_name`. The TS gateway already had content blocks. Whole engine green (38 cargo suites, clippy
+  clean, napi rebuilt). **Remaining (non-material)**: streaming tool-transcript; TS `tool` parity is moot
+  (TS engine is fallback-removed).
 - Date: 2026-06-22
 - Deciders: Mathieu (owner)
 
