@@ -1,12 +1,13 @@
 # ADR 0014 — Token-efficiency features in the engine
 
-- Status: **In progress** on branch `feat/adr-0014-token-efficiency` (whole engine green: 38 cargo
-  suites, clippy clean, napi rebuilt). **Done + validated**: P1 (structured tool-call transcript,
-  OpenAI-compat path), P3 (terse output via `AgentNodeConfig.outputStyle`), P4 (context-budget via
-  `AgentNodeConfig.contextBudget`), and the **LLMLingua input-compression seam** (`compressor` module,
-  env-gated `ADRIANE_LLMLINGUA_URL`, −44% input verified). **Pending**: P2 (prompt caching in
-  `gemini.rs`/`anthropic.rs`), native tool-transcript in `gemini.rs`/`anthropic.rs` (P1 covered only the
-  OpenAI-compat adapter), and the TS `LlmMessage` mirror. Mandatory review before merge to main.
+- Status: merged to main + public PR #34. **Done + validated**: P1 (structured tool-call transcript,
+  OpenAI-compat path), P2 (prompt caching — Anthropic emits `cache_control`; all three adapters read
+  cached-prompt tokens into `LlmUsage`), P3 (terse output via `AgentNodeConfig.outputStyle`), P4
+  (context-budget via `AgentNodeConfig.contextBudget`), and the **LLMLingua input-compression seam**
+  (`compressor`, env-gated `ADRIANE_LLMLINGUA_URL`, −44% input verified). **Pending**: native
+  tool-transcript in `gemini.rs`/`anthropic.rs` (P1 covered only the OpenAI-compat adapter — the
+  native Gemini/Anthropic agent paths still use the legacy observation format) + the TS `LlmMessage`
+  mirror. Whole engine green (38 cargo suites, clippy clean, napi rebuilt).
 - Date: 2026-06-22
 - Deciders: Mathieu (owner)
 

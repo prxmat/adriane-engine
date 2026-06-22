@@ -103,6 +103,16 @@ pub struct RawUsage {
     pub prompt_tokens: Option<u32>,
     #[serde(default)]
     pub completion_tokens: Option<u32>,
+    /// Cached-prompt accounting (OpenAI-style + Gemini's OpenAI-compat endpoint return
+    /// `prompt_tokens_details.cached_tokens` when a prefix was served from cache).
+    #[serde(default)]
+    pub prompt_tokens_details: Option<RawPromptTokensDetails>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct RawPromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
 }
 
 /// Structural subset of the OpenAI chat-completion response the adapter reads.
@@ -284,7 +294,9 @@ fn to_response(request: &LlmRequest, model: String, raw: OpenAiChatResponse) -> 
         usage: LlmUsage {
             prompt_tokens: usage.prompt_tokens.unwrap_or(0),
             completion_tokens: usage.completion_tokens.unwrap_or(0),
-            cache_read_tokens: None,
+            cache_read_tokens: usage
+                .prompt_tokens_details
+                .and_then(|details| details.cached_tokens),
             cache_write_tokens: None,
         },
         model,
