@@ -30,16 +30,32 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 6;
 
 /// One pending approval. `subject` is `"tool:<name>"`, exactly like the TS shape
 /// (`{ description: "tool:<name>" }`) flattened to its description string.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// For a **content-scoped** tool (ADR 0024 phase 2c — the guarded fs writes), the
+/// approval is pinned to the exact call: `approval_key` is the composite
+/// `"<name>#<sha256(input)>"` that must be granted to unlock THIS write (a different
+/// path/content hashes differently and re-gates — no over-grant), and `input` carries
+/// the gated tool input so a reviewer sees the path + content. Both are `None` for an
+/// ordinary name-only gate (grant = the tool name). `Eq` is dropped because `input`
+/// holds a `serde_json::Value` (same reason as `LlmMessage`); `PartialEq` is kept.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalRequestItem {
     pub subject: String,
     pub reason: String,
+    /// Content-scoped pin (`"<name>#<hash>"`) that must be granted to unlock this call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_key: Option<String>,
+    /// The gated tool input, surfaced so the control plane can show what is approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
 }
 
 /// What an agent run produces — wire-compatible (camelCase) with the TS
 /// `AgentResult` subset: `reasoning`, `approvalRequests`, `requiresHumanReview`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// `Eq` is dropped (an `ApprovalRequestItem.input` may hold a non-`Eq`
+/// `serde_json::Value`); `PartialEq` is retained for tests.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentResult {
     pub reasoning: String,
@@ -293,18 +309,28 @@ impl ReActAgent {
             return ToolOutcome::NotFound;
         };
 
-        // Gate sensitive tools — unless this exact tool was already approved by a
-        // human (e.g. granted on resume), in which case it runs.
-        if definition.requires_approval && !approved_tool_names.contains(&definition.name) {
-            approval_requests.push(ApprovalRequestItem {
-                subject: format!("tool:{}", definition.name),
-                reason: format!(
-                    "Tool '{}' requires human approval before execution.",
-                    definition.name
-                ),
-            });
-            trace.push(format!("observation:approval_required:{name}"));
-            return ToolOutcome::Approval;
+        // Gate sensitive tools — unless this exact grant was already approved by a human
+        // (e.g. granted on resume). The grant key is the tool name, OR — for a
+        // content-scoped tool (a guarded fs write, ADR 0024 phase 2c) — the composite
+        // "<name>#<sha256(input)>", so approving one call does not unlock a different
+        // path/content (the over-grant guard).
+        if definition.requires_approval {
+            let key =
+                crate::tools::approval_key(&definition.name, definition.content_scoped, &input);
+            if !approved_tool_names.contains(&key) {
+                let content_scoped = definition.content_scoped;
+                approval_requests.push(ApprovalRequestItem {
+                    subject: format!("tool:{}", definition.name),
+                    reason: format!(
+                        "Tool '{}' requires human approval before execution.",
+                        definition.name
+                    ),
+                    approval_key: content_scoped.then(|| key.clone()),
+                    input: content_scoped.then(|| input.clone()),
+                });
+                trace.push(format!("observation:approval_required:{name}"));
+                return ToolOutcome::Approval;
+            }
         }
 
         // A handler error is data, not a crash: it goes back to the model as an
@@ -438,6 +464,7 @@ mod tests {
                 description: format!("The {name} tool."),
                 requires_approval,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             sync_tool(move |_input| {
                 counter.fetch_add(1, Ordering::SeqCst);
@@ -545,6 +572,7 @@ mod tests {
                 description: "Echoes its input.".to_owned(),
                 requires_approval: false,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             sync_tool(move |input| {
                 *capture.lock().expect("lock") = Some(input.clone());
@@ -654,6 +682,8 @@ mod tests {
             approval_requests: vec![ApprovalRequestItem {
                 subject: "tool:deploy".to_owned(),
                 reason: "Tool 'deploy' requires human approval before execution.".to_owned(),
+                approval_key: None,
+                input: None,
             }],
             requires_human_review: true,
             todos: None,
@@ -713,5 +743,105 @@ mod tests {
         assert_eq!(todos[1].id, "todo-2");
         assert!(result.reasoning.contains("final:done"));
         assert!(!result.requires_human_review);
+    }
+
+    /// ADR 0024 phase 2c — the over-grant guard: a content-scoped tool's approval is
+    /// pinned to the exact input. Approving one call must NOT unlock a different input.
+    #[tokio::test]
+    async fn content_scoped_gate_pins_approval_to_the_exact_input() {
+        use crate::tools::approval_key;
+
+        fn guarded_call(input: Value) -> LlmResponse {
+            LlmResponse {
+                content: String::new(),
+                tool_calls: Some(vec![LlmToolCall {
+                    id: "t1".to_owned(),
+                    name: "guarded".to_owned(),
+                    input,
+                }]),
+                stop_reason: Some("tool_use".to_owned()),
+                usage: LlmUsage::default(),
+                model: "mock".to_owned(),
+                provider: LlmProvider::Anthropic,
+            }
+        }
+        fn guarded_agent(calls: &Arc<AtomicUsize>, responses: Vec<LlmResponse>) -> ReActAgent {
+            let counter = Arc::clone(calls);
+            let mut registry = InMemoryToolRegistry::new();
+            registry.register(
+                ToolDefinition {
+                    name: "guarded".to_owned(),
+                    description: "content-scoped guarded tool".to_owned(),
+                    requires_approval: true,
+                    input_schema: Some(json!({ "type": "object" })),
+                    content_scoped: true,
+                },
+                sync_tool(move |_input| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(json!({ "ok": true }))
+                }),
+            );
+            ReActAgent::new("a", "g", gateway_with(responses)).with_tools(Arc::new(registry))
+        }
+
+        let input_a = json!({ "path": "review/a.md", "content": "X" });
+        let input_b = json!({ "path": "review/b.md", "content": "Y" });
+        let key_a = approval_key("guarded", true, &input_a);
+        let key_b = approval_key("guarded", true, &input_b);
+        assert!(key_a.starts_with("guarded#") && key_a != key_b);
+
+        // 1) Unapproved → gates, recording the content-scoped key + input for THIS call.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let agent = guarded_agent(
+            &calls,
+            vec![guarded_call(input_a.clone()), text("FINAL: x")],
+        );
+        let r = agent
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(r.requires_human_review);
+        assert_eq!(
+            r.approval_requests[0].approval_key.as_deref(),
+            Some(key_a.as_str())
+        );
+        assert_eq!(r.approval_requests[0].input.as_ref(), Some(&input_a));
+
+        // 2) Granted A's key → the SAME call executes.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let agent = guarded_agent(
+            &calls,
+            vec![guarded_call(input_a.clone()), text("FINAL: x")],
+        );
+        let approved: HashSet<String> = [key_a.clone()].into_iter().collect();
+        let r = agent
+            .run(&json!({}), &BTreeMap::new(), &approved)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(!r.requires_human_review);
+
+        // 3) Granted A, but the agent calls a DIFFERENT input B → re-gates (no over-grant).
+        let calls = Arc::new(AtomicUsize::new(0));
+        let agent = guarded_agent(
+            &calls,
+            vec![guarded_call(input_b.clone()), text("FINAL: x")],
+        );
+        let approved: HashSet<String> = [key_a].into_iter().collect();
+        let r = agent
+            .run(&json!({}), &BTreeMap::new(), &approved)
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a different input must NOT reuse the grant"
+        );
+        assert!(r.requires_human_review);
+        assert_eq!(
+            r.approval_requests[0].approval_key.as_deref(),
+            Some(key_b.as_str())
+        );
     }
 }

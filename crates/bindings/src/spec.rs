@@ -109,6 +109,12 @@ pub struct ApprovedTool {
     /// `requested_by`, or the bridge rejects the resume.
     #[serde(default)]
     pub resolved_by: String,
+    /// The content-scoped grant key (ADR 0024 phase 2c): `"<name>#<sha256(input)>"` for
+    /// a guarded fs write, pinning the grant to the exact call. When set, the bridge
+    /// writes THIS key (not the bare name) into the `__approvedTools` channel, so only
+    /// the approved path+content unlocks. `None` for an ordinary name-only grant.
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 /// The full spec for a run/resume/approve call.
@@ -424,6 +430,8 @@ mod tests {
             pending_approvals: vec![ApprovalRequestItem {
                 subject: "tool:refund".to_owned(),
                 reason: "needs approval".to_owned(),
+                approval_key: None,
+                input: None,
             }],
         };
         let wire = serde_json::to_string(&outcome).expect("serializes");

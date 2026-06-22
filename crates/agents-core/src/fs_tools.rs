@@ -1,17 +1,19 @@
-//! Agent-callable filesystem tools (ADR 0024, phase 2a) over a
-//! [`FilesystemBackend`] + [`PathPolicy`]. Eight tools — `read_file`, `ls`, `glob`,
-//! `grep`, `write_file`, `edit_file`, `delete_file`, `move_file` — registered into
-//! the same [`crate::tools::InMemoryToolRegistry`] the ReAct agent already drives.
+//! Agent-callable filesystem tools (ADR 0024) over a [`FilesystemBackend`] +
+//! [`PathPolicy`], registered into the same [`crate::tools::InMemoryToolRegistry`]
+//! the ReAct agent already drives. Twelve tools: 8 ungated
+//! (`read_file`/`ls`/`glob`/`grep`/`write_file`/`edit_file`/`delete_file`/`move_file`)
+//! plus 4 guarded variants (`*_guarded`, phase 2c) for approval-gated paths.
 //!
 //! Permission is enforced here, fail-closed, on the NORMALIZED path:
 //! - reads (`read_file`/`ls`/`glob`/`grep`): a `deny` path is invisible (reported as
 //!   not-found, never permission-denied), everything else is readable.
-//! - writes (`write_file`/`edit_file`/`delete_file`/`move_file`): require the `write`
-//!   verb. A `gate` path is rejected in phase 2a (the guarded/approval path lands in
-//!   phase 2c); `read` → permission-denied; `deny` → not-found.
-//!
-//! None of these tools is `requires_approval` in 2a — the gate verb (and the guarded
-//! tool variants) arrive in phase 2c.
+//! - ungated writes (`write_file`/`edit_file`/`delete_file`/`move_file`): require the
+//!   `write` verb. A `gate` path is rejected (steering the agent to the `*_guarded`
+//!   tool); `read` → permission-denied; `deny` → not-found.
+//! - guarded writes (`*_guarded`, phase 2c): `content_scoped` + `requires_approval`, so
+//!   the ReAct loop suspends for an approval **pinned to the exact {path, content}**
+//!   (the over-grant guard) BEFORE the handler runs; `require_gate` then permits only a
+//!   `gate`-verb path. The shell `execute` primitive is NOT here (external seam).
 
 use std::sync::Arc;
 
@@ -40,8 +42,8 @@ fn require_read(name: String, verb: FsPermVerb) -> Result<String, FsError> {
     }
 }
 
-/// Map a write verb to an access decision (2a: only `write` permits; `gate` is the
-/// 2c guarded path; `read` denies; `deny` is invisible).
+/// Map a write verb to an access decision for the UNGATED tools: only `write` permits;
+/// `gate` must use the guarded tool (rejected here); `read` denies; `deny` is invisible.
 fn require_write(name: String, verb: FsPermVerb, action: &str) -> Result<String, FsError> {
     match verb {
         FsPermVerb::Write => Ok(name),
@@ -50,9 +52,28 @@ fn require_write(name: String, verb: FsPermVerb, action: &str) -> Result<String,
             action: action.to_owned(),
             path: name,
         }),
-        // A gate path needs the guarded tool + approval (phase 2c), not available here.
+        // A gate path requires the *_guarded tool (which suspends for approval).
         FsPermVerb::Gate => Err(FsError::PermissionDenied {
-            action: format!("{action} (path requires approval; not available in this build)"),
+            action: format!("{action} (path is approval-gated; call the *_guarded tool)"),
+            path: name,
+        }),
+    }
+}
+
+/// Map a verb to an access decision for the GUARDED tools (ADR 0024 phase 2c): only a
+/// `gate` path is permitted (the approval already fired at the ReAct gate before this
+/// handler ran); a `write` path should use the ungated tool; `read` denies; `deny` is
+/// invisible. Fail-closed.
+fn require_gate(name: String, verb: FsPermVerb, action: &str) -> Result<String, FsError> {
+    match verb {
+        FsPermVerb::Gate => Ok(name),
+        FsPermVerb::Deny => Err(FsError::NotFound { path: name }),
+        FsPermVerb::Write => Err(FsError::PermissionDenied {
+            action: format!("{action} (path is ungated; call the plain tool)"),
+            path: name,
+        }),
+        FsPermVerb::Read => Err(FsError::PermissionDenied {
+            action: action.to_owned(),
             path: name,
         }),
     }
@@ -123,7 +144,9 @@ pub fn register_fs_tools(
     }
 }
 
-/// The eight `(ToolDefinition, ToolHandler)` pairs (also handy for direct testing).
+/// All fs `(ToolDefinition, ToolHandler)` pairs: the 8 ungated tools (for `read`/`write`
+/// paths) plus the 4 guarded variants (ADR 0024 phase 2c, for `gate` paths — they
+/// suspend for a content-scoped approval). Also handy for direct testing.
 pub fn fs_tools(
     backend: Arc<dyn FilesystemBackend>,
     policy: Arc<dyn PathPolicy>,
@@ -137,16 +160,35 @@ pub fn fs_tools(
         write_file_tool(backend.clone(), policy.clone(), ctx.clone()),
         edit_file_tool(backend.clone(), policy.clone(), ctx.clone()),
         delete_file_tool(backend.clone(), policy.clone(), ctx.clone()),
-        move_file_tool(backend, policy, ctx),
+        move_file_tool(backend.clone(), policy.clone(), ctx.clone()),
+        write_file_guarded_tool(backend.clone(), policy.clone(), ctx.clone()),
+        edit_file_guarded_tool(backend.clone(), policy.clone(), ctx.clone()),
+        delete_file_guarded_tool(backend.clone(), policy.clone(), ctx.clone()),
+        move_file_guarded_tool(backend, policy, ctx),
     ]
 }
 
-fn def(name: &str, description: &str, schema: Value, requires_approval: bool) -> ToolDefinition {
+/// An ungated fs tool definition (never approval-gated).
+fn def(name: &str, description: &str, schema: Value) -> ToolDefinition {
     ToolDefinition {
         name: name.to_owned(),
         description: description.to_owned(),
-        requires_approval,
+        requires_approval: false,
         input_schema: Some(schema),
+        content_scoped: false,
+    }
+}
+
+/// A guarded (content-scoped, approval-gated) fs tool definition (ADR 0024 phase 2c):
+/// a write to a `gate`-verb path suspends for approval, pinned to the exact
+/// {path, content} via the content-scoped key.
+fn guarded_def(name: &str, description: &str, schema: Value) -> ToolDefinition {
+    ToolDefinition {
+        name: name.to_owned(),
+        description: description.to_owned(),
+        requires_approval: true,
+        input_schema: Some(schema),
+        content_scoped: true,
     }
 }
 
@@ -158,7 +200,6 @@ fn read_file_tool(
         "read_file",
         "Read a file's content (optionally a specific version). Returns not-found if the path is missing or unreadable.",
         json!({ "type": "object", "properties": { "path": { "type": "string" }, "version": { "type": "integer" } }, "required": ["path"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -185,7 +226,6 @@ fn ls_tool(
         "ls",
         "List the immediate entries (files + synthetic directories) under a directory path. Use an empty path for the root.",
         json!({ "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -214,7 +254,6 @@ fn glob_tool(
         "glob",
         "Return file paths matching a glob (`*` within a path segment, `**` across segments).",
         json!({ "type": "object", "properties": { "pattern": { "type": "string" } }, "required": ["pattern"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -243,7 +282,6 @@ fn grep_tool(
         "grep",
         "Substring-search file contents. Optionally restrict to specific paths; otherwise searches every readable file.",
         json!({ "type": "object", "properties": { "pattern": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } } }, "required": ["pattern"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -273,7 +311,6 @@ fn write_file_tool(
         "write_file",
         "Write (create or overwrite) a file's full content, producing a new version. Requires a writable path.",
         json!({ "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" }, "mediaType": { "type": "string", "enum": ["text/plain", "text/markdown", "application/json", "application/octet-stream"] } }, "required": ["path", "content"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -303,7 +340,6 @@ fn edit_file_tool(
         "edit_file",
         "Apply line-based patches (replace/insert/delete, 1-indexed inclusive) to a file, producing a new version.",
         json!({ "type": "object", "properties": { "path": { "type": "string" }, "patches": { "type": "array", "items": { "type": "object" } } }, "required": ["path", "patches"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -332,7 +368,6 @@ fn delete_file_tool(
         "delete_file",
         "Delete a file (tombstone — a new version flagged deleted; history is retained for audit). Requires a writable path.",
         json!({ "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -361,7 +396,6 @@ fn move_file_tool(
         "move_file",
         "Move/rename a file: copy its content to the destination and tombstone the source. Both paths must be writable.",
         json!({ "type": "object", "properties": { "from": { "type": "string" }, "to": { "type": "string" } }, "required": ["from", "to"], "additionalProperties": false }),
-        false,
     );
     let handler: ToolHandler = Box::new(move |input: Value| {
         let backend = backend.clone();
@@ -373,6 +407,138 @@ fn move_file_tool(
             let from = require_write(from, from_verb, "move").map_err(|e| e.to_string())?;
             let (to, to_verb) = resolve(&policy, &parsed.to).map_err(|e| e.to_string())?;
             let to = require_write(to, to_verb, "move").map_err(|e| e.to_string())?;
+            let reference = backend
+                .rename(&from, &to, &ctx)
+                .await
+                .map_err(|e| e.to_string())?;
+            ok(reference)
+        })
+    });
+    (definition, handler)
+}
+
+// ── Guarded variants (ADR 0024 phase 2c) ────────────────────────────────────────────
+// Identical to the ungated tools except: content-scoped + approval-gated (the ReAct
+// loop suspends for a per-call approval BEFORE the handler runs), and `require_gate`
+// permits ONLY a `gate`-verb path (a `write` path uses the plain tool).
+
+fn write_file_guarded_tool(
+    backend: Arc<dyn FilesystemBackend>,
+    policy: Arc<dyn PathPolicy>,
+    ctx: FsWriteCtx,
+) -> (ToolDefinition, ToolHandler) {
+    let definition = guarded_def(
+        "write_file_guarded",
+        "Write a file on an APPROVAL-GATED path: this suspends the run for human approval pinned to the exact path + content, then writes on resume. Use for `gate` paths.",
+        json!({ "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" }, "mediaType": { "type": "string", "enum": ["text/plain", "text/markdown", "application/json", "application/octet-stream"] } }, "required": ["path", "content"], "additionalProperties": false }),
+    );
+    let handler: ToolHandler = Box::new(move |input: Value| {
+        let backend = backend.clone();
+        let policy = policy.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            let parsed: WriteFileInput = parse(input)?;
+            let (name, verb) = resolve(&policy, &parsed.path).map_err(|e| e.to_string())?;
+            let name = require_gate(name, verb, "write").map_err(|e| e.to_string())?;
+            let media_type = parsed.media_type.unwrap_or(ArtifactMediaType::TextPlain);
+            let reference = backend
+                .write(&name, parsed.content, media_type, &ctx)
+                .await
+                .map_err(|e| e.to_string())?;
+            ok(reference)
+        })
+    });
+    (definition, handler)
+}
+
+fn edit_file_guarded_tool(
+    backend: Arc<dyn FilesystemBackend>,
+    policy: Arc<dyn PathPolicy>,
+    ctx: FsWriteCtx,
+) -> (ToolDefinition, ToolHandler) {
+    let definition = guarded_def(
+        "edit_file_guarded",
+        "Apply line patches on an APPROVAL-GATED path: suspends for approval pinned to the exact path + patches, then edits on resume. Use for `gate` paths.",
+        json!({ "type": "object", "properties": { "path": { "type": "string" }, "patches": { "type": "array", "items": { "type": "object" } } }, "required": ["path", "patches"], "additionalProperties": false }),
+    );
+    let handler: ToolHandler = Box::new(move |input: Value| {
+        let backend = backend.clone();
+        let policy = policy.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            let parsed: EditFileInput = parse(input)?;
+            let (name, verb) = resolve(&policy, &parsed.path).map_err(|e| e.to_string())?;
+            let name = require_gate(name, verb, "edit").map_err(|e| e.to_string())?;
+            let reference = backend
+                .edit(&name, parsed.patches, &ctx)
+                .await
+                .map_err(|e| e.to_string())?;
+            ok(reference)
+        })
+    });
+    (definition, handler)
+}
+
+fn delete_file_guarded_tool(
+    backend: Arc<dyn FilesystemBackend>,
+    policy: Arc<dyn PathPolicy>,
+    ctx: FsWriteCtx,
+) -> (ToolDefinition, ToolHandler) {
+    let definition = guarded_def(
+        "delete_file_guarded",
+        "Delete a file on an APPROVAL-GATED path (tombstone): suspends for approval pinned to the path, then deletes on resume. Use for `gate` paths.",
+        json!({ "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"], "additionalProperties": false }),
+    );
+    let handler: ToolHandler = Box::new(move |input: Value| {
+        let backend = backend.clone();
+        let policy = policy.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            let parsed: PathInput = parse(input)?;
+            let (name, verb) = resolve(&policy, &parsed.path).map_err(|e| e.to_string())?;
+            let name = require_gate(name, verb, "delete").map_err(|e| e.to_string())?;
+            backend
+                .delete(&name, &ctx)
+                .await
+                .map_err(|e| e.to_string())?;
+            ok(json!({ "deleted": name }))
+        })
+    });
+    (definition, handler)
+}
+
+fn move_file_guarded_tool(
+    backend: Arc<dyn FilesystemBackend>,
+    policy: Arc<dyn PathPolicy>,
+    ctx: FsWriteCtx,
+) -> (ToolDefinition, ToolHandler) {
+    let definition = guarded_def(
+        "move_file_guarded",
+        "Move/rename a file when the source or destination is APPROVAL-GATED: suspends for approval pinned to {from, to}, then moves on resume.",
+        json!({ "type": "object", "properties": { "from": { "type": "string" }, "to": { "type": "string" } }, "required": ["from", "to"], "additionalProperties": false }),
+    );
+    let handler: ToolHandler = Box::new(move |input: Value| {
+        let backend = backend.clone();
+        let policy = policy.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            let parsed: MoveInput = parse(input)?;
+            let (from, from_verb) = resolve(&policy, &parsed.from).map_err(|e| e.to_string())?;
+            let from = require_gate(from, from_verb, "move").map_err(|e| e.to_string())?;
+            // The destination must be writable (a `write` or `gate` path); `deny` stays
+            // invisible (not-found), `read` is denied.
+            let (to, to_verb) = resolve(&policy, &parsed.to).map_err(|e| e.to_string())?;
+            let to = match to_verb {
+                FsPermVerb::Write | FsPermVerb::Gate => to,
+                FsPermVerb::Deny => return Err(FsError::NotFound { path: to }.to_string()),
+                FsPermVerb::Read => {
+                    return Err(FsError::PermissionDenied {
+                        action: "move".to_owned(),
+                        path: to,
+                    }
+                    .to_string())
+                }
+            };
             let reference = backend
                 .rename(&from, &to, &ctx)
                 .await
@@ -525,7 +691,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gate_path_write_is_rejected_until_phase_2c() {
+    async fn ungated_write_on_a_gate_path_routes_to_the_guarded_tool() {
+        // ADR 0024 phase 2c: a gate-verb path rejects the UNGATED write (fail-closed,
+        // steering the agent to the *_guarded tool, which suspends for approval).
         let policy = StaticPathPolicy::with_rules(vec![PathRule {
             glob: "review/**".to_owned(),
             verb: FsPermVerb::Gate,
@@ -534,7 +702,44 @@ mod tests {
         let err = tools["write_file"](json!({ "path": "review/doc.md", "content": "x" }))
             .await
             .unwrap_err();
-        assert!(err.contains("requires approval"), "got: {err}");
+        assert!(err.contains("guarded"), "got: {err}");
+        // The guarded tool is registered (the agent would call it; the ReAct gate then
+        // suspends for approval before the handler runs — see the react.rs gate tests).
+        assert!(tools.contains_key("write_file_guarded"));
+    }
+
+    #[tokio::test]
+    async fn guarded_write_permits_only_a_gate_path() {
+        let policy = StaticPathPolicy::with_rules(vec![
+            PathRule {
+                glob: "review/**".to_owned(),
+                verb: FsPermVerb::Gate,
+            },
+            PathRule {
+                glob: "scratch/**".to_owned(),
+                verb: FsPermVerb::Write,
+            },
+            PathRule {
+                glob: "secret/**".to_owned(),
+                verb: FsPermVerb::Deny,
+            },
+        ]);
+        let tools = build(policy);
+        // On a gate path the guarded handler permits the write (the ReAct gate, not
+        // exercised here, would have suspended+approved first).
+        let ok =
+            tools["write_file_guarded"](json!({ "path": "review/doc.md", "content": "x" })).await;
+        assert!(ok.is_ok(), "gate path should write: {ok:?}");
+        // A plain `write` path → use the ungated tool (guarded rejects).
+        let err = tools["write_file_guarded"](json!({ "path": "scratch/a.txt", "content": "x" }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("ungated"), "got: {err}");
+        // A deny path stays invisible (not-found, not permission-denied).
+        let err = tools["write_file_guarded"](json!({ "path": "secret/k", "content": "x" }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"), "got: {err}");
     }
 
     #[tokio::test]
