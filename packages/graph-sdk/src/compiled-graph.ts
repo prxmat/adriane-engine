@@ -34,8 +34,13 @@ import type { ChannelValues, InitialData, TypedGraphState } from "./typed.js";
 
 /** Options for {@link CompiledGraph.approveAndResume}. */
 export type ApproveAndResumeOptions = {
-  /** Names of approval-gated tools the human has granted. They execute on resume. */
-  approvedTools: string[];
+  /**
+   * Approval-gated tools the human has granted; they execute on resume. A bare string
+   * grants a tool by name; `{ name, key }` grants a CONTENT-SCOPED guarded fs write
+   * (ADR 0024 phase 2c) pinned to the exact call — pass the `approvalKey` surfaced on the
+   * suspended run's pending approval, so only the approved path+content unlocks.
+   */
+  approvedTools: Array<string | { name: string; key?: string }>;
   /**
    * The principal granting the approval — a human, NEVER the agent that requested it.
    * It is recorded as each granted tool's `resolvedBy` and carried to the Rust engine,
@@ -436,10 +441,19 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
    * distinct principal granting it. Names are sorted so the wire payload is
    * deterministic regardless of the caller's ordering.
    */
-  private toApprovedToolWire(approvedTools: string[], resolvedBy: string): ApprovedToolWire[] {
-    return [...approvedTools]
-      .sort()
-      .map((name) => ({ name, requestedBy: this.requesterOfTool(name), resolvedBy }));
+  private toApprovedToolWire(
+    approvedTools: Array<string | { name: string; key?: string }>,
+    resolvedBy: string
+  ): ApprovedToolWire[] {
+    return approvedTools
+      .map((grant) => (typeof grant === "string" ? { name: grant } : grant))
+      .sort((a, b) => (a.key ?? a.name).localeCompare(b.key ?? b.name))
+      .map((grant) => ({
+        name: grant.name,
+        key: grant.key,
+        requestedBy: this.requesterOfTool(grant.name),
+        resolvedBy
+      }));
   }
 
   /** The agent node that declared `toolName` as approval-gated, as the request principal. */

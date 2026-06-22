@@ -228,7 +228,28 @@ fn validate_approved_tools(tools: &[ApprovedTool]) -> napi::Result<Vec<String>> 
                 "approval guard-rail rejected resume: {error}"
             )));
         }
-        names.push(tool.name.clone());
+        // A content-scoped grant (ADR 0024 phase 2c) unlocks only the exact call: write
+        // its composite key into the channel, not the bare tool name. No-self-approval is
+        // still validated on the tool name above. Defense-in-depth: a supplied key MUST be
+        // "<tool.name>#<64-hex sha256>" — its name component must match the validated name,
+        // so a caller cannot smuggle a key whose embedded tool diverges from the one whose
+        // no-self-approval was checked, nor a malformed key.
+        match &tool.key {
+            Some(key) => {
+                let well_formed = key
+                    .strip_prefix(&format!("{}#", tool.name))
+                    .map(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .unwrap_or(false);
+                if !well_formed {
+                    return Err(napi::Error::from_reason(format!(
+                        "approval guard-rail rejected resume: malformed content-scoped key for tool '{}'",
+                        tool.name
+                    )));
+                }
+                names.push(key.clone());
+            }
+            None => names.push(tool.name.clone()),
+        }
     }
     names.sort();
     names.dedup();
@@ -453,6 +474,7 @@ fn build_agent_handler(
             description: format!("Tool '{tool_name}'."),
             requires_approval,
             input_schema: Some(json!({ "type": "object" })),
+            content_scoped: false,
         };
         let handler = if js_tools.contains(tool_name.as_str()) {
             js_tool_handler(tool_name.clone(), callbacks)
@@ -1015,6 +1037,7 @@ mod tests {
                 description: "lookup".to_owned(),
                 requires_approval: false,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             adriane_agents_core::sync_tool(|_input| Ok(json!({ "ok": true }))),
         );
@@ -1093,6 +1116,7 @@ mod tests {
                 description: "refund".to_owned(),
                 requires_approval: true,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             adriane_agents_core::sync_tool(move |_input| {
                 counter.fetch_add(1, Ordering::SeqCst);
@@ -1359,6 +1383,7 @@ mod tests {
                 description: "lookup".to_owned(),
                 requires_approval: false,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             adriane_agents_core::sync_tool(|_input| Ok(json!({ "ok": true }))),
         );
@@ -1504,20 +1529,57 @@ mod tests {
                 name: "wire".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "alice".to_owned(),
+                key: None,
             },
             ApprovedTool {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "alice".to_owned(),
+                key: None,
             },
             ApprovedTool {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "bob".to_owned(),
+                key: None,
             },
         ];
         let names = validate_approved_tools(&tools).expect("distinct resolver passes");
         assert_eq!(names, vec!["refund".to_owned(), "wire".to_owned()]);
+
+        // A content-scoped grant writes its composite KEY into the channel, not the name.
+        let hex = "a".repeat(64);
+        let key = format!("write_file_guarded#{hex}");
+        let scoped = vec![ApprovedTool {
+            name: "write_file_guarded".to_owned(),
+            requested_by: "worker".to_owned(),
+            resolved_by: "alice".to_owned(),
+            key: Some(key.clone()),
+        }];
+        let scoped_names = validate_approved_tools(&scoped).expect("distinct resolver passes");
+        assert_eq!(scoped_names, vec![key]);
+    }
+
+    #[test]
+    fn validate_approved_tools_rejects_a_malformed_content_scoped_key() {
+        // A key whose name component diverges from the validated tool name, or whose hash
+        // is not a 64-hex sha256, is rejected fail-closed (defense-in-depth).
+        for bad in [
+            "write_file_guarded#deadbeef".to_owned(),   // hash too short
+            "other_tool#".to_owned() + &"a".repeat(64), // name component mismatch
+            "write_file_guarded#".to_owned() + &"z".repeat(64), // non-hex
+        ] {
+            let tools = vec![ApprovedTool {
+                name: "write_file_guarded".to_owned(),
+                requested_by: "worker".to_owned(),
+                resolved_by: "alice".to_owned(),
+                key: Some(bad.to_string()),
+            }];
+            assert!(
+                validate_approved_tools(&tools).is_err(),
+                "malformed key must be rejected: {bad}"
+            );
+        }
     }
 
     #[test]
@@ -1528,6 +1590,7 @@ mod tests {
             name: "refund".to_owned(),
             requested_by: "assistant".to_owned(),
             resolved_by: "assistant".to_owned(),
+            key: None,
         }];
         let error = validate_approved_tools(&tools).expect_err("self-approval is rejected");
         assert!(
@@ -1548,6 +1611,7 @@ mod tests {
             name: "refund".to_owned(),
             requested_by: "assistant".to_owned(),
             resolved_by: "  ".to_owned(),
+            key: None,
         }];
         assert!(validate_approved_tools(&tools).is_err());
     }
@@ -1594,6 +1658,7 @@ mod tests {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "assistant".to_owned(),
+                key: None,
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
@@ -1658,6 +1723,7 @@ mod tests {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "assistant".to_owned(),
+                key: None,
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
