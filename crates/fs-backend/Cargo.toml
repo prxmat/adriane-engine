@@ -1,0 +1,17 @@
+[package]
+name = "adriane-fs-backend"
+description = "Governed virtual filesystem seam for the deep-agent harness (ADR 0024). Default-backed by the versioned artifact store; per-path permission policy; fail-closed."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adriane-graph-core = { path = "../graph-core" }
+adriane-artifact-store = { path = "../artifact-store" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

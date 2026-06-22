@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod fs_tools;
 pub mod node;
 pub mod plan_execute;
 pub mod react;
@@ -18,6 +19,7 @@ pub mod todos;
 pub mod tools;
 pub mod working_memory;
 
+pub use fs_tools::{fs_tools, register_fs_tools};
 pub use node::{
     agent_node_handler, AGENT_APPROVAL_INTERRUPT, APPROVED_TOOLS_CHANNEL,
     DEFAULT_AGENT_OUTPUT_CHANNEL,
