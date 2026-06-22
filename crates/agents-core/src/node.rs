@@ -38,22 +38,38 @@ pub const DEFAULT_AGENT_OUTPUT_CHANNEL: &str = "agentResult";
 ///   instead of failing the node: the runtime has no node-failure status or
 ///   retries yet, and surfacing the error as channel data keeps the run
 ///   deterministic and lets the graph route on it (e.g. into an alert path).
+/// - When `todos_channel` is set and the agent called `writeTodos`, the
+///   authoritative todo list is written into that channel in the **same** patch as
+///   the result (one `NodeOutput::update` → one checkpoint), so the
+///   after-every-node-completion invariant is preserved (ADR 0022/0023).
 pub fn agent_node_handler(
     agent: Arc<ReActAgent>,
     output_channel: String,
     suspend_for_approval: bool,
+    todos_channel: Option<String>,
 ) -> NodeHandler {
     Box::new(move |state: GraphState| {
         let agent = Arc::clone(&agent);
         let output_channel = output_channel.clone();
+        let todos_channel = todos_channel.clone();
         Box::pin(async move {
             let approved = approved_tool_names(&state.channels);
             match agent.run(&Value::Null, &state.channels, &approved).await {
                 Ok(result) => {
                     let requires_review = result.requires_human_review;
+                    // Capture the todo list before `result` is consumed by `to_value`.
+                    let todos_value = result
+                        .todos
+                        .as_ref()
+                        .map(|todos| serde_json::to_value(todos).unwrap_or(Value::Null));
                     let value = serde_json::to_value(&result).unwrap_or(Value::Null);
                     let mut patch = BTreeMap::new();
                     patch.insert(output_channel, value);
+                    // Same patch as the result → one checkpoint. Todos survive a
+                    // suspension too (they are persisted even on the interrupt path).
+                    if let (Some(channel), Some(todos)) = (todos_channel, todos_value) {
+                        patch.insert(channel, todos);
+                    }
                     if suspend_for_approval && requires_review {
                         NodeOutput::interrupt(AGENT_APPROVAL_INTERRUPT, patch)
                     } else {
@@ -210,6 +226,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 true,
+                None,
             ),
         );
 
@@ -255,6 +272,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 false,
+                None,
             ),
         );
 
@@ -273,5 +291,106 @@ mod tests {
             .and_then(Value::as_str)
             .expect("error message");
         assert!(!message.is_empty());
+    }
+
+    /// `writeTodos` persists into the durable todos channel in the SAME checkpointed
+    /// update as the result — one node completion, one checkpoint (ADR 0022/0023).
+    #[tokio::test]
+    async fn write_todos_persists_into_the_durable_channel() {
+        use crate::todos::{write_todos_tool, TODOS_CHANNEL};
+
+        let mut registry = InMemoryToolRegistry::new();
+        let (definition, handler) = write_todos_tool();
+        registry.register(definition, handler);
+
+        let write_todos_call = LlmResponse {
+            content: String::new(),
+            tool_calls: Some(vec![LlmToolCall {
+                id: "tu1".to_owned(),
+                name: "writeTodos".to_owned(),
+                input: json!({
+                    "todos": [
+                        { "text": "scope", "status": "completed" },
+                        { "text": "build", "status": "in_progress" }
+                    ]
+                }),
+            }]),
+            stop_reason: Some("tool_use".to_owned()),
+            usage: LlmUsage::default(),
+            model: "mock".to_owned(),
+            provider: LlmProvider::Anthropic,
+        };
+
+        let mut gateway = DefaultLlmGateway::new();
+        gateway.register_adapter(Box::new(MockAdapter::new(
+            LlmProvider::Anthropic,
+            vec![write_todos_call, text("FINAL: planned")],
+        )));
+
+        let agent = ReActAgent::new("assistant", "planner", Arc::new(gateway))
+            .with_tools(Arc::new(registry));
+
+        // A graph that declares the durable todos channel alongside the output channel.
+        let graph = GraphDefinition {
+            id: GraphId::from("g-todos"),
+            version: "0.0.0".to_owned(),
+            name: "todos graph".to_owned(),
+            recursion_limit: None,
+            channels: [
+                (DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(), replace_channel()),
+                (APPROVED_TOOLS_CHANNEL.to_owned(), replace_channel()),
+                (TODOS_CHANNEL.to_owned(), replace_channel()),
+            ]
+            .into_iter()
+            .collect(),
+            nodes: vec![NodeDefinition {
+                id: NodeId::from("assistant"),
+                node_type: NodeType::Agent,
+                label: "assistant".to_owned(),
+                subgraph_id: None,
+                input_mapping: None,
+                output_mapping: None,
+                fan_out: None,
+                retry_policy: None,
+                metadata: None,
+            }],
+            edges: vec![],
+            entry_node_id: NodeId::from("assistant"),
+            metadata: None,
+        };
+
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("assistant"),
+            agent_node_handler(
+                Arc::new(agent),
+                DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
+                false,
+                Some(TODOS_CHANNEL.to_owned()),
+            ),
+        );
+
+        let runtime = GraphRuntime::new(graph, nodes, InMemoryConditionRegistry::new());
+        let done = runtime
+            .start(RunId::from("run-todos"), BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(done.status, GraphStatus::Completed);
+
+        let todos = done
+            .channels
+            .get(TODOS_CHANNEL)
+            .and_then(Value::as_array)
+            .expect("todos persisted into the durable channel");
+        assert_eq!(todos.len(), 2);
+        assert_eq!(todos[0].get("id").and_then(Value::as_str), Some("todo-1"));
+        assert_eq!(
+            todos[0].get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            todos[1].get("status").and_then(Value::as_str),
+            Some("in_progress")
+        );
     }
 }
