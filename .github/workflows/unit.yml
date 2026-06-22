@@ -26,7 +26,13 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.96.0
       - run: pnpm install --frozen-lockfile
+      # The SDK is Rust-only (no TS fallback): tests run graphs on the native engine, so
+      # build the napi addon first — `@adriane-ai/napi` loads it from crates/bindings.
+      - name: Build napi addon
+        working-directory: crates/bindings
+        run: pnpm exec napi build --platform
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm lint
