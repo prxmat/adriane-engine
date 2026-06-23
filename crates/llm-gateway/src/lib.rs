@@ -46,5 +46,5 @@ pub use openai_compatible::{
 pub use redactor::{HttpPiiRedactor, NoopPiiRedactor, PiiRedactor, RedactingGateway};
 pub use types::{
     LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk, LlmToolCall, LlmToolDef,
-    LlmUsage, ResponseFormat,
+    LlmUsage,
 };

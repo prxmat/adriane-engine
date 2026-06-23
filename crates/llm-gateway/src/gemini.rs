@@ -28,7 +28,7 @@ use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
 use crate::gateway::LlmProviderAdapter;
-use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat};
+use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage};
 
 /// Model used when the request does not name a Gemini model.
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.0-flash";
@@ -239,13 +239,6 @@ pub fn build_request_body(req: &LlmRequest) -> Value {
     if let Some(max_tokens) = req.max_tokens {
         generation.insert("maxOutputTokens".to_owned(), json!(max_tokens));
     }
-    // ADR 0029: Gemini takes a native JSON schema under `generationConfig`
-    // (`responseMimeType` + `responseSchema`). It ignores the OpenAI `name`/`strict`;
-    // the in-engine validation floor enforces conformance regardless.
-    if let Some(ResponseFormat::JsonSchema { schema, .. }) = &req.response_format {
-        generation.insert("responseMimeType".to_owned(), json!("application/json"));
-        generation.insert("responseSchema".to_owned(), schema.clone());
-    }
     if !generation.is_empty() {
         body.insert("generationConfig".to_owned(), Value::Object(generation));
     }
@@ -390,7 +383,7 @@ mod tests {
 
     use super::*;
     use crate::gateway::{DefaultLlmGateway, LlmGateway};
-    use crate::types::{LlmMessage, LlmToolDef, ResponseFormat};
+    use crate::types::{LlmMessage, LlmToolDef};
 
     /// Captures the (model, body) the adapter sends and returns a canned response.
     /// The `(model, body)` pairs the adapter sends, captured for assertions.
@@ -451,28 +444,7 @@ mod tests {
             tools: None,
             max_tokens: None,
             temperature: None,
-            response_format: None,
         }
-    }
-
-    #[tokio::test]
-    async fn response_format_maps_to_generation_config_response_schema() {
-        // ADR 0029: Gemini takes a native schema under `generationConfig`.
-        let request = LlmRequest {
-            response_format: Some(ResponseFormat::JsonSchema {
-                name: "Verdict".to_owned(),
-                schema: json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } }),
-                strict: true,
-            }),
-            ..base_request()
-        };
-        let body = build_request_body(&request);
-        let gen = &body["generationConfig"];
-        assert_eq!(gen["responseMimeType"], json!("application/json"));
-        assert_eq!(
-            gen["responseSchema"],
-            json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } })
-        );
     }
 
     #[tokio::test]
@@ -543,7 +515,6 @@ mod tests {
 
         let request = LlmRequest {
             temperature: Some(0.5),
-            response_format: None,
             max_tokens: Some(256),
             ..base_request()
         };

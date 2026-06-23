@@ -72,7 +72,6 @@ default:
 | `{ kind: "terse" }` | Append a compact-output directive to the system prompt. Lossy — prose only, not code. |
 | `{ kind: "contextBudget", params: { chars } }` | Cap the agent's seed message (the injected `Input` / `State` dump) to `chars` characters. |
 | `{ kind: "reflection", params?: { threshold? } }` | One self-critique after the run — see [reflection](#reflection). |
-| `{ kind: "structuredOutput", params: { schema, name?, strict?, mode?, retryCap? } }` | Constrain the output to a JSON Schema — see [structured output](#structured-output). |
 
 ```ts
 .agentNode("writer", {
@@ -161,60 +160,6 @@ with a conditional edge if you want a weak answer to reach a human gate:
 Reflection is **additive** — it does not replace the standalone reflection node (the full
 critique → revise loop). It is best-effort and **fails open**: a critique-call error never fails
 the run.
-
-## Structured output
-
-`{ kind: "structuredOutput", params: { schema } }` constrains an agent's answer to a JSON Schema
-and **validates it in the engine**. Two things happen, both on the deterministic Rust path:
-
-1. **Native generation.** The engine sets the provider's own constraint — OpenAI
-   `response_format: { type: "json_schema" }`, Gemini `responseSchema`, and (since Anthropic has no
-   `response_format`) a **forced synthetic tool** whose schema is your schema. One neutral field,
-   fanned out per provider.
-2. **Validation floor.** The result is parsed and checked against the schema *in-engine* (real
-   nested / enum / format conformance), so a worker-executed run can never emit unvalidated output
-   and the verdict is part of the audited run state. The validated value lands on
-   `AgentResult.structuredOutput`.
-
-```ts
-.agentNode("classifier", {
-  llm,
-  prompt: { system: "Classify the ticket." },
-  middleware: [{
-    kind: "structuredOutput",
-    params: {
-      name: "Triage",
-      schema: {
-        type: "object",
-        properties: {
-          severity: { type: "string", enum: ["low", "high"] },
-          summary: { type: "string" }
-        },
-        required: ["severity", "summary"]
-      }
-    }
-  }]
-})
-```
-
-```ts
-const result = await app.run({ ... });
-const triage = result.channels.agentResult.structuredOutput; // { severity, summary }
-```
-
-| Param | Default | Effect |
-| --- | --- | --- |
-| `schema` | — (required) | The JSON Schema the output must match. Without it the middleware is a no-op. |
-| `name` | `"Output"` | The schema name (OpenAI `json_schema.name`; the Anthropic forced-tool name). |
-| `strict` | `true` | Request the provider's strict-decoding mode where it exists. |
-| `mode` | `"required"` | `required` fails **closed** (a typed error, surfaced as channel data) after `retryCap` re-prompts; `lenient` falls back to raw text. |
-| `retryCap` | `2` | Bounded, deterministic corrective re-prompts on invalid output (no temperature drift, so replay is stable). |
-
-**Governance still holds.** `structuredOutput` is an efficiency kind (output-shaping); the
-approval gate is intrinsic to `before_tool`, so a structured result can never route around a
-sensitive-tool gate. Validation runs before the gate, so the gate sees validated JSON. See
-[ADR 0029](https://github.com/prxmat/adriane-engine/blob/main/docs/adr/0029-governed-structured-output.md)
-for the full design and per-provider guarantees.
 
 ## Next
 

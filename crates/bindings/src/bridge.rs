@@ -26,8 +26,8 @@ use std::sync::Arc;
 use adriane_agents_core::{
     agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem,
     CompressMiddleware, ContextBudgetMiddleware, InMemoryToolRegistry, MiddlewareStack, ReActAgent,
-    RedactMiddleware, ReflectionMiddleware, StructuredOutputMiddleware, TerseMiddleware,
-    ToolDefinition, APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
+    RedactMiddleware, ReflectionMiddleware, TerseMiddleware, ToolDefinition,
+    APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
 use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
@@ -395,44 +395,6 @@ fn build_agent_middleware(
                         model,
                         threshold,
                     )));
-                }
-                "structuredOutput" => {
-                    // ADR 0029 phase 8: constrain output to a JSON schema (efficiency layer,
-                    // gate-safe — the approval gate is intrinsic to before_tool). Needs a
-                    // `schema`; without one the entry no-ops (nothing to validate against).
-                    if let Some(schema) = spec.params.get("schema") {
-                        let name = spec
-                            .params
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or("Output")
-                            .to_owned();
-                        let strict = spec
-                            .params
-                            .get("strict")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(true);
-                        // `mode: "lenient"` fails open to raw text; default required fails closed.
-                        let lenient =
-                            spec.params.get("mode").and_then(Value::as_str) == Some("lenient");
-                        let retry_cap = spec
-                            .params
-                            .get("retryCap")
-                            .and_then(|value| {
-                                value
-                                    .as_u64()
-                                    .or_else(|| value.as_f64().map(|f| f.trunc() as u64))
-                            })
-                            .unwrap_or(2) as usize;
-                        stack.push_efficiency(Arc::new(StructuredOutputMiddleware::new(
-                            gateway.clone(),
-                            name,
-                            schema.clone(),
-                            strict,
-                            lenient,
-                            retry_cap,
-                        )));
-                    }
                 }
                 // Governance kinds (redact / approvalGate / fsPolicy) + unknown kinds are
                 // never applied: never push_governed from data (the type invariant), and
@@ -1307,23 +1269,6 @@ mod tests {
         assert!(!build(&from(json!({
             "provider": "anthropic",
             "resolvedMiddleware": [{ "kind": "reflection" }]
-        })))
-        .is_empty());
-
-        // structuredOutput (ADR 0029 phase 8) WITH a schema → an efficiency middleware lands.
-        assert!(!build(&from(json!({
-            "provider": "anthropic",
-            "resolvedMiddleware": [{
-                "kind": "structuredOutput",
-                "params": { "name": "Verdict", "schema": { "type": "object" }, "mode": "lenient" }
-            }]
-        })))
-        .is_empty());
-
-        // structuredOutput WITHOUT a schema → no-op (nothing to validate against).
-        assert!(build(&from(json!({
-            "provider": "anthropic",
-            "resolvedMiddleware": [{ "kind": "structuredOutput", "params": {} }]
         })))
         .is_empty());
     }

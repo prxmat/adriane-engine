@@ -29,7 +29,7 @@ use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
 use crate::gateway::LlmProviderAdapter;
-use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat};
+use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage};
 
 /// Mistral cloud base URL.
 pub const MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
@@ -407,24 +407,6 @@ pub fn build_request_body(req: &LlmRequest, default_model: &str) -> Value {
         body.insert("max_tokens".to_owned(), json!(max_tokens));
     }
 
-    // ADR 0029: native JSON-schema-constrained generation. OpenAI-compatible providers take
-    // a top-level `response_format`. Aggregators / local servers that don't support it ignore
-    // the field; the in-engine validation floor still enforces conformance.
-    if let Some(ResponseFormat::JsonSchema {
-        name,
-        schema,
-        strict,
-    }) = &req.response_format
-    {
-        body.insert(
-            "response_format".to_owned(),
-            json!({
-                "type": "json_schema",
-                "json_schema": { "name": name, "schema": schema, "strict": strict }
-            }),
-        );
-    }
-
     Value::Object(body)
 }
 
@@ -533,7 +515,7 @@ mod tests {
 
     use super::*;
     use crate::gateway::{DefaultLlmGateway, LlmGateway};
-    use crate::types::{LlmMessage, LlmToolDef, ResponseFormat};
+    use crate::types::{LlmMessage, LlmToolDef};
 
     /// Captures each body the adapter sends and returns a canned response.
     struct RecordingPort {
@@ -588,7 +570,6 @@ mod tests {
             tools: None,
             max_tokens: None,
             temperature: None,
-            response_format: None,
         }
     }
 
@@ -630,33 +611,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_format_maps_to_top_level_json_schema() {
-        // ADR 0029: an OpenAI-compatible request carries a top-level `response_format`.
-        let (port, bodies) = recording_port(text_response());
-        let adapter = OpenAiCompatibleAdapter::new(port, MISTRAL_DEFAULT_MODEL);
-
-        let request = LlmRequest {
-            response_format: Some(ResponseFormat::JsonSchema {
-                name: "Verdict".to_owned(),
-                schema: json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } }),
-                strict: true,
-            }),
-            ..base_request()
-        };
-        adapter.complete(request).await.unwrap();
-
-        let bodies = bodies.lock().unwrap();
-        let rf = &bodies[0]["response_format"];
-        assert_eq!(rf["type"], json!("json_schema"));
-        assert_eq!(rf["json_schema"]["name"], json!("Verdict"));
-        assert_eq!(rf["json_schema"]["strict"], json!(true));
-        assert_eq!(
-            rf["json_schema"]["schema"],
-            json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } })
-        );
-    }
-
-    #[tokio::test]
     async fn never_emits_a_tools_key_when_there_are_no_tools() {
         let (port, bodies) = recording_port(text_response());
         let adapter = OpenAiCompatibleAdapter::new(port, MISTRAL_DEFAULT_MODEL);
@@ -681,7 +635,6 @@ mod tests {
 
         let request = LlmRequest {
             temperature: Some(0.5),
-            response_format: None,
             max_tokens: Some(256),
             ..base_request()
         };
