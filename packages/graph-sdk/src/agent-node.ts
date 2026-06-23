@@ -75,6 +75,14 @@ export type AgentNodeConfig = {
    */
   contextBudget?: number;
   /**
+   * Durable channel the agent's `writeTodos` list is persisted into (ADR 0022/0023,
+   * phase 1). When set and the agent has the `writeTodos` tool, the engine writes the
+   * authoritative todo list here in the same checkpointed update as the result, so
+   * downstream nodes can read the plan. Default: no durable sink (the list still
+   * appears in the result). Conventionally {@link import("@adriane-ai/agents-core").TODOS_CHANNEL} (`"__todos"`).
+   */
+  todosChannel?: string;
+  /**
    * When true, the node suspends the whole run (a dynamic interrupt) the moment the
    * agent needs approval, instead of just flagging `requiresHumanReview`. Resume with
    * `CompiledGraph.approveAndResume(runId, { approvedTools })` to continue. Default false.
@@ -95,6 +103,34 @@ export type ToolNodeConfig = {
   tools: ToolRegistry;
   /** Execute all tool calls concurrently instead of sequentially. */
   parallel?: boolean;
+  label?: string;
+};
+
+/**
+ * Config for {@link GraphBuilder.taskNode} — spawn a sub-agent in an isolated context
+ * that returns a single compressed report (ADR 0022/0023, phase 1). The spawn is sugar
+ * over a one-node subgraph, so it inherits the runtime's guarantees: checkpointed,
+ * audited, and human-gate-preserving (a sub-agent that suspends for approval suspends
+ * the whole run).
+ */
+export type TaskNodeConfig = {
+  /** The sub-agent to spawn (its own ReAct agent config). */
+  subAgent: AgentNodeConfig;
+  /**
+   * The channel that feeds the sub-agent its objective — the ONLY channel projected
+   * into the child (isolation). Default `"objective"`.
+   */
+  objectiveChannel?: string;
+  /**
+   * The channel the sub-agent's report lands in — the ONLY channel projected back to
+   * the parent (a single value out). Default `"report"`.
+   */
+  reportChannel?: string;
+  /**
+   * Run the sub-agent with `outputStyle: "terse"` so the report is a summary, not a
+   * full transcript. Default true.
+   */
+  compress?: boolean;
   label?: string;
 };
 
@@ -140,6 +176,8 @@ export type RustAgentConfig = {
   outputStyle?: "terse";
   /** ADR 0014 — cap (chars) on the injected serialized state. */
   contextBudget?: number;
+  /** ADR 0022/0023 — durable channel the `writeTodos` list is persisted into. */
+  todosChannel?: string;
   /** JS-backed tool executes, one per tool in the registry. */
   toolBindings: RustToolBinding[];
   /**
@@ -225,6 +263,7 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
     outputChannel: config.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL,
     outputStyle: config.outputStyle,
     contextBudget: config.contextBudget,
+    todosChannel: config.todosChannel,
     toolBindings: toolBindingsOf(config.tools),
     usesApprovalEngine: config.approvalEngine !== undefined
   };

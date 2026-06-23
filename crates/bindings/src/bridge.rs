@@ -398,6 +398,13 @@ fn build_agent_handler(
 
     let mut registry = InMemoryToolRegistry::new();
     for tool_name in &agent_spec.tool_names {
+        // `writeTodos` has a real Rust impl (ADR 0022/0023): register it verbatim
+        // (proper schema + pure normalizing handler), never the no-op stub.
+        if tool_name == adriane_agents_core::WRITE_TODOS_TOOL {
+            let (definition, handler) = adriane_agents_core::write_todos_tool();
+            registry.register(definition, handler);
+            continue;
+        }
         let requires_approval = approval_tools.contains(tool_name.as_str());
         let definition = ToolDefinition {
             name: tool_name.clone(),
@@ -454,6 +461,7 @@ fn build_agent_handler(
         Arc::new(agent),
         output_channel,
         agent_spec.suspend_for_approval,
+        agent_spec.todos_channel.clone(),
     ))
 }
 
@@ -897,6 +905,7 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
         };
 
         let gateway = build_gateway(
@@ -926,6 +935,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 false,
+                None,
             ),
         );
 
@@ -972,6 +982,7 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
         };
         let gateway = build_gateway(
             &agent_spec,
@@ -1004,6 +1015,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 true,
+                None,
             ),
         );
 
@@ -1124,6 +1136,7 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1172,6 +1185,7 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1227,6 +1241,7 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
         };
 
         let resolved = resolve_agent_model(&agent_spec);
@@ -1261,6 +1276,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 false,
+                None,
             ),
         );
         let graph = GraphDefinition {
