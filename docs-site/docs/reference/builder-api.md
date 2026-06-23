@@ -100,6 +100,15 @@ A handler returns a channel-update object. It may also return a routing `Command
 (`{ goto, update? }`) — but see the [Rust caveat](#rust-engine-caveats) below: a `goto` is
 dropped on the Rust path.
 
+### `humanGate(id, options?)`
+
+```ts
+humanGate(id: string, options?: { label?: string }): this;
+```
+
+Add a **human-gate node**: a structural pause point where the run suspends for a human, separate
+from agent-native tool approval. Full loop in [approval gates](/docs/governance/approval-gates).
+
 ### `agentNode(id, config)`
 
 ```ts
@@ -125,6 +134,12 @@ Add a ReAct agent node. Its `AgentResult` lands in `config.outputChannel` (defau
 | `name` | `string` | `id` | Agent name; also the approval requester principal. |
 | `description` | `string` | `agent node <id>` | Agent description. |
 | `outputChannel` | `string` | `"agentResult"` | Channel the result lands in. |
+| `profile` | `AgentProfile` | `undefined` | `"fast" \| "frontier-careful" \| "governed-deep"` — a tier + efficiency-middleware + suspend/fs bundle. Explicit fields override it. See [middleware & profiles](/docs/advanced-agents/middleware-and-profiles#profiles). |
+| `middleware` | `EfficiencyMiddlewareSpec[]` | `undefined` | Extra efficiency middleware (`compress` / `terse` / `contextBudget` / `reflection`). Governance kinds are rejected ([`GovernanceMiddlewareRejectedError`](/docs/reference/errors)). |
+| `outputStyle` | `"terse"` | `undefined` | Token-efficiency: append a compact-output directive to the system prompt (desugars to a `terse` middleware). |
+| `contextBudget` | `number` | `undefined` | Cap (chars) on the injected seed message (desugars to a `contextBudget` middleware). |
+| `enableFs` | `boolean` | `false` | Opt into the [governed virtual filesystem](/docs/advanced-agents/governed-filesystem) tools (bound by the graph's `fsPolicy`). |
+| `todosChannel` | `string` | `undefined` | Durable channel the agent's `writeTodos` list is persisted into. See [deep agents](/docs/advanced-agents/deep-agents). |
 | `suspendForApproval` | `boolean` | `false` | Suspend the run when a gated tool is reached. |
 | `approvalEngine` | `ApprovalEngine` | `undefined` | Route approvals through an engine (TS-engine only — see caveats). |
 | `label` | `string` | `id` | Display label. |
@@ -153,6 +168,56 @@ Rust engine its handler throws a `DynamicInterrupt` that surfaces as a *node fai
 clean suspension. Route such a graph with `ADRIANE_SDK_ENGINE=ts` if you need it. (Source:
 `compiled-graph.ts`.)
 :::
+
+### `taskNode(id, config)`
+
+```ts
+taskNode(id: string, config: TaskNodeConfig): GraphBuilder<TState & { [K: string]: AgentResult }>;
+```
+
+Spawn a sub-agent in an isolated context that returns one compressed report — sugar over a
+one-node subgraph (checkpointed, audited, suspension-propagating). Full walkthrough in
+[deep agents](/docs/advanced-agents/deep-agents).
+
+| `TaskNodeConfig` field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `subAgent` | `AgentNodeConfig` | — (required) | The sub-agent to spawn. |
+| `objectiveChannel` | `string` | `"objective"` | The only channel projected into the child. |
+| `reportChannel` | `string` | `"report"` | The only channel the child's report lands in. |
+| `compress` | `boolean` | `true` | Run the sub-agent terse (a summary, not a full transcript). |
+
+### `subgraph(id, child, options?)`
+
+```ts
+subgraph<TChild>(
+  id: string,
+  child: GraphBuilder<TChild>,
+  options?: { inputMapping?: Record<string, string>; outputMapping?: Record<string, string>; label?: string }
+): this;
+```
+
+Embed another graph as a single node. The child shares the parent's registries, so a child node id
+that collides with a parent id throws `DuplicateNodeError`. `inputMapping` / `outputMapping` project
+channels in and out. A child that suspends suspends the whole run. Full walkthrough in
+[subgraphs](/docs/building/subgraphs).
+
+### `fsPolicy(rules)`
+
+```ts
+fsPolicy(rules: FsPolicyRule[]): this;
+```
+
+Set the run's filesystem path policy — the per-path permission rules every `enableFs` agent in the
+graph is bound by. Each rule is `{ glob, verb }` with `verb` one of `"deny" | "read" | "gate" |
+"write"`. **Fail-closed**: an unmatched path is read-only. Full reference in the
+[governed virtual filesystem](/docs/advanced-agents/governed-filesystem#the-path-policy).
+
+```ts
+createGraph({ name: "researcher" })
+  .fsPolicy([{ glob: "notes/**", verb: "write" }, { glob: "secret/**", verb: "deny" }])
+  .agentNode("worker", { llm, prompt: { system: "…" }, enableFs: true })
+  .compile();
+```
 
 ### `component(id, descriptor, options?)`
 
@@ -209,6 +274,26 @@ user-supplied string, which is what keeps routing safe and inspectable (see the
 
 ```ts
 .conditionalEdge("assistant", "review", "needsReview", (s) => s.channels.agentResult.requiresHumanReview)
+```
+
+### `fanOut(from, parallelTo, joinAt)`
+
+```ts
+fanOut(from: string, parallelTo: string[], joinAt: string): this;
+```
+
+Mark `from` as a **scatter** point: the listed `parallelTo` nodes run concurrently, then converge
+at `joinAt`. The node ids must already exist (else `UnknownNodeError`). This is static fan-out (a
+fixed node list); dynamic map-reduce uses [`send` / inbox](/docs/building/dynamic-message-send).
+
+```ts
+createGraph({ name: "council" })
+  .node("dispatch", async () => ({}))
+  .agentNode("a", { llm, prompt: { system: "…" }, outputChannel: "a" })
+  .agentNode("b", { llm, prompt: { system: "…" }, outputChannel: "b" })
+  .node("chair", async (s) => ({ verdict: pick(s.channels.a, s.channels.b) }))
+  .fanOut("dispatch", ["a", "b"], "chair")
+  .compile();
 ```
 
 ### `entry(nodeId)`
@@ -344,6 +429,18 @@ approves its own tools** — this is the human seam. Full loop in
 | --- | --- | --- | --- |
 | `approvedTools` | `string[]` | — (required) | Names of approval-gated tools the human grants; they execute on resume. |
 | `resolvedBy` | `string` | `"human"` | The principal granting approval — never the requesting agent. The Rust engine rejects a resume where `resolvedBy` is empty or equals the tool's requester (the no-self-approval guard-rail). |
+
+### `signal(runId, name, payload?)`
+
+```ts
+signal(runId: RunId, name: string, payload?: unknown): Promise<TypedGraphState<TState>>;
+```
+
+Deliver a named signal to a run suspended on `waitForSignal(name)`, resuming it (optionally with a
+`payload`). The durable counterpart to `sleepUntil` — the engine never sleeps in-process; it
+suspends and a scheduler (or this call) wakes it. See
+[durable timers and signals](/docs/building/durable-timers-and-signals). Instance-bound on the Rust
+engine, exactly like `resume` (see the warning above).
 
 ### `stream(initialData, mode, options?)`
 

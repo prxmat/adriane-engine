@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adriane-agents-core"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-artifact-store",
  "adriane-fs-backend",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-approval-engine"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-graph-core",
  "base64",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-artifact-store"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-graph-core",
  "async-trait",
@@ -47,7 +47,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-callbacks"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-cli"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-graph-adriane",
  "adriane-graph-core",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-components"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-agents-core",
  "adriane-graph-core",
@@ -86,14 +86,14 @@ dependencies = [
 
 [[package]]
 name = "adriane-config"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "adriane-fs-backend"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-artifact-store",
  "adriane-graph-core",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-graph-adriane"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-graph-core",
  "serde",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-graph-core"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-graph-runtime"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-graph-core",
  "futures-util",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-knowledge"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-okf",
  "async-trait",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-lang-adriane"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-llm-gateway"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-memory-store"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-napi"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-agents-core",
  "adriane-approval-engine",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-observability"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-graph-core",
  "adriane-graph-runtime",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-okf"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-py"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-agents-core",
  "adriane-components",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-rag-pipeline"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "adriane-llm-gateway",
  "adriane-runnable",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "adriane-runnable"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "futures",
