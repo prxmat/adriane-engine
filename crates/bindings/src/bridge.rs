@@ -24,10 +24,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use adriane_agents_core::{
-    agent_node_handler, register_fs_tools, ApprovalRequestItem, CompressMiddleware,
-    ContextBudgetMiddleware, InMemoryToolRegistry, MiddlewareStack, ReActAgent, RedactMiddleware,
-    ReflectionMiddleware, TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL,
-    DEFAULT_AGENT_OUTPUT_CHANNEL,
+    agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem,
+    CompressMiddleware, ContextBudgetMiddleware, InMemoryToolRegistry, MiddlewareStack, ReActAgent,
+    RedactMiddleware, ReflectionMiddleware, TerseMiddleware, ToolDefinition,
+    APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
 use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
@@ -461,6 +461,12 @@ fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<Grap
                 &id, agent_spec, spec, &callbacks, &fs_store, &fs_policy, &fs_run_id,
             )?;
             nodes.register(NodeId::from(id), handler);
+        } else if let Some(map_spec) = spec.map_agents.get(&id) {
+            // ADR 0027 phase 4b: a `mapAgents` dynamic-fan-out node.
+            let handler = build_map_agent_handler(
+                &id, map_spec, spec, &callbacks, &fs_store, &fs_policy, &fs_run_id,
+            )?;
+            nodes.register(NodeId::from(id), handler);
         } else if node.node_type == NodeType::HumanGate {
             // The runtime suspends natively at a human gate — no handler needed.
             continue;
@@ -550,7 +556,7 @@ fn js_condition(name: String, callbacks: &JsCallbacks) -> adriane_graph_runtime:
 /// Build the agent-node handler for an agent spec: a [`ReActAgent`] over a gateway
 /// chosen from env, with a tool registry where JS tools call back into JS.
 #[allow(clippy::too_many_arguments)]
-fn build_agent_handler(
+fn build_react_agent(
     node_id: &str,
     agent_spec: &AgentSpec,
     spec: &EngineSpec,
@@ -558,7 +564,7 @@ fn build_agent_handler(
     fs_store: &Arc<dyn ArtifactStore>,
     fs_policy: &Arc<StaticPathPolicy>,
     fs_run_id: &RunId,
-) -> napi::Result<adriane_graph_runtime::NodeHandler> {
+) -> napi::Result<Arc<ReActAgent>> {
     // Resolve the concrete model BEFORE building the gateway, so the registered
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
     // mistral-only env -> mistral-small-latest through the Mistral adapter).
@@ -648,16 +654,60 @@ fn build_agent_handler(
         &resolved.model,
     ));
 
+    Ok(Arc::new(agent))
+}
+
+/// Wrap a built ReAct agent as an ordinary single-node agent handler.
+fn build_agent_handler(
+    node_id: &str,
+    agent_spec: &AgentSpec,
+    spec: &EngineSpec,
+    callbacks: &JsCallbacks,
+    fs_store: &Arc<dyn ArtifactStore>,
+    fs_policy: &Arc<StaticPathPolicy>,
+    fs_run_id: &RunId,
+) -> napi::Result<adriane_graph_runtime::NodeHandler> {
+    let agent = build_react_agent(
+        node_id, agent_spec, spec, callbacks, fs_store, fs_policy, fs_run_id,
+    )?;
     let output_channel = agent_spec
         .output_channel
         .clone()
         .unwrap_or_else(|| DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned());
-
     Ok(agent_node_handler(
-        Arc::new(agent),
+        agent,
         output_channel,
         agent_spec.suspend_for_approval,
         agent_spec.todos_channel.clone(),
+    ))
+}
+
+/// Build a `mapAgents` dynamic-fan-out node handler (ADR 0027 phase 4b): the sub-agent is built
+/// exactly like an ordinary agent, then run once per item in `over_channel` (concurrently),
+/// merging the per-item results — in input order — into `join_at`.
+fn build_map_agent_handler(
+    node_id: &str,
+    map_spec: &crate::spec::MapAgentSpec,
+    spec: &EngineSpec,
+    callbacks: &JsCallbacks,
+    fs_store: &Arc<dyn ArtifactStore>,
+    fs_policy: &Arc<StaticPathPolicy>,
+    fs_run_id: &RunId,
+) -> napi::Result<adriane_graph_runtime::NodeHandler> {
+    let agent = build_react_agent(
+        node_id,
+        &map_spec.agent,
+        spec,
+        callbacks,
+        fs_store,
+        fs_policy,
+        fs_run_id,
+    )?;
+    Ok(map_node_handler(
+        agent,
+        map_spec.over_channel.clone(),
+        map_spec.join_at.clone(),
+        map_spec.suspend_for_approval,
     ))
 }
 
@@ -1309,6 +1359,7 @@ mod tests {
             approved_tools: vec![],
             agents: [("assistant".to_owned(), agent_spec)].into_iter().collect(),
             component_nodes: BTreeMap::new(),
+            map_agents: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
             fs_policy: vec![],
             js_node_ids: vec![],
@@ -1808,6 +1859,7 @@ mod tests {
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
+            map_agents: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
             fs_policy: vec![],
             js_node_ids: vec![],
@@ -1873,6 +1925,7 @@ mod tests {
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
+            map_agents: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
             fs_policy: vec![],
             js_node_ids: vec![],

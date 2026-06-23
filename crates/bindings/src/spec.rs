@@ -97,6 +97,21 @@ pub struct FsPolicyRule {
     pub verb: FsPermVerb,
 }
 
+/// A `mapAgents` node (ADR 0027 phase 4b — dynamic fan-out), keyed in
+/// [`EngineSpec::map_agents`] by node id. The bridge runs `agent` once per item in the
+/// `over_channel` array (concurrently), and writes the per-item results — in input order — into
+/// `join_at` as a JSON array. Each spawn gets `item[i]` as its `input` and shares the run's
+/// channels. `suspend_for_approval` makes a gated spawn suspend the whole map.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapAgentSpec {
+    pub over_channel: String,
+    pub join_at: String,
+    pub agent: AgentSpec,
+    #[serde(default)]
+    pub suspend_for_approval: bool,
+}
+
 /// A graph node backed by a native Rust component, keyed in
 /// [`EngineSpec::component_nodes`] by node id. The bridge builds the runtime handler
 /// from [`adriane_components::ComponentRegistry::build_handler`] using `kind` +
@@ -175,6 +190,9 @@ pub struct EngineSpec {
     /// Per-node agent configuration, keyed by node id.
     #[serde(default)]
     pub agents: BTreeMap<String, AgentSpec>,
+    /// Per-node `mapAgents` dynamic-fan-out configuration (ADR 0027 phase 4b), keyed by node id.
+    #[serde(default)]
+    pub map_agents: BTreeMap<String, MapAgentSpec>,
     /// Per-node native component configuration, keyed by node id. Such a node runs a
     /// Rust [`adriane_components`] handler (built at assemble time) instead of the JS
     /// seam, even if its id also appears in [`Self::js_node_ids`].

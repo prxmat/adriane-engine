@@ -12,6 +12,7 @@ dependencies = [
  "adriane-graph-runtime",
  "adriane-llm-gateway",
  "async-trait",
+ "futures-util",
  "serde",
  "serde_json",
  "sha2",
