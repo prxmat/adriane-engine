@@ -185,11 +185,26 @@ pub fn build_request_body(req: &LlmRequest) -> Value {
         .iter()
         .filter(|m| m.role != "system")
         .map(|m| {
-            let role = if m.role == "assistant" {
-                "model"
-            } else {
-                "user"
-            };
+            // Tool result → a `functionResponse` part (Gemini links it by function NAME).
+            if m.role == "tool" {
+                let name = m.tool_name.clone().unwrap_or_default();
+                return json!({
+                    "role": "user",
+                    "parts": [{ "functionResponse": { "name": name, "response": { "result": m.content } } }]
+                });
+            }
+            let role = if m.role == "assistant" { "model" } else { "user" };
+            // Assistant tool calls → `functionCall` parts (+ a leading text part if any).
+            if let Some(calls) = &m.tool_calls {
+                let mut parts: Vec<Value> = Vec::new();
+                if !m.content.is_empty() {
+                    parts.push(json!({ "text": m.content }));
+                }
+                for call in calls {
+                    parts.push(json!({ "functionCall": { "name": call.name, "args": call.input } }));
+                }
+                return json!({ "role": role, "parts": parts });
+            }
             json!({ "role": role, "parts": [{ "text": m.content }] })
         })
         .collect();
@@ -424,10 +439,7 @@ mod tests {
         LlmRequest {
             provider: LlmProvider::Google,
             model: "gemini-2.0-flash".to_owned(),
-            messages: vec![LlmMessage {
-                role: "user".to_owned(),
-                content: "Hi".to_owned(),
-            }],
+            messages: vec![LlmMessage::text("user", "Hi")],
             system: None,
             tools: None,
             max_tokens: None,
@@ -443,18 +455,9 @@ mod tests {
         let request = LlmRequest {
             system: Some("Base.".to_owned()),
             messages: vec![
-                LlmMessage {
-                    role: "system".to_owned(),
-                    content: "Extra rule.".to_owned(),
-                },
-                LlmMessage {
-                    role: "assistant".to_owned(),
-                    content: "Prior turn.".to_owned(),
-                },
-                LlmMessage {
-                    role: "user".to_owned(),
-                    content: "Go".to_owned(),
-                },
+                LlmMessage::text("system", "Extra rule."),
+                LlmMessage::text("assistant", "Prior turn."),
+                LlmMessage::text("user", "Go"),
             ],
             tools: Some(vec![LlmToolDef {
                 name: "search".to_owned(),

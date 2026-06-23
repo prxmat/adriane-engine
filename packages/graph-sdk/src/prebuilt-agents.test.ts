@@ -13,10 +13,10 @@ describe("@adriane-ai/graph-sdk — prebuilt micro-agents", () => {
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    // Force the TS engine: these assert the mock-gateway agent run completes, which
-    // is engine-independent in structure; the TS path keeps the asserted behaviour.
+    // Run on the Rust engine (the only engine — the TS fallback was removed): these
+    // assert the mock-gateway agent run completes, which is engine-independent in structure.
     saved.ADRIANE_SDK_ENGINE = process.env.ADRIANE_SDK_ENGINE;
-    process.env.ADRIANE_SDK_ENGINE = "ts";
+    process.env.ADRIANE_SDK_ENGINE = "rust";
     for (const key of PROVIDER_KEYS) {
       saved[key] = process.env[key];
       delete process.env[key];

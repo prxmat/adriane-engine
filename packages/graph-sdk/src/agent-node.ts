@@ -65,6 +65,16 @@ export type AgentNodeConfig = {
   /** Channel that receives the agent's result. Defaults to {@link DEFAULT_AGENT_OUTPUT_CHANNEL}. */
   outputChannel?: string;
   /**
+   * Token-efficiency (ADR 0014). `"terse"` appends a compact-output directive to the
+   * system prompt — cuts output tokens on **prose** stages (lossy; not for code). Default off.
+   */
+  outputStyle?: "terse";
+  /**
+   * Cap (in chars) on the serialized state the agent injects into its first message — avoid
+   * re-feeding an unbounded channel map to every agent. Default: no cap.
+   */
+  contextBudget?: number;
+  /**
    * When true, the node suspends the whole run (a dynamic interrupt) the moment the
    * agent needs approval, instead of just flagging `requiresHumanReview`. Resume with
    * `CompiledGraph.approveAndResume(runId, { approvedTools })` to continue. Default false.
@@ -126,6 +136,10 @@ export type RustAgentConfig = {
   /** Tools (by name) requiring approval — those marked `requiresApproval`. */
   approvalToolNames: string[];
   outputChannel: string;
+  /** ADR 0014 — terse output directive on the system prompt. */
+  outputStyle?: "terse";
+  /** ADR 0014 — cap (chars) on the injected serialized state. */
+  contextBudget?: number;
   /** JS-backed tool executes, one per tool in the registry. */
   toolBindings: RustToolBinding[];
   /**
@@ -209,6 +223,8 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
     suspendForApproval: config.suspendForApproval === true,
     approvalToolNames: approvalToolNamesOf(config.tools),
     outputChannel: config.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL,
+    outputStyle: config.outputStyle,
+    contextBudget: config.contextBudget,
     toolBindings: toolBindingsOf(config.tools),
     usesApprovalEngine: config.approvalEngine !== undefined
   };

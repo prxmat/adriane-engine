@@ -17,10 +17,10 @@
 //! - sampling params (`temperature`, …) are intentionally dropped — recent Opus
 //!   models reject them.
 //!
-//! Deviation from TS (deferred, by design): the Rust [`LlmMessage`] content is a
-//! plain `String` today, so structured content blocks (`tool_use` / `tool_result`
-//! turns) and streaming are not ported yet. They land when the shared types grow
-//! content blocks.
+//! Tool transcript (ADR 0014): assistant `tool_calls` serialize to `tool_use` content
+//! blocks and `role:"tool"` results to a `tool_result` block (linked by `tool_use_id`), so
+//! a tool-calling agent holds a real multi-turn conversation with Anthropic. (Streaming is
+//! still deferred.)
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,8 @@ pub enum AnthropicRole {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicMessage {
     pub role: AnthropicRole,
-    pub content: String,
+    /// Either a plain string or a content-block array (`tool_use` / `tool_result`).
+    pub content: Value,
 }
 
 /// Provider-shaped request the adapter assembles. This is the cache seam: the
@@ -188,13 +189,46 @@ impl AnthropicAdapter {
             .messages
             .iter()
             .filter(|m| m.role != "system")
-            .map(|m| AnthropicMessage {
-                role: if m.role == "assistant" {
+            .map(|m| {
+                // Tool result → a `tool_result` content block (role user) linked by tool_use_id.
+                if m.role == "tool" {
+                    return AnthropicMessage {
+                        role: AnthropicRole::User,
+                        content: json!([{
+                            "type": "tool_result",
+                            "tool_use_id": m.tool_call_id.clone().unwrap_or_default(),
+                            "content": m.content,
+                        }]),
+                    };
+                }
+                let role = if m.role == "assistant" {
                     AnthropicRole::Assistant
                 } else {
                     AnthropicRole::User
-                },
-                content: m.content.clone(),
+                };
+                // Assistant tool calls → `tool_use` blocks (+ a leading text block if any).
+                if let Some(calls) = &m.tool_calls {
+                    let mut blocks: Vec<Value> = Vec::new();
+                    if !m.content.is_empty() {
+                        blocks.push(json!({ "type": "text", "text": m.content }));
+                    }
+                    for call in calls {
+                        blocks.push(json!({
+                            "type": "tool_use",
+                            "id": call.id,
+                            "name": call.name,
+                            "input": call.input,
+                        }));
+                    }
+                    return AnthropicMessage {
+                        role,
+                        content: Value::Array(blocks),
+                    };
+                }
+                AnthropicMessage {
+                    role,
+                    content: Value::String(m.content.clone()),
+                }
             })
             .collect();
 
@@ -510,10 +544,7 @@ mod tests {
         LlmRequest {
             provider: LlmProvider::Anthropic,
             model: "claude-opus-4-8".to_owned(),
-            messages: vec![LlmMessage {
-                role: "user".to_owned(),
-                content: "Hi".to_owned(),
-            }],
+            messages: vec![LlmMessage::text("user", "Hi")],
             system: None,
             tools: None,
             max_tokens: None,
@@ -630,14 +661,8 @@ mod tests {
             model: "claude-haiku-4-5".to_owned(),
             system: Some("Base.".to_owned()),
             messages: vec![
-                LlmMessage {
-                    role: "system".to_owned(),
-                    content: "Extra rule.".to_owned(),
-                },
-                LlmMessage {
-                    role: "user".to_owned(),
-                    content: "Go".to_owned(),
-                },
+                LlmMessage::text("system", "Extra rule."),
+                LlmMessage::text("user", "Go"),
             ],
             ..base_request()
         };
@@ -655,7 +680,7 @@ mod tests {
             params.messages,
             vec![AnthropicMessage {
                 role: AnthropicRole::User,
-                content: "Go".to_owned(),
+                content: json!("Go"),
             }]
         );
     }
@@ -791,7 +816,7 @@ mod tests {
             ]),
             messages: vec![AnthropicMessage {
                 role: AnthropicRole::User,
-                content: "Hi".to_owned(),
+                content: json!("Hi"),
             }],
         };
 

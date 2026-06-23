@@ -103,6 +103,16 @@ pub struct RawUsage {
     pub prompt_tokens: Option<u32>,
     #[serde(default)]
     pub completion_tokens: Option<u32>,
+    /// Cached-prompt accounting (OpenAI-style + Gemini's OpenAI-compat endpoint return
+    /// `prompt_tokens_details.cached_tokens` when a prefix was served from cache).
+    #[serde(default)]
+    pub prompt_tokens_details: Option<RawPromptTokensDetails>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct RawPromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
 }
 
 /// Structural subset of the OpenAI chat-completion response the adapter reads.
@@ -284,7 +294,9 @@ fn to_response(request: &LlmRequest, model: String, raw: OpenAiChatResponse) -> 
         usage: LlmUsage {
             prompt_tokens: usage.prompt_tokens.unwrap_or(0),
             completion_tokens: usage.completion_tokens.unwrap_or(0),
-            cache_read_tokens: None,
+            cache_read_tokens: usage
+                .prompt_tokens_details
+                .and_then(|details| details.cached_tokens),
             cache_write_tokens: None,
         },
         model,
@@ -330,7 +342,32 @@ pub fn build_request_body(req: &LlmRequest, default_model: &str) -> Value {
     }
 
     for message in &req.messages {
-        messages.push(json!({ "role": message.role, "content": message.content }));
+        let mut m = Map::new();
+        m.insert("role".to_owned(), json!(message.role));
+        m.insert("content".to_owned(), json!(message.content));
+        // Assistant tool calls → OpenAI `tool_calls` (function `arguments` is a JSON string).
+        if let Some(calls) = &message.tool_calls {
+            m.insert(
+                "tool_calls".to_owned(),
+                Value::Array(
+                    calls
+                        .iter()
+                        .map(|c| {
+                            json!({
+                                "id": c.id,
+                                "type": "function",
+                                "function": { "name": c.name, "arguments": c.input.to_string() }
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        // Tool-result message → link it back to the assistant's call id.
+        if let Some(id) = &message.tool_call_id {
+            m.insert("tool_call_id".to_owned(), json!(id));
+        }
+        messages.push(Value::Object(m));
     }
 
     let mut body = Map::new();
@@ -528,10 +565,7 @@ mod tests {
         LlmRequest {
             provider: LlmProvider::Mistral,
             model: "mistral-small-latest".to_owned(),
-            messages: vec![LlmMessage {
-                role: "user".to_owned(),
-                content: "Hi".to_owned(),
-            }],
+            messages: vec![LlmMessage::text("user", "Hi")],
             system: None,
             tools: None,
             max_tokens: None,

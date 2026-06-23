@@ -41,3 +41,11 @@ export class MissingHandlerError extends AdrianeSdkError {
     this.name = "MissingHandlerError";
   }
 }
+
+/** Thrown when a builder method references a node id that has not been added yet. */
+export class UnknownNodeError extends AdrianeSdkError {
+  public constructor(nodeId: string, context: string) {
+    super(`${context} references node '${nodeId}', which has not been added to this graph.`);
+    this.name = "UnknownNodeError";
+  }
+}

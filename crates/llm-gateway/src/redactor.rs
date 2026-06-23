@@ -274,13 +274,7 @@ mod tests {
         )));
         let gateway = RedactingGateway::new(Arc::new(inner), Arc::new(UpperRedactor));
 
-        let req = request_with(
-            vec![LlmMessage {
-                role: "user".to_owned(),
-                content: "secret".to_owned(),
-            }],
-            Some("be nice"),
-        );
+        let req = request_with(vec![LlmMessage::text("user", "secret")], Some("be nice"));
         // The mock ignores content but the call must succeed through the wrapper.
         let out = gateway.complete(req).await.unwrap();
         assert_eq!(out.content, "ok");

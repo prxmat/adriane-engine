@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anthropic;
+pub mod compressor;
 pub mod error;
 pub mod gateway;
 pub mod gemini;
@@ -21,6 +22,9 @@ pub use anthropic::{
     build_request_body, AnthropicAdapter, AnthropicCreateParams, AnthropicMessage, AnthropicPort,
     AnthropicRawResponse, AnthropicRole, AnthropicUsage, ContentBlock, HttpAnthropicPort,
     SystemBlock, ToolParam, DEFAULT_MAX_TOKENS, DEFAULT_MODEL,
+};
+pub use compressor::{
+    CompressingGateway, HttpPromptCompressor, NoopPromptCompressor, PromptCompressor,
 };
 pub use error::LlmError;
 pub use gateway::{DefaultLlmGateway, LlmGateway, LlmProviderAdapter};

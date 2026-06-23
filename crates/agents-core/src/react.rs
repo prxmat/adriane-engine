@@ -69,6 +69,9 @@ pub struct ReActAgent {
     model: String,
     system: Option<String>,
     max_iterations: usize,
+    /// ADR 0014: cap (in chars) on the serialized `State` injected into the first message.
+    /// `None` = inject the full state.
+    context_budget: Option<usize>,
 }
 
 impl ReActAgent {
@@ -88,7 +91,14 @@ impl ReActAgent {
             model: DEFAULT_MODEL.to_owned(),
             system: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
+            context_budget: None,
         }
+    }
+
+    /// Cap the serialized `State` injected into the agent's first message (ADR 0014 trim).
+    pub fn with_context_budget(mut self, budget: usize) -> Self {
+        self.context_budget = Some(budget);
+        self
     }
 
     pub fn with_tools(mut self, tools: Arc<InMemoryToolRegistry>) -> Self {
@@ -137,10 +147,20 @@ impl ReActAgent {
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
         );
-        let mut conversation = vec![LlmMessage {
-            role: "user".to_owned(),
-            content: format!("Input: {input}\nState: {state_value}"),
-        }];
+        // ADR 0014 trim: cap the injected state to `context_budget` chars when set.
+        let state_str = {
+            let full = state_value.to_string();
+            match self.context_budget {
+                Some(n) if full.chars().count() > n => {
+                    full.chars().take(n).collect::<String>() + "…"
+                }
+                _ => full,
+            }
+        };
+        let mut conversation = vec![LlmMessage::text(
+            "user",
+            format!("Input: {input}\nState: {state_str}"),
+        )];
 
         'iterations: for _ in 0..self.max_iterations {
             let response = self
@@ -162,17 +182,22 @@ impl ReActAgent {
             // Native tool-calling takes precedence over the text protocol.
             let tool_calls = response.tool_calls.unwrap_or_default();
             if !tool_calls.is_empty() {
-                if !content.is_empty() {
-                    conversation.push(LlmMessage {
-                        role: "assistant".to_owned(),
-                        content: content.clone(),
-                    });
-                }
+                // Echo the assistant's tool-call turn into history WITH the structured
+                // `tool_calls`, so the provider sees a coherent function-calling transcript
+                // (assistant tool_call → tool result) and does not redundantly re-call.
+                conversation.push(LlmMessage {
+                    role: "assistant".to_owned(),
+                    content: content.clone(),
+                    tool_calls: Some(tool_calls.clone()),
+                    tool_call_id: None,
+                    tool_name: None,
+                });
                 for call in &tool_calls {
                     let outcome = self
                         .execute_tool_call(
                             &call.name,
                             call.input.clone(),
+                            Some(&call.id),
                             approved_tool_names,
                             &mut trace,
                             &mut approval_requests,
@@ -189,15 +214,13 @@ impl ReActAgent {
             // `ACTION: <tool> <json>` text-protocol call — execute, feed the
             // observation back, loop. Checked before the final-answer fallthrough.
             if let Some(rest) = content.strip_prefix("ACTION: ") {
-                conversation.push(LlmMessage {
-                    role: "assistant".to_owned(),
-                    content: content.clone(),
-                });
+                conversation.push(LlmMessage::text("assistant", content.clone()));
                 let (tool_name, payload) = parse_action(rest);
                 let outcome = self
                     .execute_tool_call(
                         &tool_name,
                         payload,
+                        None,
                         approved_tool_names,
                         &mut trace,
                         &mut approval_requests,
@@ -234,10 +257,15 @@ impl ReActAgent {
     /// Resolve a tool by name and either execute it or gate it. Shared by the
     /// native tool-call path and the `ACTION:` text protocol so both honour the
     /// approval rule identically: a `requires_approval` tool is never self-executed.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool_call(
         &self,
         name: &str,
         input: Value,
+        // `Some(id)` on the native function-calling path → the result is replayed as a
+        // `role:"tool"` message linked to that call id. `None` on the `ACTION:` text
+        // protocol → the result is a plain `user` observation (no structured id exists).
+        tool_call_id: Option<&str>,
         approved_tool_names: &HashSet<String>,
         trace: &mut Vec<String>,
         approval_requests: &mut Vec<ApprovalRequestItem>,
@@ -269,12 +297,20 @@ impl ReActAgent {
             Ok(value) => value.to_string(),
             Err(message) => Value::String(format!("tool_error:{message}")).to_string(),
         };
-        let observation = format!("observation:{output}");
-        trace.push(observation.clone());
-        conversation.push(LlmMessage {
-            role: "user".to_owned(),
-            content: observation,
-        });
+        trace.push(format!("observation:{output}"));
+        match tool_call_id {
+            // Native path: a proper tool-result message linked to the call id — the
+            // provider recognises the tool was answered and finalises instead of re-calling.
+            Some(id) => conversation.push(LlmMessage {
+                role: "tool".to_owned(),
+                content: output,
+                tool_calls: None,
+                tool_call_id: Some(id.to_owned()),
+                tool_name: Some(name.to_owned()),
+            }),
+            // Text protocol: no structured id — feed the observation back as user text.
+            None => conversation.push(LlmMessage::text("user", format!("observation:{output}"))),
+        }
         ToolOutcome::Executed
     }
 

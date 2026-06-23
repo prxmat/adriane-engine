@@ -156,10 +156,10 @@ async fn compress_short_term(
         .complete(LlmRequest {
             provider,
             model: COMPRESSOR_MODEL.to_owned(),
-            messages: vec![LlmMessage {
-                role: "user".to_owned(),
-                content: format!("Summarize briefly:\n{payload}"),
-            }],
+            messages: vec![LlmMessage::text(
+                "user",
+                format!("Summarize briefly:\n{payload}"),
+            )],
             system: None,
             tools: None,
             max_tokens: None,

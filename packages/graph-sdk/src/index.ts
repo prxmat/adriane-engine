@@ -20,7 +20,7 @@
 export { createGraph, GraphBuilder } from "./builder.js";
 export type { CreateGraphOptions, ChannelInput, NodeInput } from "./builder.js";
 
-export { CompiledGraph } from "./compiled-graph.js";
+export { CompiledGraph, RustEngineRequiredError } from "./compiled-graph.js";
 export type { CompiledGraphParts, RunOptions, ApproveAndResumeOptions } from "./compiled-graph.js";
 
 export {
@@ -192,7 +192,13 @@ export type {
   ToolNodeConfig
 } from "./agent-node.js";
 
-export { AdrianeSdkError, GraphCompileError, DuplicateNodeError, MissingHandlerError } from "./errors.js";
+export {
+  AdrianeSdkError,
+  GraphCompileError,
+  DuplicateNodeError,
+  MissingHandlerError,
+  UnknownNodeError
+} from "./errors.js";
 export type { Result } from "./errors.js";
 
 // Re-export the engine types most callers reach for, so a single import suffices.

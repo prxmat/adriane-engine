@@ -102,10 +102,10 @@ impl PlanExecuteAgent {
             .complete(LlmRequest {
                 provider: self.provider,
                 model: self.model.clone(),
-                messages: vec![LlmMessage {
-                    role: "user".to_owned(),
-                    content: format!("Plan objective: {objective}"),
-                }],
+                messages: vec![LlmMessage::text(
+                    "user",
+                    format!("Plan objective: {objective}"),
+                )],
                 system: None,
                 tools: None,
                 max_tokens: None,

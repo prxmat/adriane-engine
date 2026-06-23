@@ -30,7 +30,13 @@ import {
   type ToolNodeConfig
 } from "./agent-node.js";
 import type { ComponentDescriptor, RustComponentConfig } from "./components.js";
-import { DuplicateNodeError, GraphCompileError, MissingHandlerError, type Result } from "./errors.js";
+import {
+  DuplicateNodeError,
+  GraphCompileError,
+  MissingHandlerError,
+  UnknownNodeError,
+  type Result
+} from "./errors.js";
 import { tryRustValidate } from "./rust-validator.js";
 import type { ChannelValues, EmptyChannels, TypedCondition, TypedNodeHandler } from "./typed.js";
 
@@ -363,6 +369,33 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
       componentConfigs: this.componentConfigs,
       subgraphDefs: this.subgraphDefs
     };
+  }
+
+  /**
+   * Fan out from an existing node to a fixed set of branch nodes that run
+   * **concurrently** on the Rust engine, then join at `joinAt`. Each branch executes
+   * from the same pre-fan-out state snapshot and the branch updates are merged in the
+   * declared `parallelTo` order (deterministic, regardless of which branch finishes
+   * first — ADR 0015). The `from` node runs first (its handler/agent), then its branches
+   * scatter; control resumes at `joinAt` once every branch completes.
+   *
+   * This is the supported way to run **N parallel LLM calls** (each branch an
+   * {@link GraphBuilder.agentNode}) on the public SDK — no static edges are needed for
+   * the fan-out itself (it is its own routing). `parallelTo` is a fixed set declared at
+   * build time; dynamic per-item map over a runtime-sized list is a separate primitive.
+   *
+   * `from` must already be added; `parallelTo` and `joinAt` are validated at compile.
+   */
+  public fanOut(from: string, parallelTo: string[], joinAt: string): this {
+    const node = this.nodes.find((candidate) => String(candidate.id) === from);
+    if (node === undefined) {
+      throw new UnknownNodeError(from, "fanOut(from, …)");
+    }
+    node.fanOut = {
+      parallelTo: parallelTo.map((id) => id as NodeId),
+      joinAt: joinAt as NodeId
+    };
+    return this;
   }
 
   /** Add an unconditional edge from one node to another. */

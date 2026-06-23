@@ -15,10 +15,7 @@ import {
   type StreamMode
 } from "@adriane-ai/graph-runtime";
 
-import type { ApprovalId, ApprovalRequest } from "@adriane-ai/approval-engine";
-
 import {
-  APPROVED_TOOLS_CHANNEL,
   type AgentApprovalBinding,
   type RustAgentConfig
 } from "./agent-node.js";
@@ -118,27 +115,34 @@ const enginePreference = (): EnginePreference => {
   return raw === "rust" || raw === "ts" ? raw : "auto";
 };
 
-let warnedTsFallback = false;
-const warnTsEngineOnce = (): void => {
-  if (warnedTsFallback) {
-    return;
+/**
+ * Thrown at compile time when the graph cannot run on the **Rust engine**. The SDK is a thin
+ * surface over the native engine and has **no TypeScript fallback** — it never silently degrades.
+ */
+export class RustEngineRequiredError extends Error {
+  public constructor(preference: EnginePreference) {
+    const reason =
+      preference === "ts"
+        ? "ADRIANE_SDK_ENGINE=ts is no longer supported — the TypeScript engine fallback has been removed."
+        : "the native engine (@adriane-ai/napi) is not loaded, or this graph uses a feature only the " +
+          "removed TS engine implemented (an ApprovalEngine-backed agent node, a JS handler returning a " +
+          "routing Command `{ goto }`, or a `requiresApproval` tool node that suspends).";
+    super(
+      `Adriane requires the Rust engine; there is no TypeScript fallback. Cannot run this graph: ${reason} ` +
+        "Build the native addon (scripts/build-napi.sh) / install @adriane-ai/napi, and use channel-based " +
+        "routing/approvals."
+    );
+    this.name = "RustEngineRequiredError";
   }
-  warnedTsFallback = true;
-  console.warn(
-    "[@adriane-ai/graph-sdk] Running on the in-process TypeScript engine (development/test path). " +
-      "Adriane requires the Rust engine in production — install the native addon (npm install @adriane-ai/napi)."
-  );
-};
+}
 
 /**
- * A validated, runnable graph. Holds the engine wiring (registries, checkpointer,
- * event bus, runtime) so callers don't touch the lower-level `@adriane-ai/graph-runtime`
- * primitives unless they want to.
+ * A validated, runnable graph. Holds the engine wiring (registries, checkpointer, event bus) so
+ * callers don't touch the lower-level `@adriane-ai/graph-runtime` primitives unless they want to.
  *
- * Execution runs on the **Rust engine** via `@adriane-ai/napi` (a required dependency).
- * An in-process TypeScript {@link GraphRuntime} backs development and tests (and
- * platforms the native addon doesn't cover); the public API is identical either way —
- * `run` / `resume` / `approveAndResume` / `stream` / `onEvent` behave the same.
+ * Execution runs **exclusively on the Rust engine** via `@adriane-ai/napi` (a required dependency).
+ * There is **no TypeScript fallback** — {@link CompiledGraph} throws {@link RustEngineRequiredError}
+ * at compile time if the native engine cannot run the graph.
  */
 export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   public readonly definition: GraphDefinition;
@@ -198,9 +202,15 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     });
 
     this.rustRunner = this.maybeCreateRustRunner(parts);
-    // On the Rust path, mirror forwarded run events into the same event bus the TS
-    // path uses, so `onEvent` subscribers see events from either engine identically.
-    this.rustRunner?.subscribe((event) => {
+    // Rust-only: the SDK is a thin surface over the Rust engine — there is NO TypeScript
+    // fallback. If the native engine cannot run this graph (the napi addon is absent, or the
+    // graph uses a feature that only the deprecated TS engine implemented), fail loudly rather
+    // than silently degrade. See RustEngineRequiredError for the reasons + remedy.
+    if (this.rustRunner === null) {
+      throw new RustEngineRequiredError(enginePreference());
+    }
+    // Mirror forwarded run events into the event bus so `onEvent` subscribers see them.
+    this.rustRunner.subscribe((event) => {
       this.eventBus.emit(event);
     });
   }
@@ -356,45 +366,28 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     options?: RunOptions
   ): Promise<TypedGraphState<TState>> {
     const runId = options?.runId ?? generateRunId();
-    if (this.rustRunner !== null) {
-      const state = await this.rustRunner.run(
-        runId,
-        initialData as Record<string, unknown>,
-        options?.inbox ?? {}
-      );
-      this.captureSuspension(state);
-      return state as unknown as TypedGraphState<TState>;
-    }
-    warnTsEngineOnce();
-    // TS fallback: pre-queue the inbox onto the in-process runtime before starting.
-    for (const [nodeId, inputs] of Object.entries(options?.inbox ?? {})) {
-      for (const input of inputs) {
-        await this.runtime.send(runId, nodeId as NodeId, input);
-      }
-    }
-    const state = await this.runtime.start(runId, initialData);
-    return state as TypedGraphState<TState>;
+    const state = await this.rustRunner!.run(
+      runId,
+      initialData as Record<string, unknown>,
+      options?.inbox ?? {}
+    );
+    this.captureSuspension(state);
+    return state as unknown as TypedGraphState<TState>;
   }
 
   /** Resume a previously suspended run from its latest checkpoint. */
   public async resume(runId: RunId): Promise<TypedGraphState<TState>> {
-    if (this.rustRunner !== null) {
-      const suspended = this.requireSuspendedState(runId);
-      const state = await this.rustRunner.resume(suspended);
-      this.captureSuspension(state);
-      return state as unknown as TypedGraphState<TState>;
-    }
-    warnTsEngineOnce();
-    const state = await this.runtime.resume(runId);
-    return state as TypedGraphState<TState>;
+    const suspended = this.requireSuspendedState(runId);
+    const state = await this.rustRunner!.resume(suspended);
+    this.captureSuspension(state);
+    return state as unknown as TypedGraphState<TState>;
   }
 
   /**
    * Grant approval for the named tools and resume a run that suspended for approval
-   * (an agent node with `suspendForApproval`). On the Rust path the approved tools are
-   * written into `__approvedTools` by the engine before resuming; on the TS path the
-   * channel is updated directly. Either way the agent re-runs and executes the
-   * now-approved tools instead of gating them again. An agent never approves its own
+   * (an agent node with `suspendForApproval`). The approved tools are written into
+   * `__approvedTools` by the engine before resuming, so the agent re-runs and executes
+   * the now-approved tools instead of gating them again. An agent never approves its own
    * tools; this is the human seam.
    */
   public async approveAndResume(
@@ -402,26 +395,11 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     options: ApproveAndResumeOptions
   ): Promise<TypedGraphState<TState>> {
     const resolvedBy = options.resolvedBy ?? "human";
-    if (this.rustRunner !== null) {
-      const suspended = this.requireSuspendedState(runId);
-      const wire = this.toApprovedToolWire(options.approvedTools, resolvedBy);
-      const state = await this.rustRunner.approveAndResume(suspended, wire);
-      this.captureSuspension(state);
-      return state as unknown as TypedGraphState<TState>;
-    }
-    warnTsEngineOnce();
-    // Mirror the control-plane authority on the TS path: when an agent node routes
-    // approvals through an ApprovalEngine, the granted tools' pending requests are
-    // resolved THROUGH the engine (under the distinct `resolvedBy` principal) before
-    // resuming — so the engine's own `ensureCanResolve` enforces no-self-approval. The
-    // `__approvedTools` channel is written too, covering the no-engine (channel-only)
-    // case and the engine case identically.
-    await this.approvePendingThroughEngines(runId, options.approvedTools, resolvedBy);
-    // Sorted + de-duplicated so the channel write is deterministic regardless of the
-    // caller's ordering — matching the Rust guard-rail and the control-plane writer.
-    const names = [...new Set(options.approvedTools)].sort();
-    await this.runtime.updateState(runId, { [APPROVED_TOOLS_CHANNEL]: names });
-    return this.resume(runId);
+    const suspended = this.requireSuspendedState(runId);
+    const wire = this.toApprovedToolWire(options.approvedTools, resolvedBy);
+    const state = await this.rustRunner!.approveAndResume(suspended, wire);
+    this.captureSuspension(state);
+    return state as unknown as TypedGraphState<TState>;
   }
 
   /**
@@ -430,23 +408,16 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
    * the run advances past the waiting node. The seam a control plane uses to wake a
    * run on an external event (a webhook, a message, an approval-out-of-band).
    *
-   * Durable timers + external signals run on the **Rust engine** (the production
-   * runtime); the in-process TypeScript fallback does not model them, so this throws
-   * on the TS path. Run with the native addon (or `ADRIANE_SDK_ENGINE=rust`).
+   * Durable timers + external signals run natively on the **Rust engine** (the only
+   * runtime). The seam a control plane uses to wake a run on an external event.
    */
   public async signal(
     runId: RunId,
     name: string,
     payload?: unknown
   ): Promise<TypedGraphState<TState>> {
-    if (this.rustRunner === null) {
-      throw new Error(
-        "CompiledGraph.signal requires the Rust engine (durable timers/signals are not " +
-          "supported on the in-process TypeScript fallback). Install @adriane-ai/napi."
-      );
-    }
     const suspended = this.requireSuspendedState(runId);
-    const state = await this.rustRunner.signal(suspended, name, payload);
+    const state = await this.rustRunner!.signal(suspended, name, payload);
     this.captureSuspension(state);
     return state as unknown as TypedGraphState<TState>;
   }
@@ -478,33 +449,6 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   }
 
   /**
-   * For each agent node with an {@link ApprovalEngine}, approve the pending requests
-   * whose gated tool is in `approvedTools`, through the engine, under `resolvedBy`. The
-   * engine rejects a self-approval, so this is the TS-side enforcement point that
-   * mirrors the Rust guard-rail.
-   */
-  private async approvePendingThroughEngines(
-    runId: RunId,
-    approvedTools: string[],
-    resolvedBy: string
-  ): Promise<void> {
-    const granted = new Set(approvedTools);
-    for (const binding of this.agentApprovals.values()) {
-      const engine = binding.approvalEngine;
-      if (engine === undefined) {
-        continue;
-      }
-      const pending = await engine.getPending(runId);
-      for (const request of pending) {
-        const toolName = toolNameOfSubject(request);
-        if (toolName !== undefined && granted.has(toolName)) {
-          await engine.approve(request.id as ApprovalId, resolvedBy);
-        }
-      }
-    }
-  }
-
-  /**
    * Stream events as the graph executes. See {@link StreamMode} for the available
    * shapes. On the TS engine all four modes stream natively. On the **Rust engine** the
    * modes are projected — incrementally — over the run-event feed that already crosses
@@ -523,11 +467,7 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     options?: RunOptions
   ): AsyncIterable<StreamEvent> {
     const runId = options?.runId ?? generateRunId();
-    if (this.rustRunner !== null) {
-      return this.streamViaRust(runId, initialData, mode);
-    }
-    warnTsEngineOnce();
-    return this.runtime.stream(runId, initialData, mode);
+    return this.streamViaRust(runId, initialData, mode);
   }
 
   /** Seed a running channel map from the graph's channel defaults + the run's input. */
@@ -706,20 +646,6 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     return state;
   }
 }
-
-const TOOL_SUBJECT_PREFIX = "tool:";
-
-/**
- * Pull the tool name back out of an approval request's subject. The gated-tool subject
- * is `{ description: "tool:<name>" }` (see `agent-node.ts`); anything else yields
- * `undefined` (the request is not a tool gate we can match by name).
- */
-const toolNameOfSubject = (request: ApprovalRequest): string | undefined => {
-  const description = (request.subject as { description?: unknown }).description;
-  return typeof description === "string" && description.startsWith(TOOL_SUBJECT_PREFIX)
-    ? description.slice(TOOL_SUBJECT_PREFIX.length)
-    : undefined;
-};
 
 /**
  * A minimal {@link NodeExecutionContext} for the Rust seam. The channels-only state
