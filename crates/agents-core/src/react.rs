@@ -19,6 +19,7 @@ use adriane_llm_gateway::{LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequ
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::middleware::{Flow, MiddlewareStack, RunCtx};
 use crate::todos::{TodoItem, WRITE_TODOS_TOOL};
 use crate::tools::InMemoryToolRegistry;
 
@@ -95,6 +96,9 @@ pub struct ReActAgent {
     /// ADR 0014: cap (in chars) on the serialized `State` injected into the first message.
     /// `None` = inject the full state.
     context_budget: Option<usize>,
+    /// ADR 0025: the agent middleware stack the loop drives. Default empty = a strict
+    /// no-op (today's behaviour); seams fold onto it over phases 3b–3e.
+    middleware: MiddlewareStack,
 }
 
 impl ReActAgent {
@@ -115,7 +119,14 @@ impl ReActAgent {
             system: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             context_budget: None,
+            middleware: MiddlewareStack::new(),
         }
+    }
+
+    /// Install the agent middleware stack (ADR 0025). Default is empty (a no-op).
+    pub fn with_middleware(mut self, middleware: MiddlewareStack) -> Self {
+        self.middleware = middleware;
+        self
     }
 
     /// Cap the serialized `State` injected into the agent's first message (ADR 0014 trim).
@@ -188,22 +199,65 @@ impl ReActAgent {
             format!("Input: {input}\nState: {state_str}"),
         )];
 
-        'iterations: for _ in 0..self.max_iterations {
+        // ADR 0025: `before_run` — fires once before the loop (empty stack = no-op). A
+        // middleware may trim the seed state or stop the run.
+        if let Flow::Stop { reason } = self
+            .middleware
+            .before_run(
+                &mut conversation,
+                &RunCtx {
+                    iteration: 0,
+                    approved_tool_names,
+                    channels,
+                },
+            )
+            .await?
+        {
+            trace.push(format!("stopped:{reason}"));
+            return Ok(AgentResult {
+                reasoning: trace.join("\n"),
+                requires_human_review: !approval_requests.is_empty(),
+                approval_requests,
+                todos: last_todos,
+            });
+        }
+
+        'iterations: for iteration in 0..self.max_iterations {
+            let ctx = RunCtx {
+                iteration,
+                approved_tool_names,
+                channels,
+            };
+            // ADR 0025: `before_model` (fail-closed — an Err short-circuits the run).
+            let request = self
+                .middleware
+                .before_model(
+                    LlmRequest {
+                        provider: self.provider,
+                        model: self.model.clone(),
+                        messages: conversation.clone(),
+                        system: self.system.clone(),
+                        tools: tool_defs.clone(),
+                        max_tokens: None,
+                        temperature: None,
+                    },
+                    &ctx,
+                )
+                .await?;
+            let response = self.gateway.complete(request.clone()).await?;
+            // ADR 0025: `after_model`.
             let response = self
-                .gateway
-                .complete(LlmRequest {
-                    provider: self.provider,
-                    model: self.model.clone(),
-                    messages: conversation.clone(),
-                    system: self.system.clone(),
-                    tools: tool_defs.clone(),
-                    max_tokens: None,
-                    temperature: None,
-                })
+                .middleware
+                .after_model(response, &request, &ctx)
                 .await?;
 
             let content = response.content.trim().to_owned();
             trace.push(format!("thought:{content}"));
+            // ADR 0025: `on_iteration` (loop-detection / budget / reflection trigger).
+            if let Flow::Stop { reason } = self.middleware.on_iteration(iteration, &content, &ctx) {
+                trace.push(format!("stopped:{reason}"));
+                break;
+            }
 
             // Native tool-calling takes precedence over the text protocol.
             let tool_calls = response.tool_calls.unwrap_or_default();
@@ -275,12 +329,24 @@ impl ReActAgent {
             break;
         }
 
-        Ok(AgentResult {
+        let mut result = AgentResult {
             reasoning: trace.join("\n"),
             requires_human_review: !approval_requests.is_empty(),
             approval_requests,
             todos: last_todos,
-        })
+        };
+        // ADR 0025: `after_run` — finalize / reflection / metadata (empty stack = no-op).
+        self.middleware
+            .after_run(
+                &mut result,
+                &RunCtx {
+                    iteration: self.max_iterations,
+                    approved_tool_names,
+                    channels,
+                },
+            )
+            .await?;
+        Ok(result)
     }
 
     /// Resolve a tool by name and either execute it or gate it. Shared by the
