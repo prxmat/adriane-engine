@@ -25,8 +25,9 @@ use std::sync::Arc;
 
 use adriane_agents_core::{
     agent_node_handler, register_fs_tools, ApprovalRequestItem, CompressMiddleware,
-    InMemoryToolRegistry, MiddlewareStack, ReActAgent, RedactMiddleware, ToolDefinition,
-    APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
+    ContextBudgetMiddleware, InMemoryToolRegistry, MiddlewareStack, ReActAgent, RedactMiddleware,
+    ReflectionMiddleware, TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL,
+    DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
 use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
@@ -306,17 +307,101 @@ fn build_fs_backend(
     }
 }
 
-/// Build the agent middleware stack (ADR 0025 phase 3b): PII redaction (GOVERNED,
-/// outermost — the redactor sees the full text) + prompt compression (EFFICIENCY, inner),
-/// each env-gated. Replaces the former `wrap_with_redactor`/`wrap_with_compressor` gateway
-/// wrappers; redaction is now governance-first (was accidentally compress-first).
-fn build_agent_middleware() -> MiddlewareStack {
+/// Build the agent middleware stack (ADR 0025). The GOVERNED layer is injected here from
+/// the process env — PII redaction (outermost, the redactor sees the full text); it is
+/// never driven by user/spec data. The EFFICIENCY layer is built from the SDK-resolved
+/// `agent_spec.resolved_middleware` data list (phase 3d): a `profile` + the user's explicit
+/// `middleware[]` + the legacy terse/context-budget knobs are all expanded SDK-side into one
+/// ordered list, which maps to `push_efficiency` calls here.
+///
+/// Governed-by-construction: this match is the RUNTIME enforcer of the invariant — it only
+/// ever calls `push_efficiency`, and a governance kind (redact / approvalGate / fsPolicy) or
+/// any unknown kind hits the `_ => {}` arm and is silently ignored, so user/spec data can
+/// never reach `push_governed`. (The SDK `resolveMiddleware` throw-gate rejects governance
+/// kinds on the in-process builder path; the contracts `AgentNodeMetadataSchema` union is a
+/// type-level + editor guarantee — it is not executed on the persisted catalog run path, so
+/// this match arm is the sole runtime defence there.) The approval gate is intrinsic to the
+/// stack itself (`MiddlewareStack::before_tool`) and applies regardless.
+///
+/// `gateway` + `provider`/`model` are threaded in for `ReflectionMiddleware` (phase 3e), which
+/// critiques the result with the agent's own provider + model.
+fn build_agent_middleware(
+    agent_spec: &AgentSpec,
+    gateway: &Arc<DefaultLlmGateway>,
+    provider: LlmProvider,
+    model: &str,
+) -> MiddlewareStack {
     let mut stack = MiddlewareStack::new();
+    // GOVERNED — env-injected, sealed; never fed from spec/user data.
     if let Some(redactor) = HttpPiiRedactor::from_env() {
         stack.push_governed(Arc::new(RedactMiddleware::new(Arc::new(redactor))));
     }
-    if let Some(compressor) = HttpPromptCompressor::from_env() {
-        stack.push_efficiency(Arc::new(CompressMiddleware::new(Arc::new(compressor))));
+    // EFFICIENCY — built from the SDK-resolved data list, in order.
+    if agent_spec.resolved_middleware.is_empty() {
+        // Back-compat: a spec produced before phase 3d (or a hand-built one) carries the
+        // legacy flat knobs instead of a resolved list. Honour them so old persisted graphs
+        // keep their terse / context-budget / compress behaviour.
+        if agent_spec.output_style.as_deref() == Some("terse") {
+            stack.push_efficiency(Arc::new(TerseMiddleware));
+        }
+        if let Some(budget) = agent_spec.context_budget {
+            stack.push_efficiency(Arc::new(ContextBudgetMiddleware::new(budget as usize)));
+        }
+        if let Some(compressor) = HttpPromptCompressor::from_env() {
+            stack.push_efficiency(Arc::new(CompressMiddleware::new(Arc::new(compressor))));
+        }
+    } else {
+        for spec in &agent_spec.resolved_middleware {
+            match spec.kind.as_str() {
+                "terse" => {
+                    stack.push_efficiency(Arc::new(TerseMiddleware));
+                }
+                "contextBudget" => {
+                    // Accept an integer OR a float `chars`: serde yields a float for a
+                    // non-integer JSON number (which `as_u64` rejects), so truncate rather
+                    // than silently dropping the budget when the SDK forwards e.g. `4000.5`.
+                    if let Some(chars) = spec.params.get("chars").and_then(|value| {
+                        value
+                            .as_u64()
+                            .or_else(|| value.as_f64().map(|f| f.trunc() as u64))
+                    }) {
+                        stack.push_efficiency(Arc::new(ContextBudgetMiddleware::new(
+                            chars as usize,
+                        )));
+                    }
+                }
+                "compress" => {
+                    // Compression needs the external LLMLingua service; without it the
+                    // request is left unchanged (fail-open), so a `compress` entry is a
+                    // no-op when the service is not configured.
+                    if let Some(compressor) = HttpPromptCompressor::from_env() {
+                        stack.push_efficiency(Arc::new(CompressMiddleware::new(Arc::new(
+                            compressor,
+                        ))));
+                    }
+                }
+                "reflection" => {
+                    // Opt-in self-critique (after_run): flags a weak result in the reasoning
+                    // (no requires_human_review — see ReflectionMiddleware). Critiques with the
+                    // agent's own provider + model; fail-open.
+                    let threshold = spec
+                        .params
+                        .get("threshold")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.8);
+                    stack.push_efficiency(Arc::new(ReflectionMiddleware::new(
+                        gateway.clone(),
+                        provider,
+                        model,
+                        threshold,
+                    )));
+                }
+                // Governance kinds (redact / approvalGate / fsPolicy) + unknown kinds are
+                // never applied: never push_governed from data (the type invariant), and
+                // unknown kinds no-op for forward-compat with a newer SDK.
+                _ => {}
+            }
+        }
     }
     stack
 }
@@ -539,34 +624,29 @@ fn build_agent_handler(
     // Drive the agent with the RESOLVED provider/model so the request's provider
     // slot matches the adapter the gateway registered (otherwise a tier-resolved
     // mistral request could be issued against an anthropic slot with no adapter).
-    let mut agent = ReActAgent::new(node_id.to_owned(), "bridged agent", gateway)
+    let mut agent = ReActAgent::new(node_id.to_owned(), "bridged agent", gateway.clone())
         .with_provider(resolved.provider)
         .with_model(resolved.model.clone())
         .with_tools(Arc::new(registry));
 
-    // ADR 0014 terse: append a compact-output directive to the system prompt.
-    const TERSE_SUFFIX: &str = " Respond in a terse, telegraphic style: sentence fragments, no \
-        filler, no pleasantries. Preserve ALL technical substance, numbers, code and exact values.";
-    let terse = agent_spec.output_style.as_deref() == Some("terse");
-    let system = match (&agent_spec.system, terse) {
-        (Some(s), true) => Some(format!("{s}{TERSE_SUFFIX}")),
-        (Some(s), false) => Some(s.clone()),
-        (None, true) => Some(TERSE_SUFFIX.trim().to_owned()),
-        (None, false) => None,
-    };
-    if let Some(system) = system {
-        agent = agent.with_system(system);
+    // The base system prompt only. Terse output + context-budget trim are now EFFICIENCY
+    // middleware driven by `resolved_middleware` (ADR 0025 phase 3d), not flat knobs here.
+    if let Some(system) = &agent_spec.system {
+        agent = agent.with_system(system.clone());
     }
     if let Some(max) = agent_spec.max_iterations {
         agent = agent.with_max_iterations(max as usize);
     }
-    // ADR 0014 trim: cap the serialized state injected into the agent's first message.
-    if let Some(budget) = agent_spec.context_budget {
-        agent = agent.with_context_budget(budget as usize);
-    }
-    // ADR 0025 phase 3b: install the redaction (governed) + compression (efficiency)
-    // middleware stack. Terse + trim stay flat knobs above (folded in phase 3c).
-    agent = agent.with_middleware(build_agent_middleware());
+    // ADR 0025: install the middleware stack — governed (env-injected redaction) + the
+    // SDK-resolved efficiency list (compress / terse / context-budget / reflection). The
+    // approval gate is intrinsic to the stack and applies regardless. The gateway is threaded
+    // in for the reflection critique call (it uses the agent's own provider + model).
+    agent = agent.with_middleware(build_agent_middleware(
+        agent_spec,
+        &gateway,
+        resolved.provider,
+        &resolved.model,
+    ));
 
     let output_channel = agent_spec
         .output_channel
@@ -1036,6 +1116,7 @@ mod tests {
             context_budget: None,
             todos_channel: None,
             enable_fs: false,
+            resolved_middleware: vec![],
         };
 
         let gateway = build_gateway(
@@ -1094,6 +1175,54 @@ mod tests {
         assert!(state.channels.contains_key(DEFAULT_AGENT_OUTPUT_CHANNEL));
     }
 
+    /// ADR 0025 phase 3d: `build_agent_middleware` builds the EFFICIENCY layer from the
+    /// SDK-resolved data list (and falls back to the legacy flat knobs when it is empty).
+    /// Assertions are env-independent (they only check that efficiency entries land), since
+    /// the GOVERNED redactor is env-gated; the governed-by-construction guarantee (a data
+    /// list never reaches `push_governed`) is structural — the match only `push_efficiency`s.
+    #[test]
+    fn build_agent_middleware_builds_efficiency_from_the_resolved_list() {
+        let from = |value: serde_json::Value| -> crate::spec::AgentSpec {
+            serde_json::from_value(value).expect("agent spec parses")
+        };
+        let gateway = Arc::new(DefaultLlmGateway::new());
+        let build = |spec: &crate::spec::AgentSpec| {
+            build_agent_middleware(spec, &gateway, LlmProvider::Anthropic, "m")
+        };
+
+        // terse + contextBudget → real efficiency middleware (no external service needed).
+        assert!(!build(&from(json!({
+            "provider": "anthropic",
+            "resolvedMiddleware": [
+                { "kind": "terse" },
+                { "kind": "contextBudget", "params": { "chars": 100 } }
+            ]
+        })))
+        .is_empty());
+
+        // Legacy fallback: an empty resolved list + the old `outputStyle` knob still applies
+        // terse, so pre-3d persisted graphs keep their behaviour.
+        assert!(!build(&from(json!({
+            "provider": "anthropic",
+            "outputStyle": "terse"
+        })))
+        .is_empty());
+
+        // A fractional `chars` (float on the wire) is truncated, not silently dropped.
+        assert!(!build(&from(json!({
+            "provider": "anthropic",
+            "resolvedMiddleware": [{ "kind": "contextBudget", "params": { "chars": 4000.5 } }]
+        })))
+        .is_empty());
+
+        // reflection (phase 3e) → an after_run middleware is installed (no external service).
+        assert!(!build(&from(json!({
+            "provider": "anthropic",
+            "resolvedMiddleware": [{ "kind": "reflection" }]
+        })))
+        .is_empty());
+    }
+
     /// A gated agent suspends with a pending approval recorded in its output
     /// channel — exactly the shape `collect_pending_approvals` reads.
     #[tokio::test]
@@ -1115,6 +1244,7 @@ mod tests {
             context_budget: None,
             todos_channel: None,
             enable_fs: false,
+            resolved_middleware: vec![],
         };
         let gateway = build_gateway(
             &agent_spec,
@@ -1272,6 +1402,7 @@ mod tests {
             context_budget: None,
             todos_channel: None,
             enable_fs: false,
+            resolved_middleware: vec![],
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1322,6 +1453,7 @@ mod tests {
             context_budget: None,
             todos_channel: None,
             enable_fs: false,
+            resolved_middleware: vec![],
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1379,6 +1511,7 @@ mod tests {
             context_budget: None,
             todos_channel: None,
             enable_fs: false,
+            resolved_middleware: vec![],
         };
 
         let resolved = resolve_agent_model(&agent_spec);

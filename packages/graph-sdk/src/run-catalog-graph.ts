@@ -32,7 +32,7 @@ import type { ModelTier } from "@adriane-ai/llm-gateway";
 // (and a `pg` dependency) into consumers such as the Studio bundle.
 import type { ApprovalEngine } from "@adriane-ai/approval-engine";
 
-import type { FsPolicyRule, RustAgentConfig } from "./agent-node.js";
+import type { EfficiencyMiddlewareSpec, FsPolicyRule, RustAgentConfig } from "./agent-node.js";
 import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
 import type { RustComponentConfig, ComponentKind } from "./components.js";
 import {
@@ -62,12 +62,18 @@ export type AgentCarrier = {
   outputChannel?: string;
   /** ADR 0014 — terse output directive on the system prompt. */
   outputStyle?: "terse";
-  /** ADR 0014 — cap (chars) on the serialized state injected into the agent. */
+  /** ADR 0014 — cap (chars) on the agent's seed message (the injected `Input`/`State` dump). */
   contextBudget?: number;
   /** ADR 0022/0023 — durable channel the agent's `writeTodos` list is persisted into. */
   todosChannel?: string;
   /** ADR 0024 — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
+  /**
+   * ADR 0025 phase 3d — the resolved efficiency middleware list. Present on graphs built by
+   * the phase-3d SDK; absent on a pre-3d persisted node (the Rust bridge then falls back to
+   * the legacy `outputStyle`/`contextBudget` knobs above, so old graphs keep their behaviour).
+   */
+  resolvedMiddleware?: EfficiencyMiddlewareSpec[];
 };
 
 /** Outcome of a catalog-graph run: the terminal/suspended state and a flat status. */
@@ -180,6 +186,9 @@ const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean
   // ADR 0024 — fs enablement carried on the persisted node; the run's fs policy is
   // supplied separately by the control plane (RunCatalogGraphOptions.fsPolicy).
   enableFs: carrier.enableFs,
+  // ADR 0025 phase 3d — forward the resolved efficiency list (already desugared at build
+  // time); a pre-3d carrier has none, and the Rust bridge falls back to the flat knobs.
+  resolvedMiddleware: carrier.resolvedMiddleware,
   // The catalog path carries no JS tool closures — the agent's tools are native
   // (no-op stubs in the bridge unless a name is also in jsToolNames, which it never is here).
   toolBindings: [],

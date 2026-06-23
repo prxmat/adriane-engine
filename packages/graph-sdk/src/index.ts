@@ -177,6 +177,7 @@ export {
   streamAgentTokens,
   toRustAgentConfig,
   toAgentApprovalBinding,
+  GOVERNANCE_MIDDLEWARE_KINDS,
   DEFAULT_AGENT_OUTPUT_CHANNEL,
   APPROVED_TOOLS_CHANNEL,
   APPROVAL_IDS_CHANNEL,
@@ -185,7 +186,9 @@ export {
 export type {
   AgentApprovalBinding,
   AgentNodeConfig,
+  AgentProfile,
   AgentPromptSource,
+  EfficiencyMiddlewareSpec,
   FsPermVerb,
   FsPolicyRule,
   RustAgentConfig,
@@ -211,7 +214,8 @@ export {
   GraphCompileError,
   DuplicateNodeError,
   MissingHandlerError,
-  UnknownNodeError
+  UnknownNodeError,
+  GovernanceMiddlewareRejectedError
 } from "./errors.js";
 export type { Result } from "./errors.js";
 
