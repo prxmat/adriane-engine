@@ -125,6 +125,7 @@ impl Reranker for LlmReranker {
                 tools: None,
                 max_tokens: None,
                 temperature: None,
+                response_format: None,
             };
             let response = self
                 .gateway

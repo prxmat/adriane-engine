@@ -75,6 +75,13 @@ pub struct AgentResult {
     /// compatible; the control plane maps it to cost and to span/trace attributes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<LlmUsage>,
+    /// The validated structured output (ADR 0029 phase 8), when the agent ran with a
+    /// `structuredOutput` middleware: the parsed JSON value that conformed to the schema.
+    /// Additive + optional (`skip_serializing_if`); `None` when no schema was requested
+    /// or (in lenient mode) the output never validated. The `StructuredOutputMiddleware`
+    /// attaches it in `after_run`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<Value>,
 }
 
 /// Outcome of the shared tool-execution path (native and `ACTION:` calls).
@@ -215,6 +222,7 @@ impl ReActAgent {
                 approval_requests,
                 todos: last_todos,
                 usage: Some(usage),
+                structured_output: None,
             });
         }
 
@@ -236,6 +244,7 @@ impl ReActAgent {
                         tools: tool_defs.clone(),
                         max_tokens: None,
                         temperature: None,
+                        response_format: None,
                     },
                     &ctx,
                 )
@@ -341,6 +350,7 @@ impl ReActAgent {
             approval_requests,
             todos: last_todos,
             usage: Some(usage),
+            structured_output: None,
         };
         // ADR 0025: `after_run` — finalize / reflection / metadata (empty stack = no-op).
         self.middleware
@@ -823,6 +833,7 @@ mod tests {
             requires_human_review: true,
             todos: None,
             usage: None,
+            structured_output: None,
         };
         let wire = serde_json::to_string(&result).expect("serializes");
         assert!(wire.contains("\"approvalRequests\""));

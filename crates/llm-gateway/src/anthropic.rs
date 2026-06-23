@@ -28,7 +28,7 @@ use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
 use crate::gateway::LlmProviderAdapter;
-use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage};
+use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat};
 
 /// Model used when the request does not name a Claude model.
 pub const DEFAULT_MODEL: &str = "claude-opus-4-8";
@@ -90,6 +90,10 @@ pub struct AnthropicCreateParams {
     pub system: Option<Vec<SystemBlock>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolParam>>,
+    /// ADR 0029: forces a specific tool (`{ "type": "tool", "name": … }`) — Anthropic's
+    /// only route to schema-constrained output, since it has no `response_format`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<Value>,
     pub messages: Vec<AnthropicMessage>,
 }
 
@@ -241,31 +245,52 @@ impl AnthropicAdapter {
             }])
         };
 
-        let tools = match &req.tools {
+        let mut tools: Vec<ToolParam> = match &req.tools {
             Some(tools) if !tools.is_empty() => {
                 let last = tools.len() - 1;
-                Some(
-                    tools
-                        .iter()
-                        .enumerate()
-                        .map(|(index, tool)| ToolParam {
-                            name: tool.name.clone(),
-                            description: tool.description.clone(),
-                            input_schema: tool.input_schema.clone(),
-                            // Breakpoint on the last tool caches the whole list.
-                            cacheable: index == last,
-                        })
-                        .collect(),
-                )
+                tools
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tool)| ToolParam {
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        input_schema: tool.input_schema.clone(),
+                        // Breakpoint on the last tool caches the whole list.
+                        cacheable: index == last,
+                    })
+                    .collect()
             }
-            _ => None,
+            _ => Vec::new(),
         };
+
+        // ADR 0029: Anthropic has no `response_format`; force a synthetic tool whose
+        // `input_schema` IS the output schema. Appended AFTER any real tools'
+        // cache breakpoint (cacheable: false) so it never busts the cached tool prefix;
+        // when it is the only tool it carries the breakpoint itself (the schema is
+        // call-stable, so caching it is safe).
+        let mut tool_choice = None;
+        if let Some(ResponseFormat::JsonSchema { name, schema, .. }) = &req.response_format {
+            let only = tools.is_empty();
+            tools.push(ToolParam {
+                name: name.clone(),
+                description: Some(
+                    "Return the final result by calling this tool with arguments matching its schema."
+                        .to_owned(),
+                ),
+                input_schema: schema.clone(),
+                cacheable: only,
+            });
+            tool_choice = Some(json!({ "type": "tool", "name": name }));
+        }
+
+        let tools = if tools.is_empty() { None } else { Some(tools) };
 
         AnthropicCreateParams {
             model: self.resolve_model(&req.model),
             max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             system,
             tools,
+            tool_choice,
             messages,
         }
     }
@@ -444,6 +469,11 @@ pub fn build_request_body(params: &AnthropicCreateParams) -> Value {
         );
     }
 
+    // ADR 0029: forced-tool route to schema-constrained output.
+    if let Some(tool_choice) = &params.tool_choice {
+        body.insert("tool_choice".to_owned(), tool_choice.clone());
+    }
+
     Value::Object(body)
 }
 
@@ -490,7 +520,7 @@ mod tests {
 
     use super::*;
     use crate::gateway::{DefaultLlmGateway, LlmGateway};
-    use crate::types::{LlmMessage, LlmToolDef};
+    use crate::types::{LlmMessage, LlmToolDef, ResponseFormat};
 
     struct RecordingPort {
         calls: Arc<Mutex<Vec<AnthropicCreateParams>>>,
@@ -549,7 +579,77 @@ mod tests {
             tools: None,
             max_tokens: None,
             temperature: None,
+            response_format: None,
         }
+    }
+
+    #[tokio::test]
+    async fn response_format_forces_a_synthetic_tool_without_busting_the_cache_prefix() {
+        // ADR 0029: Anthropic has no `response_format`; the adapter appends a synthetic
+        // schema-tool + `tool_choice`. It must sit AFTER the real tools' cache breakpoint.
+        let (port, calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::new(port);
+
+        let request = LlmRequest {
+            tools: Some(vec![LlmToolDef {
+                name: "search".to_owned(),
+                description: None,
+                input_schema: json!({ "type": "object" }),
+            }]),
+            response_format: Some(ResponseFormat::JsonSchema {
+                name: "Verdict".to_owned(),
+                schema: json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } }),
+                strict: true,
+            }),
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        let params = &calls[0];
+        let tools = params.tools.as_ref().unwrap();
+        // Real tool first (keeps the breakpoint), synthetic schema-tool appended last.
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "search");
+        assert!(tools[0].cacheable, "real tool keeps the cache breakpoint");
+        assert_eq!(tools[1].name, "Verdict");
+        assert!(
+            !tools[1].cacheable,
+            "synthetic tool must not bust the cached prefix"
+        );
+        // tool_choice forces the synthetic tool.
+        assert_eq!(
+            params.tool_choice,
+            Some(json!({ "type": "tool", "name": "Verdict" }))
+        );
+        // And it survives to the wire body.
+        let body = build_request_body(params);
+        assert_eq!(
+            body["tool_choice"],
+            json!({ "type": "tool", "name": "Verdict" })
+        );
+    }
+
+    #[tokio::test]
+    async fn response_format_alone_makes_the_synthetic_tool_the_only_cacheable_one() {
+        let (port, calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::new(port);
+
+        let request = LlmRequest {
+            response_format: Some(ResponseFormat::JsonSchema {
+                name: "Out".to_owned(),
+                schema: json!({ "type": "object" }),
+                strict: false,
+            }),
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        let tools = calls[0].tools.as_ref().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "Out");
+        assert!(tools[0].cacheable, "the only tool carries the breakpoint");
     }
 
     #[tokio::test]
@@ -814,6 +914,7 @@ mod tests {
                     cacheable: true,
                 },
             ]),
+            tool_choice: None,
             messages: vec![AnthropicMessage {
                 role: AnthropicRole::User,
                 content: json!("Hi"),
