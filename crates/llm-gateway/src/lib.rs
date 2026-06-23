@@ -12,6 +12,7 @@ pub mod compressor;
 pub mod error;
 pub mod gateway;
 pub mod gemini;
+pub mod media_resolver;
 pub mod mock;
 pub mod model_policy;
 pub mod openai_compatible;
@@ -33,6 +34,7 @@ pub use gemini::{
     GeminiFunctionCall, GeminiPart, GeminiPort, GeminiRawResponse, GeminiUsageMetadata,
     HttpGeminiPort, DEFAULT_GEMINI_MODEL,
 };
+pub use media_resolver::{resolve_request_media, MediaResolver, MAX_INLINE_MEDIA_BASE64_LEN};
 pub use mock::MockAdapter;
 pub use model_policy::{ModelChoice, ModelPolicy, ModelTier};
 pub use openai_compatible::{

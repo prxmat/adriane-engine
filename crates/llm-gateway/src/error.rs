@@ -15,4 +15,8 @@ pub enum LlmError {
     /// convention), never a panic.
     #[error("structured output did not match the schema: {0}")]
     StructuredOutputInvalid(String),
+    /// ADR 0030: a multimodal media reference could not be resolved to bytes (e.g. a missing
+    /// artifact), or inline media exceeded the size cap.
+    #[error("media resolution failed: {0}")]
+    MediaResolution(String),
 }

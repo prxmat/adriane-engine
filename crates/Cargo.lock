@@ -196,6 +196,7 @@ dependencies = [
  "adriane-graph-core",
  "adriane-graph-runtime",
  "adriane-llm-gateway",
+ "async-trait",
  "napi",
  "napi-build",
  "napi-derive",
