@@ -455,10 +455,12 @@ stream(
 Stream events as the graph executes. See [events and streams](/docs/reference/events-and-streams)
 for the four `StreamMode` values and the `StreamEvent` union.
 
-:::warning Single terminal event on Rust
-The Rust engine has no incremental stream surface yet: when running on Rust, `stream` drives a
-full run and yields a **single** terminal `state_value` event. Only the in-process TS engine
-streams incrementally. (Source: `compiled-graph.ts`.)
+:::note Incremental on both engines
+`stream` is **incremental on the Rust engine too**: the runner forwards each run-lifecycle event
+in flight and `streamViaRust` projects them per node into the chosen `StreamMode`, so `values`
+accumulates a snapshot per node step, `messages` emits a delta per new message, etc. (Source:
+`compiled-graph.ts` `streamViaRust`; proven by `stream.test.ts`.) LLM **token-level** deltas are
+not yet streamed through the bridge (ADR 0027 phase 4c).
 :::
 
 ### `onEvent(handler)`

@@ -142,13 +142,12 @@ for await (const event of app.stream({}, "updates")) {
 }
 ```
 
-:::warning Rust has no incremental stream surface yet
-On the **Rust engine** (the production path), `stream()` drives a *full* run and yields a
-**single terminal** `state_value`; only the TypeScript engine streams per-`mode` granularity.
-`onEvent` lifecycle events, however, fire from **both** engines identically. For a live dashboard
-prefer `onEvent`; for fine-grained `stream` deltas in development, set `ADRIANE_SDK_ENGINE=ts`.
-(Source: `CompiledGraph.stream` / `streamViaRust`, `packages/graph-sdk/src/compiled-graph.ts`,
-and [streaming and events](/docs/building/streaming-and-events).)
+:::note Incremental streaming works on both engines
+`stream()` is incremental on the **Rust** engine too (ADR 0027 phase 4a): the runner forwards each
+lifecycle event in flight and `streamViaRust` projects it per `mode`. `onEvent` lifecycle events
+fire identically on both engines — for a live dashboard either works. The only piece not yet
+streamed through the bridge is per-token LLM output (phase 4c); use `streamAgentTokens` for that.
+(Source: `CompiledGraph.streamViaRust`; proven by `stream.test.ts`.)
 :::
 
 ## Run it

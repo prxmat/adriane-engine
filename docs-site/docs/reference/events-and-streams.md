@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Events and streams
-description: The RunEvent lifecycle union, the StreamEvent union and its four modes, and the Rust single-terminal-event caveat.
+description: The RunEvent lifecycle union, the StreamEvent union and its four modes — incremental on both the Rust and TypeScript engines.
 ---
 
 # Events and streams
@@ -102,23 +102,24 @@ for await (const event of app.stream({ name: "Ada" }, "updates")) {
 }
 ```
 
-Expected result (TS engine): prints one `state_update` per node as it writes. On the Rust
-engine, see the caveat below.
+Expected result: prints one `state_update` per node as it writes — on **both** engines.
 
-## The Rust single-terminal-event caveat
+## Streaming is incremental on both engines
 
-:::warning Streaming is incremental only on the TS engine
-The Rust engine has **no incremental stream surface yet**. When a graph runs on Rust,
-`CompiledGraph.stream` drives a full run to its terminal state and yields **exactly one**
-`state_value` event — the final state — and nothing else. Only the in-process TypeScript engine
-streams incrementally (`updates`, `messages`, `debug` deltas). (Source: `compiled-graph.ts`,
-`streamViaRust`.)
+:::note Incremental on Rust too (ADR 0027 phase 4a)
+`CompiledGraph.stream` is incremental on the Rust engine as well: the runner forwards each
+run-lifecycle event in flight and `streamViaRust` projects them per node into the chosen mode —
+`values` accumulates a snapshot per node step, `updates` emits a delta per node, `messages` emits a
+`message_delta` per new message, `debug` carries every raw event. (Source: `compiled-graph.ts`
+`streamViaRust`; proven by `stream.test.ts`, which asserts an intermediate snapshot before the
+final.)
 :::
 
-So if you need live `message_delta` / `state_update` streaming during development, force the TS
-engine with `ADRIANE_SDK_ENGINE=ts`, or branch on
-[`usesRustEngine`](/docs/reference/builder-api#usesrustengine). For per-transition observability
-that **does** work on both engines, use the `RunEvent` journal via `onEvent` instead.
+The one piece **not** yet streamed through the bridge is **LLM token-level** deltas (per-token
+output during a node) — deferred to ADR 0027 phase 4c. For token-by-token agent output today, use
+the single-turn `streamAgentTokens(...)` helper (below), which streams straight through the gateway.
+For per-transition observability the `RunEvent` journal via `onEvent` works identically on both
+engines.
 
 For token-by-token agent output specifically, the SDK also ships `streamAgentTokens(...)`, a
 single-turn (no-tools) helper that streams text deltas straight through the LLM gateway —
