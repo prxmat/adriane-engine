@@ -1,0 +1,25 @@
+[package]
+name = "adriane-fs-backend"
+description = "Governed virtual filesystem seam for the deep-agent harness (ADR 0024). Default-backed by the versioned artifact store; per-path permission policy; fail-closed."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adriane-graph-core = { path = "../graph-core" }
+adriane-artifact-store = { path = "../artifact-store" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+# Optional: the external durable backend (ADR 0024 phase 2e) over HTTP. Off by default —
+# the OSS engine ships the lean in-memory ArtifactFsBackend; `--features http` pulls reqwest.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[features]
+http = ["dep:reqwest"]
+
+[dev-dependencies]
+# `net`/`io-util`/`time` are needed so the `http`-feature tests can drive reqwest against
+# a local mock server under `#[tokio::test]`.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time"] }

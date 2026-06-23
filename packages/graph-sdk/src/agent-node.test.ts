@@ -6,6 +6,7 @@ import {
   InMemoryToolRegistry,
   MockLLMProviderAdapter,
   streamAgentTokens,
+  toRustAgentConfig,
   type LLMGateway,
   type Message,
   type ToolId
@@ -110,6 +111,60 @@ describe("@adriane-ai/graph-sdk tool node", () => {
     const toolMessage = messages.at(-1) as { role: string; content: string };
     expect(toolMessage.role).toBe("tool");
     expect(toolMessage.content).toContain("world");
+  });
+});
+
+describe("@adriane-ai/graph-sdk agent node — writeTodos durable channel (ADR 0022/0023)", () => {
+  it("threads todosChannel through toRustAgentConfig to the Rust agent spec", () => {
+    const config = toRustAgentConfig("planner", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "Plan, then act." },
+      todosChannel: "__todos"
+    });
+    expect(config.todosChannel).toBe("__todos");
+  });
+
+  it("defaults todosChannel to undefined (no durable sink) when omitted", () => {
+    const config = toRustAgentConfig("plain", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "Just answer." }
+    });
+    expect(config.todosChannel).toBeUndefined();
+  });
+
+  it("threads enableFs through toRustAgentConfig (ADR 0024 phase 2b)", () => {
+    const on = toRustAgentConfig("worker", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "Use the filesystem." },
+      enableFs: true
+    });
+    expect(on.enableFs).toBe(true);
+    const off = toRustAgentConfig("plain", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "No fs." }
+    });
+    expect(off.enableFs).toBeUndefined();
+  });
+
+  it("carries todosChannel + ADR 0014 knobs on the persisted metadata.agent carrier", () => {
+    // The persisted GraphDefinition must run identically on the catalog/Studio path,
+    // so the metadata.agent carrier has to include these (otherwise they are dropped).
+    const compiled = createGraph({ name: "carrier" })
+      .agentNode("planner", {
+        llm: new DefaultLLMGateway(),
+        prompt: { system: "Plan, then act." },
+        todosChannel: "__todos",
+        outputStyle: "terse",
+        contextBudget: 2000,
+        enableFs: true
+      })
+      .compile();
+    const node = compiled.definition.nodes.find((candidate) => String(candidate.id) === "planner");
+    const agent = (node?.metadata as { agent?: Record<string, unknown> } | undefined)?.agent;
+    expect(agent?.todosChannel).toBe("__todos");
+    expect(agent?.outputStyle).toBe("terse");
+    expect(agent?.contextBudget).toBe(2000);
+    expect(agent?.enableFs).toBe(true);
   });
 });
 

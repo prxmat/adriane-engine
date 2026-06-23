@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use adriane_agents_core::ApprovalRequestItem;
+use adriane_fs_backend::FsPermVerb;
 use adriane_graph_core::{GraphDefinition, GraphState};
 use adriane_llm_gateway::ModelTier;
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,26 @@ pub struct AgentSpec {
     /// don't re-feed an unbounded channel map. `None` = no cap.
     #[serde(default)]
     pub context_budget: Option<u32>,
+    /// Durable channel the agent's `writeTodos` list is persisted into (ADR 0022/0023,
+    /// phase 1). When set and the agent has the `writeTodos` tool, the node handler
+    /// writes the authoritative todo list here in the same checkpointed update as the
+    /// result. `None` = no durable todos sink (the list still appears in the result).
+    #[serde(default)]
+    pub todos_channel: Option<String>,
+    /// Opt this agent into the governed virtual filesystem tools (ADR 0024 phase 2b):
+    /// `read_file`/`ls`/`glob`/`grep`/`write_file`/`edit_file`/`delete_file`/`move_file`,
+    /// run-scoped and enforced by [`EngineSpec::fs_policy`] (fail-closed). Default off.
+    #[serde(default)]
+    pub enable_fs: bool,
+}
+
+/// One per-path permission rule (ADR 0024), compiled into the engine's
+/// [`adriane_fs_backend::StaticPathPolicy`]. `verb` is `deny|read|write|gate`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsPolicyRule {
+    pub glob: String,
+    pub verb: FsPermVerb,
 }
 
 /// A graph node backed by a native Rust component, keyed in
@@ -88,6 +109,12 @@ pub struct ApprovedTool {
     /// `requested_by`, or the bridge rejects the resume.
     #[serde(default)]
     pub resolved_by: String,
+    /// The content-scoped grant key (ADR 0024 phase 2c): `"<name>#<sha256(input)>"` for
+    /// a guarded fs write, pinning the grant to the exact call. When set, the bridge
+    /// writes THIS key (not the bare name) into the `__approvedTools` channel, so only
+    /// the approved path+content unlocks. `None` for an ordinary name-only grant.
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 /// The full spec for a run/resume/approve call.
@@ -145,6 +172,11 @@ pub struct EngineSpec {
     /// for runs that rely on env (dev/self-host with deploy secrets).
     #[serde(default)]
     pub provider_keys: BTreeMap<String, String>,
+    /// Per-path filesystem permission rules (ADR 0024 phase 2b), compiled into the
+    /// run's `StaticPathPolicy` and applied to every fs-enabled agent. Empty = the
+    /// fail-closed default (read-only everywhere; writes need an explicit rule).
+    #[serde(default)]
+    pub fs_policy: Vec<FsPolicyRule>,
 }
 
 /// What a run/resume/approve call returns to JS: the final state plus, when
@@ -256,6 +288,67 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_the_todos_channel_from_camel_case() {
+        let spec_json = json!({
+            "graph": minimal_graph_json(),
+            "agents": {
+                "assistant": {
+                    "provider": "anthropic",
+                    "toolNames": ["writeTodos"],
+                    "todosChannel": "__todos"
+                }
+            }
+        });
+        let spec: EngineSpec = serde_json::from_value(spec_json).expect("spec parses");
+        let agent = spec.agents.get("assistant").expect("agent present");
+        assert_eq!(agent.todos_channel.as_deref(), Some("__todos"));
+        assert_eq!(agent.tool_names, vec!["writeTodos".to_owned()]);
+
+        // Omitted → None (no durable sink).
+        let bare: EngineSpec = serde_json::from_value(json!({
+            "graph": minimal_graph_json(),
+            "agents": { "assistant": { "provider": "anthropic" } }
+        }))
+        .expect("spec parses");
+        assert!(bare
+            .agents
+            .get("assistant")
+            .expect("agent present")
+            .todos_channel
+            .is_none());
+    }
+
+    #[test]
+    fn deserializes_fs_enablement_and_policy_from_camel_case() {
+        let spec_json = json!({
+            "graph": minimal_graph_json(),
+            "agents": {
+                "assistant": { "provider": "anthropic", "enableFs": true }
+            },
+            "fsPolicy": [
+                { "glob": "scratch/**", "verb": "write" },
+                { "glob": "secret/**", "verb": "deny" }
+            ]
+        });
+        let spec: EngineSpec = serde_json::from_value(spec_json).expect("spec parses");
+        assert!(
+            spec.agents
+                .get("assistant")
+                .expect("agent present")
+                .enable_fs
+        );
+        assert_eq!(spec.fs_policy.len(), 2);
+        assert_eq!(spec.fs_policy[0].glob, "scratch/**");
+        assert_eq!(spec.fs_policy[0].verb, FsPermVerb::Write);
+        assert_eq!(spec.fs_policy[1].verb, FsPermVerb::Deny);
+
+        // Omitted → fs disabled + empty policy (fail-closed default applies).
+        let bare: EngineSpec =
+            serde_json::from_value(json!({ "graph": minimal_graph_json() })).expect("parses");
+        assert!(bare.fs_policy.is_empty());
+    }
+
+    #[test]
     fn deserializes_an_agent_tier_from_camel_case() {
         let spec_json = json!({
             "graph": minimal_graph_json(),
@@ -337,6 +430,8 @@ mod tests {
             pending_approvals: vec![ApprovalRequestItem {
                 subject: "tool:refund".to_owned(),
                 reason: "needs approval".to_owned(),
+                approval_key: None,
+                input: None,
             }],
         };
         let wire = serde_json::to_string(&outcome).expect("serializes");

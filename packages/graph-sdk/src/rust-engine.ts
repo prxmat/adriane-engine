@@ -5,7 +5,7 @@ import type { RunEvent } from "@adriane-ai/graph-runtime";
 
 import type { ModelTier } from "@adriane-ai/llm-gateway";
 
-import type { RustAgentConfig } from "./agent-node.js";
+import type { FsPolicyRule, RustAgentConfig } from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
 import type { ChannelValues, TypedGraphState } from "./typed.js";
 
@@ -141,6 +141,12 @@ export type RustRunnerParts<TState extends ChannelValues> = {
    * on the host env (e.g. local dev, tests).
    */
   providerKeys?: Record<string, string>;
+  /**
+   * Per-path filesystem permission rules (ADR 0024 phase 2b), compiled into the run's
+   * StaticPathPolicy and applied to every fs-enabled agent. Empty/omitted = fail-closed
+   * read-only everywhere.
+   */
+  fsPolicy?: FsPolicyRule[];
 };
 
 /** The `agents` map serialized for the wire (matches Rust `AgentSpec`, camelCase). */
@@ -158,6 +164,10 @@ type AgentSpecWire = {
   /** ADR 0014 token-efficiency knobs (camelCase → Rust AgentSpec `outputStyle`/`contextBudget`). */
   outputStyle?: "terse";
   contextBudget?: number;
+  /** ADR 0022/0023 — durable channel the `writeTodos` list is persisted into (→ Rust `todosChannel`). */
+  todosChannel?: string;
+  /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
+  enableFs?: boolean;
 };
 
 /**
@@ -180,6 +190,12 @@ export type ApprovedToolWire = {
   name: string;
   requestedBy: string;
   resolvedBy: string;
+  /**
+   * Content-scoped grant key (ADR 0024 phase 2c): `"<name>#<sha256(input)>"` for a
+   * guarded fs write, pinning the grant to the exact call. When set, the engine writes
+   * THIS key (not the bare name) into `__approvedTools`. Omitted for a name-only grant.
+   */
+  key?: string;
 };
 
 /** The `EngineSpec` shape the Rust bridge deserializes (camelCase). */
@@ -208,13 +224,20 @@ type EngineSpecWire = {
    * each agent's key tenant-key-first then env; an empty map means env-only resolution.
    */
   providerKeys: Record<string, string>;
+  /** Per-path filesystem permission rules (ADR 0024 phase 2b); empty = fail-closed read-only. */
+  fsPolicy: FsPolicyRule[];
 };
 
 /** The `RunOutcome` shape the Rust bridge serializes back. */
 type RunOutcomeWire = {
   state: GraphState;
   status: string;
-  pendingApprovals: { subject: string; reason: string }[];
+  /**
+   * Pending approvals when suspended. For a content-scoped guarded fs write (ADR 0024
+   * phase 2c) the item also carries `approvalKey` (the composite grant to send back on
+   * approve) + `input` (the path/content, so a reviewer sees what is approved).
+   */
+  pendingApprovals: { subject: string; reason: string; approvalKey?: string; input?: unknown }[];
 };
 
 /** Payload the Rust `on_node` seam sends for a JS node handler or a JS tool. */
@@ -326,7 +349,9 @@ export class RustGraphRunner<TState extends ChannelValues> {
         approvalToolNames: config.approvalToolNames,
         outputChannel: config.outputChannel,
         outputStyle: config.outputStyle,
-        contextBudget: config.contextBudget
+        contextBudget: config.contextBudget,
+        todosChannel: config.todosChannel,
+        enableFs: config.enableFs
       };
     }
     return out;
@@ -356,6 +381,7 @@ export class RustGraphRunner<TState extends ChannelValues> {
     | "jsNodeIds"
     | "jsToolNames"
     | "providerKeys"
+    | "fsPolicy"
   > {
     return {
       graph: this.parts.definition,
@@ -364,7 +390,8 @@ export class RustGraphRunner<TState extends ChannelValues> {
       componentNodes: this.buildComponentsWire(),
       jsNodeIds: [...this.parts.jsNodeIds],
       jsToolNames: [...this.parts.jsToolNames],
-      providerKeys: this.parts.providerKeys ?? {}
+      providerKeys: this.parts.providerKeys ?? {},
+      fsPolicy: this.parts.fsPolicy ?? []
     };
   }
 

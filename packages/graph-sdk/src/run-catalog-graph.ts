@@ -32,7 +32,7 @@ import type { ModelTier } from "@adriane-ai/llm-gateway";
 // (and a `pg` dependency) into consumers such as the Studio bundle.
 import type { ApprovalEngine } from "@adriane-ai/approval-engine";
 
-import type { RustAgentConfig } from "./agent-node.js";
+import type { FsPolicyRule, RustAgentConfig } from "./agent-node.js";
 import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
 import type { RustComponentConfig, ComponentKind } from "./components.js";
 import {
@@ -60,6 +60,14 @@ export type AgentCarrier = {
   suspendForApproval?: boolean;
   approvalToolNames?: string[];
   outputChannel?: string;
+  /** ADR 0014 — terse output directive on the system prompt. */
+  outputStyle?: "terse";
+  /** ADR 0014 — cap (chars) on the serialized state injected into the agent. */
+  contextBudget?: number;
+  /** ADR 0022/0023 — durable channel the agent's `writeTodos` list is persisted into. */
+  todosChannel?: string;
+  /** ADR 0024 — opt this agent into the governed virtual filesystem tools. */
+  enableFs?: boolean;
 };
 
 /** Outcome of a catalog-graph run: the terminal/suspended state and a flat status. */
@@ -97,6 +105,13 @@ export type RunCatalogGraphOptions = {
    * purely on the host env (local dev, tests).
    */
   providerKeys?: Record<string, string>;
+  /**
+   * Per-path filesystem permission rules (ADR 0024 phase 2d) the control plane resolved
+   * for this run (from its owner-only `fs_path_policy` table), compiled into the engine's
+   * `EngineSpec.fsPolicy` and applied to every fs-enabled agent. Omit for fail-closed
+   * read-only everywhere.
+   */
+  fsPolicy?: FsPolicyRule[];
 };
 
 /** Raised when the native engine is unavailable — catalog graphs require it. */
@@ -156,6 +171,15 @@ const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean
   suspendForApproval: carrier.suspendForApproval === true,
   approvalToolNames: carrier.approvalToolNames ?? [],
   outputChannel: carrier.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL,
+  // ADR 0014 token-efficiency knobs + ADR 0022/0023 durable todos channel: carried on
+  // the persisted node so the catalog/Studio run path reaches parity with the in-process
+  // SDK builder path (toRustAgentConfig), which forwards the same fields.
+  outputStyle: carrier.outputStyle,
+  contextBudget: carrier.contextBudget,
+  todosChannel: carrier.todosChannel,
+  // ADR 0024 — fs enablement carried on the persisted node; the run's fs policy is
+  // supplied separately by the control plane (RunCatalogGraphOptions.fsPolicy).
+  enableFs: carrier.enableFs,
   // The catalog path carries no JS tool closures — the agent's tools are native
   // (no-op stubs in the bridge unless a name is also in jsToolNames, which it never is here).
   toolBindings: [],
@@ -176,7 +200,8 @@ const generateRunId = (): RunId => {
 const assembleParts = (
   definition: GraphDefinition,
   usesApprovalEngine: boolean,
-  providerKeys: Record<string, string> | undefined
+  providerKeys: Record<string, string> | undefined,
+  fsPolicy: FsPolicyRule[] | undefined
 ): RustRunnerParts<ChannelValues> => {
   const components = new Map<string, RustComponentConfig>();
   const agents = new Map<string, RustAgentConfig>();
@@ -214,7 +239,8 @@ const assembleParts = (
     components,
     jsNodeIds,
     jsToolNames: new Set(),
-    providerKeys
+    providerKeys,
+    fsPolicy
   };
 };
 
@@ -232,7 +258,7 @@ export const runCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys)
+    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
@@ -256,7 +282,7 @@ export const runCatalogGraph = async (
 export const resumeCatalogGraph = async (
   definition: GraphDefinition,
   state: GraphState,
-  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine" | "providerKeys"> & {
+  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy"> & {
     /**
      * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
      * resolvedBy }` provenance. Passed straight through to the Rust bridge, which
@@ -273,7 +299,7 @@ export const resumeCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys)
+    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();

@@ -24,11 +24,16 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use adriane_agents_core::{
-    agent_node_handler, ApprovalRequestItem, InMemoryToolRegistry, ReActAgent, ToolDefinition,
-    APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
+    agent_node_handler, register_fs_tools, ApprovalRequestItem, InMemoryToolRegistry, ReActAgent,
+    ToolDefinition, APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
+use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
 use adriane_components::ComponentRegistry;
+use adriane_fs_backend::{
+    ArtifactFsBackend, FilesystemBackend, FsWriteCtx, HttpFilesystemBackend, PathRule,
+    StaticPathPolicy,
+};
 use adriane_graph_core::{EdgeType, GraphState, NodeId, NodeType, RunId};
 use adriane_graph_runtime::{
     Checkpoint, CheckpointId, Checkpointer, ConditionRegistry, GraphRuntime,
@@ -44,7 +49,7 @@ use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::{json, Value};
 
-use crate::spec::{AgentSpec, ApprovedTool, EngineSpec, RunOutcome};
+use crate::spec::{AgentSpec, ApprovedTool, EngineSpec, FsPolicyRule, RunOutcome};
 
 /// A TSFN that takes one JS string argument. We use the `Fatal` error strategy so
 /// the JS callback receives just `(payloadString)` (no leading error arg) and a
@@ -226,7 +231,28 @@ fn validate_approved_tools(tools: &[ApprovedTool]) -> napi::Result<Vec<String>> 
                 "approval guard-rail rejected resume: {error}"
             )));
         }
-        names.push(tool.name.clone());
+        // A content-scoped grant (ADR 0024 phase 2c) unlocks only the exact call: write
+        // its composite key into the channel, not the bare tool name. No-self-approval is
+        // still validated on the tool name above. Defense-in-depth: a supplied key MUST be
+        // "<tool.name>#<64-hex sha256>" — its name component must match the validated name,
+        // so a caller cannot smuggle a key whose embedded tool diverges from the one whose
+        // no-self-approval was checked, nor a malformed key.
+        match &tool.key {
+            Some(key) => {
+                let well_formed = key
+                    .strip_prefix(&format!("{}#", tool.name))
+                    .map(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .unwrap_or(false);
+                if !well_formed {
+                    return Err(napi::Error::from_reason(format!(
+                        "approval guard-rail rejected resume: malformed content-scoped key for tool '{}'",
+                        tool.name
+                    )));
+                }
+                names.push(key.clone());
+            }
+            None => names.push(tool.name.clone()),
+        }
     }
     names.sort();
     names.dedup();
@@ -255,8 +281,56 @@ fn seed_checkpoint(runtime: &GraphRuntime, state: GraphState) {
 
 /// Assemble the runtime: a node registry with JS handlers + agent handlers, and a
 /// condition registry that bridges every conditional edge's condition to JS.
+/// Resolve the run id this runtime build is for: a resume/approve carries it on the
+/// suspended `state`; a start carries it on `spec.run_id`. Used to scope the governed
+/// filesystem so an agent's artifacts key under the right run.
+fn resolve_run_id(spec: &EngineSpec) -> RunId {
+    spec.state
+        .as_ref()
+        .map(|state| state.run_id.clone())
+        .or_else(|| spec.run_id.clone().map(RunId::from))
+        .unwrap_or_else(|| RunId::from("run"))
+}
+
+/// Build the run-scoped fs backend: the external durable HTTP backend (ADR 0024 phase
+/// 2e) when `ADRIANE_FS_BACKEND_URL` is configured — fs content then survives a
+/// suspend/resume across the napi boundary — else the lean in-memory `ArtifactFsBackend`
+/// over the per-build shared store (intra-run).
+fn build_fs_backend(
+    fs_store: &Arc<dyn ArtifactStore>,
+    run_id: &RunId,
+) -> Arc<dyn FilesystemBackend> {
+    match HttpFilesystemBackend::from_env(run_id.clone()) {
+        Some(http) => Arc::new(http),
+        None => Arc::new(ArtifactFsBackend::new(fs_store.clone(), run_id.clone())),
+    }
+}
+
+/// Compile the wire policy rules into the engine's [`StaticPathPolicy`] (fail-closed:
+/// empty → read-only everywhere).
+fn build_fs_policy(rules: &[FsPolicyRule]) -> StaticPathPolicy {
+    StaticPathPolicy::with_rules(
+        rules
+            .iter()
+            .map(|rule| PathRule {
+                glob: rule.glob.clone(),
+                verb: rule.verb,
+            })
+            .collect(),
+    )
+}
+
 fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<GraphRuntime> {
     let js_node_ids: HashSet<&str> = spec.js_node_ids.iter().map(String::as_str).collect();
+
+    // Run-scoped governed filesystem (ADR 0024 phase 2b): ONE in-memory artifact store
+    // shared across every fs-enabled agent in this run (so a file written by one node is
+    // readable by another), plus the compiled per-path policy. NOTE: the store is
+    // per-runtime-build — fs content is intra-run and does NOT yet survive a
+    // suspend/resume across the napi boundary (durable backing is phase 2e).
+    let fs_run_id = resolve_run_id(spec);
+    let fs_store: Arc<dyn ArtifactStore> = Arc::new(InMemoryArtifactStore::new());
+    let fs_policy = Arc::new(build_fs_policy(&spec.fs_policy));
 
     let registry = ComponentRegistry::new();
     let mut nodes = InMemoryNodeRegistry::new();
@@ -283,7 +357,9 @@ fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<Grap
                 })?;
             nodes.register(NodeId::from(id), handler);
         } else if let Some(agent_spec) = spec.agents.get(&id) {
-            let handler = build_agent_handler(&id, agent_spec, spec, &callbacks)?;
+            let handler = build_agent_handler(
+                &id, agent_spec, spec, &callbacks, &fs_store, &fs_policy, &fs_run_id,
+            )?;
             nodes.register(NodeId::from(id), handler);
         } else if node.node_type == NodeType::HumanGate {
             // The runtime suspends natively at a human gate — no handler needed.
@@ -373,11 +449,15 @@ fn js_condition(name: String, callbacks: &JsCallbacks) -> adriane_graph_runtime:
 
 /// Build the agent-node handler for an agent spec: a [`ReActAgent`] over a gateway
 /// chosen from env, with a tool registry where JS tools call back into JS.
+#[allow(clippy::too_many_arguments)]
 fn build_agent_handler(
     node_id: &str,
     agent_spec: &AgentSpec,
     spec: &EngineSpec,
     callbacks: &JsCallbacks,
+    fs_store: &Arc<dyn ArtifactStore>,
+    fs_policy: &Arc<StaticPathPolicy>,
+    fs_run_id: &RunId,
 ) -> napi::Result<adriane_graph_runtime::NodeHandler> {
     // Resolve the concrete model BEFORE building the gateway, so the registered
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
@@ -398,12 +478,20 @@ fn build_agent_handler(
 
     let mut registry = InMemoryToolRegistry::new();
     for tool_name in &agent_spec.tool_names {
+        // `writeTodos` has a real Rust impl (ADR 0022/0023): register it verbatim
+        // (proper schema + pure normalizing handler), never the no-op stub.
+        if tool_name == adriane_agents_core::WRITE_TODOS_TOOL {
+            let (definition, handler) = adriane_agents_core::write_todos_tool();
+            registry.register(definition, handler);
+            continue;
+        }
         let requires_approval = approval_tools.contains(tool_name.as_str());
         let definition = ToolDefinition {
             name: tool_name.clone(),
             description: format!("Tool '{tool_name}'."),
             requires_approval,
             input_schema: Some(json!({ "type": "object" })),
+            content_scoped: false,
         };
         let handler = if js_tools.contains(tool_name.as_str()) {
             js_tool_handler(tool_name.clone(), callbacks)
@@ -414,6 +502,24 @@ fn build_agent_handler(
             adriane_agents_core::sync_tool(move |_input| Ok(json!({ "tool": name, "ok": true })))
         };
         registry.register(definition, handler);
+    }
+
+    // Governed virtual filesystem (ADR 0024 phase 2b): an fs-enabled agent gets the
+    // eight fs tools bound to a run-scoped backend over the shared artifact store and
+    // the run's path policy (fail-closed). The agent itself is the `principal` recorded
+    // on writes; the gate verb is rejected here until phase 2c.
+    if agent_spec.enable_fs {
+        let backend = build_fs_backend(fs_store, fs_run_id);
+        let policy: Arc<dyn adriane_fs_backend::PathPolicy> = fs_policy.clone();
+        register_fs_tools(
+            &mut registry,
+            backend,
+            policy,
+            FsWriteCtx {
+                node_id: NodeId::from(node_id),
+                principal: Some(node_id.to_owned()),
+            },
+        );
     }
 
     // Drive the agent with the RESOLVED provider/model so the request's provider
@@ -454,6 +560,7 @@ fn build_agent_handler(
         Arc::new(agent),
         output_channel,
         agent_spec.suspend_for_approval,
+        agent_spec.todos_channel.clone(),
     ))
 }
 
@@ -866,6 +973,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn resolve_run_id_prefers_state_then_spec_run_id() {
+        // A start carries the id on spec.run_id.
+        let start: EngineSpec = serde_json::from_value(json!({
+            "graph": { "id": "g", "version": "0.0.0", "name": "g", "channels": {},
+                "nodes": [{ "id": "a", "type": "action", "label": "a" }], "edges": [], "entryNodeId": "a" },
+            "runId": "r-start"
+        }))
+        .expect("spec parses");
+        assert_eq!(resolve_run_id(&start).0, "r-start");
+        // Absent run id falls back deterministically.
+        let bare: EngineSpec = serde_json::from_value(json!({
+            "graph": { "id": "g", "version": "0.0.0", "name": "g", "channels": {},
+                "nodes": [{ "id": "a", "type": "action", "label": "a" }], "edges": [], "entryNodeId": "a" }
+        }))
+        .expect("spec parses");
+        assert_eq!(resolve_run_id(&bare).0, "run");
+    }
+
+    #[test]
+    fn build_fs_policy_compiles_rules_fail_closed() {
+        use adriane_fs_backend::{FsPermVerb, PathPolicy};
+        let policy = build_fs_policy(&[FsPolicyRule {
+            glob: "scratch/**".to_owned(),
+            verb: FsPermVerb::Write,
+        }]);
+        assert!(policy.resolve("scratch/x").can_write());
+        // Unmatched path is fail-closed read-only.
+        assert!(!policy.resolve("elsewhere").can_write());
+        // Empty policy = read-only everywhere.
+        assert!(!build_fs_policy(&[]).resolve("anything").can_write());
+    }
+
     fn node(id: &str, node_type: NodeType) -> NodeDefinition {
         NodeDefinition {
             id: NodeId::from(id),
@@ -897,6 +1037,8 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
+            enable_fs: false,
         };
 
         let gateway = build_gateway(
@@ -911,6 +1053,7 @@ mod tests {
                 description: "lookup".to_owned(),
                 requires_approval: false,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             adriane_agents_core::sync_tool(|_input| Ok(json!({ "ok": true }))),
         );
@@ -926,6 +1069,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 false,
+                None,
             ),
         );
 
@@ -972,6 +1116,8 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
+            enable_fs: false,
         };
         let gateway = build_gateway(
             &agent_spec,
@@ -986,6 +1132,7 @@ mod tests {
                 description: "refund".to_owned(),
                 requires_approval: true,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             adriane_agents_core::sync_tool(move |_input| {
                 counter.fetch_add(1, Ordering::SeqCst);
@@ -1004,6 +1151,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 true,
+                None,
             ),
         );
 
@@ -1035,6 +1183,7 @@ mod tests {
             agents: [("assistant".to_owned(), agent_spec)].into_iter().collect(),
             component_nodes: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
+            fs_policy: vec![],
             js_node_ids: vec![],
             js_tool_names: vec![],
         };
@@ -1124,6 +1273,8 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
+            enable_fs: false,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1172,6 +1323,8 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
+            enable_fs: false,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1227,6 +1380,8 @@ mod tests {
             output_channel: None,
             output_style: None,
             context_budget: None,
+            todos_channel: None,
+            enable_fs: false,
         };
 
         let resolved = resolve_agent_model(&agent_spec);
@@ -1244,6 +1399,7 @@ mod tests {
                 description: "lookup".to_owned(),
                 requires_approval: false,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             adriane_agents_core::sync_tool(|_input| Ok(json!({ "ok": true }))),
         );
@@ -1261,6 +1417,7 @@ mod tests {
                 Arc::new(agent),
                 DEFAULT_AGENT_OUTPUT_CHANNEL.to_owned(),
                 false,
+                None,
             ),
         );
         let graph = GraphDefinition {
@@ -1388,20 +1545,57 @@ mod tests {
                 name: "wire".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "alice".to_owned(),
+                key: None,
             },
             ApprovedTool {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "alice".to_owned(),
+                key: None,
             },
             ApprovedTool {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "bob".to_owned(),
+                key: None,
             },
         ];
         let names = validate_approved_tools(&tools).expect("distinct resolver passes");
         assert_eq!(names, vec!["refund".to_owned(), "wire".to_owned()]);
+
+        // A content-scoped grant writes its composite KEY into the channel, not the name.
+        let hex = "a".repeat(64);
+        let key = format!("write_file_guarded#{hex}");
+        let scoped = vec![ApprovedTool {
+            name: "write_file_guarded".to_owned(),
+            requested_by: "worker".to_owned(),
+            resolved_by: "alice".to_owned(),
+            key: Some(key.clone()),
+        }];
+        let scoped_names = validate_approved_tools(&scoped).expect("distinct resolver passes");
+        assert_eq!(scoped_names, vec![key]);
+    }
+
+    #[test]
+    fn validate_approved_tools_rejects_a_malformed_content_scoped_key() {
+        // A key whose name component diverges from the validated tool name, or whose hash
+        // is not a 64-hex sha256, is rejected fail-closed (defense-in-depth).
+        for bad in [
+            "write_file_guarded#deadbeef".to_owned(),   // hash too short
+            "other_tool#".to_owned() + &"a".repeat(64), // name component mismatch
+            "write_file_guarded#".to_owned() + &"z".repeat(64), // non-hex
+        ] {
+            let tools = vec![ApprovedTool {
+                name: "write_file_guarded".to_owned(),
+                requested_by: "worker".to_owned(),
+                resolved_by: "alice".to_owned(),
+                key: Some(bad.to_string()),
+            }];
+            assert!(
+                validate_approved_tools(&tools).is_err(),
+                "malformed key must be rejected: {bad}"
+            );
+        }
     }
 
     #[test]
@@ -1412,6 +1606,7 @@ mod tests {
             name: "refund".to_owned(),
             requested_by: "assistant".to_owned(),
             resolved_by: "assistant".to_owned(),
+            key: None,
         }];
         let error = validate_approved_tools(&tools).expect_err("self-approval is rejected");
         assert!(
@@ -1432,6 +1627,7 @@ mod tests {
             name: "refund".to_owned(),
             requested_by: "assistant".to_owned(),
             resolved_by: "  ".to_owned(),
+            key: None,
         }];
         assert!(validate_approved_tools(&tools).is_err());
     }
@@ -1478,10 +1674,12 @@ mod tests {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "assistant".to_owned(),
+                key: None,
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
+            fs_policy: vec![],
             js_node_ids: vec![],
             js_tool_names: vec![],
         };
@@ -1541,10 +1739,12 @@ mod tests {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
                 resolved_by: "assistant".to_owned(),
+                key: None,
             }],
             agents: BTreeMap::new(),
             component_nodes: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
+            fs_policy: vec![],
             js_node_ids: vec![],
             js_tool_names: vec![],
         };

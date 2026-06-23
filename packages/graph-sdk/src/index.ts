@@ -186,11 +186,25 @@ export type {
   AgentApprovalBinding,
   AgentNodeConfig,
   AgentPromptSource,
+  FsPermVerb,
+  FsPolicyRule,
   RustAgentConfig,
   RustToolBinding,
   StreamAgentConfig,
+  TaskNodeConfig,
   ToolNodeConfig
 } from "./agent-node.js";
+
+// Deep-agent harness phase 1 (ADR 0022/0023): the writeTodos planning tool's shared
+// shapes, re-exported so SDK consumers can declare the todos channel + read the list.
+export {
+  normalizeTodos,
+  writeTodosTool,
+  writeTodosJsonSchema,
+  TODOS_CHANNEL,
+  WRITE_TODOS_TOOL_NAME
+} from "@adriane-ai/agents-core";
+export type { TodoItem, TodoStatus, WriteTodosInput } from "@adriane-ai/agents-core";
 
 export {
   AdrianeSdkError,

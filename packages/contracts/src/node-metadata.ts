@@ -8,7 +8,8 @@ import { ModelTierDtoSchema } from "./catalog.js";
  * A graph node that is a catalog COMPONENT carries `node.metadata.component =
  * { kind, params }`; a catalog AGENT node carries `node.metadata.agent =
  * { provider?, model?, tier?, system?, toolNames?, maxIterations?,
- *   suspendForApproval?, approvalToolNames?, outputChannel? }`.
+ *   suspendForApproval?, approvalToolNames?, outputChannel?, outputStyle?,
+ *   contextBudget?, todosChannel?, enableFs? }`.
  *
  * The graph editor EMITS these into `node.metadata`; the API run path READS
  * `node.metadata` to assemble `EngineSpec.componentNodes` (kind + params) and
@@ -35,7 +36,15 @@ export const AgentNodeMetadataSchema = z.object({
   maxIterations: z.number().int().min(1).optional(),
   suspendForApproval: z.boolean().optional(),
   approvalToolNames: z.array(z.string().min(1)).optional(),
-  outputChannel: z.string().min(1).optional()
+  outputChannel: z.string().min(1).optional(),
+  /** ADR 0014 — terse output directive on the system prompt. */
+  outputStyle: z.literal("terse").optional(),
+  /** ADR 0014 — cap (chars) on the serialized state injected into the agent. */
+  contextBudget: z.number().int().min(1).optional(),
+  /** ADR 0022/0023 — durable channel the agent's `writeTodos` list is persisted into. */
+  todosChannel: z.string().min(1).optional(),
+  /** ADR 0024 phase 2c/2d — opt this agent into the governed virtual filesystem tools. */
+  enableFs: z.boolean().optional()
 });
 
 /**

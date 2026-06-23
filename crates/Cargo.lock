@@ -6,12 +6,15 @@ version = 4
 name = "adriane-agents-core"
 version = "1.1.1"
 dependencies = [
+ "adriane-artifact-store",
+ "adriane-fs-backend",
  "adriane-graph-core",
  "adriane-graph-runtime",
  "adriane-llm-gateway",
  "async-trait",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -86,6 +89,20 @@ name = "adriane-config"
 version = "1.1.1"
 dependencies = [
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "adriane-fs-backend"
+version = "1.1.1"
+dependencies = [
+ "adriane-artifact-store",
+ "adriane-graph-core",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
@@ -170,7 +187,9 @@ version = "1.1.1"
 dependencies = [
  "adriane-agents-core",
  "adriane-approval-engine",
+ "adriane-artifact-store",
  "adriane-components",
+ "adriane-fs-backend",
  "adriane-graph-adriane",
  "adriane-graph-core",
  "adriane-graph-runtime",
@@ -1104,9 +1123,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
