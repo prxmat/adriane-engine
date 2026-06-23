@@ -87,7 +87,7 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
     // multimodal seed. The deterministic mock gateway ignores the image, so we assert the run
     // completes — proving the channel binding threads SDK → wire → bridge → react seed.
     const app = createGraph({ name: "rust-multimodal" })
-      .channel("__media", { type: "json", default: [] })
+      .channel("__media", { type: "json", default: [] as unknown[] })
       .agentNode("vision", {
         llm: new DefaultLLMGateway(),
         prompt: { system: "Describe the image." },
@@ -106,7 +106,7 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
       { runId: "run_rust_multimodal" as never }
     );
     expect(result.status).toBe("completed");
-    const agentResult = (result.channels as Record<string, AgentResult>).agentResult;
+    const agentResult = (result.channels as unknown as Record<string, AgentResult>).agentResult;
     expect(agentResult).toBeDefined();
   });
 
