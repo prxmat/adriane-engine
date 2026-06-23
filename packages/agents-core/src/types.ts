@@ -30,6 +30,14 @@ export type AgentResult = {
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
   };
+  /**
+   * The validated structured output (ADR 0029 phase 8): the parsed JSON value that conformed to
+   * the agent's `structuredOutput` middleware schema. Present only when that middleware ran and
+   * produced a valid value; omitted otherwise (no schema requested, or lenient mode never
+   * validated). The shape is the caller's schema — typed as `unknown`, validate/narrow at the
+   * boundary.
+   */
+  structuredOutput?: unknown;
 };
 
 export type AgentRunFn<TInput = unknown> = (
