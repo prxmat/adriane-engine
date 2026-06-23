@@ -100,6 +100,15 @@ A handler returns a channel-update object. It may also return a routing `Command
 (`{ goto, update? }`) — but see the [Rust caveat](#rust-engine-caveats) below: a `goto` is
 dropped on the Rust path.
 
+### `humanGate(id, options?)`
+
+```ts
+humanGate(id: string, options?: { label?: string }): this;
+```
+
+Add a **human-gate node**: a structural pause point where the run suspends for a human, separate
+from agent-native tool approval. Full loop in [approval gates](/docs/governance/approval-gates).
+
 ### `agentNode(id, config)`
 
 ```ts
@@ -177,6 +186,21 @@ one-node subgraph (checkpointed, audited, suspension-propagating). Full walkthro
 | `reportChannel` | `string` | `"report"` | The only channel the child's report lands in. |
 | `compress` | `boolean` | `true` | Run the sub-agent terse (a summary, not a full transcript). |
 
+### `subgraph(id, child, options?)`
+
+```ts
+subgraph<TChild>(
+  id: string,
+  child: GraphBuilder<TChild>,
+  options?: { inputMapping?: Record<string, string>; outputMapping?: Record<string, string>; label?: string }
+): this;
+```
+
+Embed another graph as a single node. The child shares the parent's registries, so a child node id
+that collides with a parent id throws `DuplicateNodeError`. `inputMapping` / `outputMapping` project
+channels in and out. A child that suspends suspends the whole run. Full walkthrough in
+[subgraphs](/docs/building/subgraphs).
+
 ### `fsPolicy(rules)`
 
 ```ts
@@ -250,6 +274,26 @@ user-supplied string, which is what keeps routing safe and inspectable (see the
 
 ```ts
 .conditionalEdge("assistant", "review", "needsReview", (s) => s.channels.agentResult.requiresHumanReview)
+```
+
+### `fanOut(from, parallelTo, joinAt)`
+
+```ts
+fanOut(from: string, parallelTo: string[], joinAt: string): this;
+```
+
+Mark `from` as a **scatter** point: the listed `parallelTo` nodes run concurrently, then converge
+at `joinAt`. The node ids must already exist (else `UnknownNodeError`). This is static fan-out (a
+fixed node list); dynamic map-reduce uses [`send` / inbox](/docs/building/dynamic-message-send).
+
+```ts
+createGraph({ name: "council" })
+  .node("dispatch", async () => ({}))
+  .agentNode("a", { llm, prompt: { system: "…" }, outputChannel: "a" })
+  .agentNode("b", { llm, prompt: { system: "…" }, outputChannel: "b" })
+  .node("chair", async (s) => ({ verdict: pick(s.channels.a, s.channels.b) }))
+  .fanOut("dispatch", ["a", "b"], "chair")
+  .compile();
 ```
 
 ### `entry(nodeId)`
@@ -385,6 +429,18 @@ approves its own tools** — this is the human seam. Full loop in
 | --- | --- | --- | --- |
 | `approvedTools` | `string[]` | — (required) | Names of approval-gated tools the human grants; they execute on resume. |
 | `resolvedBy` | `string` | `"human"` | The principal granting approval — never the requesting agent. The Rust engine rejects a resume where `resolvedBy` is empty or equals the tool's requester (the no-self-approval guard-rail). |
+
+### `signal(runId, name, payload?)`
+
+```ts
+signal(runId: RunId, name: string, payload?: unknown): Promise<TypedGraphState<TState>>;
+```
+
+Deliver a named signal to a run suspended on `waitForSignal(name)`, resuming it (optionally with a
+`payload`). The durable counterpart to `sleepUntil` — the engine never sleeps in-process; it
+suspends and a scheduler (or this call) wakes it. See
+[durable timers and signals](/docs/building/durable-timers-and-signals). Instance-bound on the Rust
+engine, exactly like `resume` (see the warning above).
 
 ### `stream(initialData, mode, options?)`
 

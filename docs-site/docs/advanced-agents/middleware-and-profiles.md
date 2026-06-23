@@ -135,6 +135,12 @@ Compression and context-budget are the two token levers, both surfaced as effici
   the service is not configured the request passes through unchanged, so a `compress` entry is
   simply a no-op.
 
+**Prompt caching is automatic** — not a knob. The Anthropic adapter marks the system prompt and
+tool definitions with `cache_control`, and every adapter reads the cached-token counts back into
+`AgentResult` usage. Across a multi-turn ReAct loop the stable prefix (system + tools) is served
+from the provider's cache, so you pay full price for it once, not on every iteration. Nothing to
+configure — it applies whenever the provider supports it.
+
 ## Reflection
 
 `{ kind: "reflection" }` runs **one self-critique** after the agent finishes: it asks the model to
