@@ -10,4 +10,9 @@ pub enum LlmError {
     Provider(String),
     #[error("blocked by PII policy: {0}")]
     PiiBlocked(String),
+    /// ADR 0029: the model's output failed JSON-Schema validation after the bounded retry
+    /// budget. Surfaced at the node sink as channel data (the gateway-error-as-data
+    /// convention), never a panic.
+    #[error("structured output did not match the schema: {0}")]
+    StructuredOutputInvalid(String),
 }

@@ -155,12 +155,29 @@ export type AgentProfile = "fast" | "frontier-careful" | "governed-deep";
  *   conditional edge can gate on it). It does NOT set `requiresHumanReview` — that would re-suspend
  *   forever on resume. Additive — the full critique→revise loop stays the standalone reflection
  *   node. `threshold` (0..1, default 0.8) is the acceptance bar.
+ * - `structuredOutput` — constrain the agent's output to a JSON Schema (ADR 0029 phase 8). The
+ *   engine sets the provider's native constraint (OpenAI `response_format`, Anthropic forced tool,
+ *   Gemini `responseSchema`) AND validates the result in-engine (the floor). The validated value
+ *   lands on `AgentResult.structuredOutput`. `mode: "required"` (default) fails closed with a typed
+ *   error after `retryCap` (default 2) deterministic re-prompts; `mode: "lenient"` falls back to raw
+ *   text. It is an EFFICIENCY kind (output-shaping), and the approval gate stays intrinsic — so it
+ *   cannot route around governance.
  */
 export type EfficiencyMiddlewareSpec =
   | { kind: "compress" }
   | { kind: "terse" }
   | { kind: "contextBudget"; params: { chars: number } }
-  | { kind: "reflection"; params?: { threshold?: number } };
+  | { kind: "reflection"; params?: { threshold?: number } }
+  | {
+      kind: "structuredOutput";
+      params: {
+        schema: Record<string, unknown>;
+        name?: string;
+        strict?: boolean;
+        mode?: "required" | "lenient";
+        retryCap?: number;
+      };
+    };
 
 /**
  * Governance middleware kinds the SDK rejects in {@link AgentNodeConfig.middleware}: they are

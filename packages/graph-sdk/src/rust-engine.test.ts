@@ -82,6 +82,40 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
     expect(agentResult).toBeDefined();
   });
 
+  it("threads a structuredOutput middleware through to the Rust engine (ADR 0029)", async () => {
+    // The `structuredOutput` efficiency kind must travel SDK → wire → bridge →
+    // StructuredOutputMiddleware. The deterministic mock gateway does not emit our schema,
+    // so we use `lenient` mode (fail-open) and assert the run completes — proving the kind
+    // is wired in without crashing. (Happy-path validate/attach is unit-tested in Rust.)
+    const app = createGraph({ name: "rust-structured-output" })
+      .agentNode("classifier", {
+        llm: new DefaultLLMGateway(),
+        prompt: { system: "Classify the input." },
+        maxIterations: 2,
+        middleware: [
+          {
+            kind: "structuredOutput",
+            params: {
+              name: "Verdict",
+              schema: {
+                type: "object",
+                properties: { label: { type: "string" } },
+                required: ["label"]
+              },
+              mode: "lenient"
+            }
+          }
+        ]
+      })
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+    const result = await app.run({ text: "hello" }, { runId: "run_rust_structured" as never });
+    expect(result.status).toBe("completed");
+    const agentResult = (result.channels as Record<string, AgentResult>).agentResult;
+    expect(agentResult).toBeDefined();
+  });
+
   it("suspends a gated agent then resumes to completion via approveAndResume ON RUST", async () => {
     // A tool flagged `requiresApproval`; with `suspendForApproval` the Rust agent node
     // raises a dynamic interrupt and the run suspends *before* the tool runs. Once

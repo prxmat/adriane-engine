@@ -15,6 +15,7 @@ pub mod node;
 pub mod plan_execute;
 pub mod react;
 pub mod reflection;
+pub mod structured_output;
 pub mod supervisor;
 pub mod todos;
 pub mod tools;
@@ -23,7 +24,8 @@ pub mod working_memory;
 pub use fs_tools::{fs_tools, register_fs_tools};
 pub use middleware::{
     AgentMiddleware, CompressMiddleware, ContextBudgetMiddleware, Flow, MiddlewareStack,
-    RedactMiddleware, ReflectionMiddleware, RunCtx, TerseMiddleware, ToolCallCtx, ToolControl,
+    RedactMiddleware, ReflectionMiddleware, RunCtx, StructuredOutputMiddleware, TerseMiddleware,
+    ToolCallCtx, ToolControl,
 };
 pub use node::{
     agent_node_handler, map_node_handler, AGENT_APPROVAL_INTERRUPT, APPROVED_TOOLS_CHANNEL,
@@ -36,6 +38,7 @@ pub use react::{
 pub use reflection::{
     ReflectionAgent, ReflectionResult, DEFAULT_MAX_REFLECTIONS, REFLECTION_MODEL, REVISE_MARKERS,
 };
+pub use structured_output::{extract_first_json, validate_json};
 pub use supervisor::{
     Routing, SupervisorAgent, SupervisorResult, Worker, NO_DESCRIPTION, SUPERVISOR_MODEL,
 };
