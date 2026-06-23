@@ -49,3 +49,19 @@ export class UnknownNodeError extends AdrianeSdkError {
     this.name = "UnknownNodeError";
   }
 }
+
+/**
+ * Thrown when an agent's `middleware[]` names a GOVERNANCE kind (redact / approvalGate /
+ * fsPolicy). The governed layer is engine-injected and sealed — a user may only append
+ * EFFICIENCY middleware (compress / terse / contextBudget) — so an ungoverned stack is
+ * unrepresentable (ADR 0025 phase 3d, the governed-by-construction invariant).
+ */
+export class GovernanceMiddlewareRejectedError extends AdrianeSdkError {
+  public constructor(kind: string) {
+    super(
+      `Middleware kind '${kind}' is a governance middleware: it is engine-injected and cannot ` +
+        `be supplied by a user. Agent middleware may only be efficiency kinds (compress, terse, contextBudget).`
+    );
+    this.name = "GovernanceMiddlewareRejectedError";
+  }
+}

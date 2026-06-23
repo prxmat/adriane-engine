@@ -41,4 +41,34 @@ describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
     expect(parsed.outputStyle).toBeUndefined();
     expect(parsed.contextBudget).toBeUndefined();
   });
+
+  // ADR 0025 phase 3d — the persisted resolvedMiddleware gate.
+  it("keeps an efficiency-only resolvedMiddleware list through a parse round-trip", () => {
+    const parsed = AgentNodeMetadataSchema.parse({
+      provider: "anthropic",
+      resolvedMiddleware: [
+        { kind: "compress" },
+        { kind: "terse" },
+        { kind: "contextBudget", params: { chars: 4000 } }
+      ]
+    });
+    expect(parsed.resolvedMiddleware?.map((m) => m.kind)).toEqual(["compress", "terse", "contextBudget"]);
+  });
+
+  it("rejects a GOVERNANCE kind in resolvedMiddleware by construction (the persisted reject gate)", () => {
+    // A governance kind is not in the efficiency-only discriminated union → safeParse fails →
+    // readAgentMetadata drops the whole malformed agent. An ungoverned stack is unrepresentable.
+    for (const kind of ["redact", "approvalGate", "fsPolicy"]) {
+      expect(AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind }] }).success).toBe(false);
+      expect(
+        readAgentMetadata({ agent: { provider: "anthropic", resolvedMiddleware: [{ kind }] } })
+      ).toBeUndefined();
+    }
+  });
+
+  it("rejects a contextBudget entry missing its chars param", () => {
+    expect(
+      AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind: "contextBudget" }] }).success
+    ).toBe(false);
+  });
 });

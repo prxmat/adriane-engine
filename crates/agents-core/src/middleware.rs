@@ -369,6 +369,69 @@ impl AgentMiddleware for CompressMiddleware {
     }
 }
 
+/// The terse-output directive (ADR 0014) [`TerseMiddleware`] appends to the system prompt.
+const TERSE_SUFFIX: &str = " Respond in a terse, telegraphic style: sentence fragments, no \
+    filler, no pleasantries. Preserve ALL technical substance, numbers, code and exact values.";
+
+/// EFFICIENCY — terse output (ADR 0014) as a before-model hook: appends [`TERSE_SUFFIX`] to
+/// the request's system prompt so the model answers compactly (cuts output tokens on prose;
+/// lossy — the SDK only sets it for prose stages). Idempotent per request: the loop rebuilds
+/// the request from the agent's bare system prompt each iteration, so exactly one suffix is
+/// appended each call. Folds the former flat `output_style:"terse"` bridge knob (ADR 0025 3d).
+pub struct TerseMiddleware;
+
+#[async_trait::async_trait]
+impl AgentMiddleware for TerseMiddleware {
+    fn name(&self) -> &str {
+        "terse"
+    }
+    async fn before_model(
+        &self,
+        mut request: LlmRequest,
+        _ctx: &RunCtx<'_>,
+    ) -> Result<LlmRequest, LlmError> {
+        request.system = Some(match request.system {
+            Some(system) => format!("{system}{TERSE_SUFFIX}"),
+            None => TERSE_SUFFIX.trim().to_owned(),
+        });
+        Ok(request)
+    }
+}
+
+/// EFFICIENCY — context-budget trim (ADR 0014) as a before-run hook: caps the agent's seed
+/// message (the injected `Input/State`) to `chars` characters so an unbounded channel map is
+/// not re-fed to the model. Truncates on a char boundary and marks the cut with `…`. Folds
+/// the former flat `context_budget` agent knob into a composable middleware (ADR 0025 3d).
+pub struct ContextBudgetMiddleware {
+    chars: usize,
+}
+
+impl ContextBudgetMiddleware {
+    pub fn new(chars: usize) -> Self {
+        Self { chars }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentMiddleware for ContextBudgetMiddleware {
+    fn name(&self) -> &str {
+        "context-budget"
+    }
+    async fn before_run(
+        &self,
+        conversation: &mut Vec<LlmMessage>,
+        _ctx: &RunCtx<'_>,
+    ) -> Result<Flow, LlmError> {
+        if let Some(first) = conversation.first_mut() {
+            if first.content.chars().count() > self.chars {
+                let truncated: String = first.content.chars().take(self.chars).collect();
+                first.content = truncated + "…";
+            }
+        }
+        Ok(Flow::Continue)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,5 +668,85 @@ mod tests {
             stack.before_tool(&other_call, &ctx).await.unwrap(),
             ToolControl::Gate(_)
         ));
+    }
+
+    fn empty_ctx<'a>(
+        approved: &'a HashSet<String>,
+        channels: &'a BTreeMap<String, Value>,
+    ) -> RunCtx<'a> {
+        RunCtx {
+            iteration: 0,
+            approved_tool_names: approved,
+            channels,
+        }
+    }
+
+    fn bare_request(system: Option<&str>) -> LlmRequest {
+        use adriane_llm_gateway::LlmProvider;
+        LlmRequest {
+            provider: LlmProvider::Anthropic,
+            model: "m".to_owned(),
+            messages: vec![],
+            system: system.map(str::to_owned),
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn terse_middleware_appends_the_directive_idempotently_per_request() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        let terse = TerseMiddleware;
+
+        // With a base system → suffix appended after it.
+        let out = terse
+            .before_model(bare_request(Some("Be helpful.")), &ctx)
+            .await
+            .unwrap();
+        let system = out.system.expect("system set");
+        assert!(system.starts_with("Be helpful."));
+        assert!(system.contains("terse, telegraphic"));
+
+        // Without a base system → the trimmed directive becomes the system.
+        let out = terse.before_model(bare_request(None), &ctx).await.unwrap();
+        let system = out.system.expect("system set");
+        assert!(system.starts_with("Respond in a terse"));
+
+        // Per-request idempotency: re-running on a fresh (bare) request appends exactly once
+        // (the loop never persists the suffix back onto the agent's system prompt).
+        let out = terse
+            .before_model(bare_request(Some("Be helpful.")), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(out.system.unwrap().matches("terse, telegraphic").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn context_budget_middleware_trims_only_when_over_budget() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        let mw = ContextBudgetMiddleware::new(10);
+
+        // Over budget → truncated to `chars` + ellipsis marker.
+        let mut conversation = vec![LlmMessage::text("user", "0123456789ABCDEF")];
+        assert_eq!(
+            mw.before_run(&mut conversation, &ctx).await.unwrap(),
+            Flow::Continue
+        );
+        assert_eq!(conversation[0].content, "0123456789…");
+
+        // Within budget → untouched (no ellipsis).
+        let mut conversation = vec![LlmMessage::text("user", "short")];
+        mw.before_run(&mut conversation, &ctx).await.unwrap();
+        assert_eq!(conversation[0].content, "short");
+
+        // Empty conversation → no panic.
+        let mut empty: Vec<LlmMessage> = vec![];
+        mw.before_run(&mut empty, &ctx).await.unwrap();
+        assert!(empty.is_empty());
     }
 }

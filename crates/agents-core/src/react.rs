@@ -93,11 +93,9 @@ pub struct ReActAgent {
     model: String,
     system: Option<String>,
     max_iterations: usize,
-    /// ADR 0014: cap (in chars) on the serialized `State` injected into the first message.
-    /// `None` = inject the full state.
-    context_budget: Option<usize>,
-    /// ADR 0025: the agent middleware stack the loop drives. Default empty = a strict
-    /// no-op (today's behaviour); seams fold onto it over phases 3b–3e.
+    /// ADR 0025: the agent middleware stack the loop drives. The approval gate is
+    /// intrinsic (see `MiddlewareStack::before_tool`); efficiency hooks (compress, terse,
+    /// context-budget trim) fold on via the stack rather than as flat agent knobs (3d).
     middleware: MiddlewareStack,
 }
 
@@ -118,20 +116,15 @@ impl ReActAgent {
             model: DEFAULT_MODEL.to_owned(),
             system: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
-            context_budget: None,
             middleware: MiddlewareStack::new(),
         }
     }
 
-    /// Install the agent middleware stack (ADR 0025). Default is empty (a no-op).
+    /// Install the agent middleware stack (ADR 0025). Default is empty (the approval gate
+    /// is still enforced — it is intrinsic to the stack). Efficiency middleware (compress,
+    /// terse, context-budget trim) are installed here rather than as flat agent knobs.
     pub fn with_middleware(mut self, middleware: MiddlewareStack) -> Self {
         self.middleware = middleware;
-        self
-    }
-
-    /// Cap the serialized `State` injected into the agent's first message (ADR 0014 trim).
-    pub fn with_context_budget(mut self, budget: usize) -> Self {
-        self.context_budget = Some(budget);
         self
     }
 
@@ -177,23 +170,16 @@ impl ReActAgent {
         let mut last_todos: Option<Vec<TodoItem>> = None;
         let tool_defs = self.build_tool_defs();
 
-        // `Value`'s Display is compact JSON — same output as `serde_json::to_string`.
+        // `Value`'s Display is compact JSON — same output as `serde_json::to_string`. The
+        // full state is injected; a `ContextBudgetMiddleware` (ADR 0025 phase 3d, installed
+        // when the SDK requests it) trims this seed message in `before_run` if a cap is set.
         let state_value = Value::Object(
             channels
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
         );
-        // ADR 0014 trim: cap the injected state to `context_budget` chars when set.
-        let state_str = {
-            let full = state_value.to_string();
-            match self.context_budget {
-                Some(n) if full.chars().count() > n => {
-                    full.chars().take(n).collect::<String>() + "…"
-                }
-                _ => full,
-            }
-        };
+        let state_str = state_value.to_string();
         let mut conversation = vec![LlmMessage::text(
             "user",
             format!("Input: {input}\nState: {state_str}"),

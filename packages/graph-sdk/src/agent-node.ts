@@ -12,6 +12,7 @@ import { createToolNode, DynamicInterrupt, type NodeHandler } from "@adriane-ai/
 // (and a `pg` dependency) into consumers such as the Studio bundle.
 import type { ApprovalEngine, ApprovalId } from "@adriane-ai/approval-engine";
 import type { NodeId, RunId } from "@adriane-ai/graph-core";
+import { GovernanceMiddlewareRejectedError } from "./errors.js";
 
 /** Default channel an agent node writes its {@link import("@adriane-ai/agents-core").AgentResult} into. */
 export const DEFAULT_AGENT_OUTPUT_CHANNEL = "agentResult";
@@ -59,6 +60,22 @@ export type AgentNodeConfig = {
    * recommended in policy terms).
    */
   tier?: ModelTier;
+  /**
+   * A named {@link AgentProfile} (`"fast" | "frontier-careful" | "governed-deep"`, ADR 0025
+   * phase 3d) that sets the model tier, efficiency middleware, and suspend/fs defaults in one
+   * shot. Explicit fields (`tier`, `suspendForApproval`, `enableFs`, `middleware`, the flat
+   * `outputStyle`/`contextBudget` knobs) always override the profile's defaults. The governed
+   * layer (redaction, approval gate, fs policy) is identical regardless of profile.
+   */
+  profile?: AgentProfile;
+  /**
+   * Extra EFFICIENCY middleware to append (ADR 0025 phase 3d), e.g. `[{ kind: "compress" }]`.
+   * Efficiency-only by type: governance kinds (redact / approval gate / fs policy) are
+   * engine-injected and rejected here ({@link GovernanceMiddlewareRejectedError}), so an
+   * ungoverned stack is unrepresentable. Merged after the profile + the flat knobs, with
+   * an explicit entry of the same `kind` winning (dedup, last-writer).
+   */
+  middleware?: EfficiencyMiddlewareSpec[];
   maxIterations?: number;
   name?: string;
   description?: string;
@@ -70,8 +87,9 @@ export type AgentNodeConfig = {
    */
   outputStyle?: "terse";
   /**
-   * Cap (in chars) on the serialized state the agent injects into its first message — avoid
-   * re-feeding an unbounded channel map to every agent. Default: no cap.
+   * Cap (in chars) on the agent's seed message — the injected `Input: <input>\nState:
+   * <state>` dump — to avoid re-feeding an unbounded channel map to every agent. The cap
+   * covers the whole seed message (ADR 0014 intent), not the `State` portion alone. Default: no cap.
    */
   contextBudget?: number;
   /**
@@ -104,6 +122,46 @@ export type AgentNodeConfig = {
   approvalEngine?: ApprovalEngine;
   label?: string;
 };
+
+/**
+ * A signed-off agent profile (ADR 0025 phase 3d) — a named bundle that expands to a model
+ * tier, an efficiency-middleware set, and suspend/fs defaults. The GOVERNED layer (PII
+ * redaction, the approval gate, fs policy) is identical across all profiles — you cannot
+ * "buy out" of governance. Explicit `tier`/`suspendForApproval`/`enableFs`/`middleware` on
+ * the config always win over the profile's defaults.
+ *
+ * - `fast` — `fast` tier, full efficiency (compress + terse + tight 4k context budget), no
+ *   suspend. For high-throughput, low-stakes prose work.
+ * - `frontier-careful` — `frontier` tier, NO compression (preserve fidelity), a roomy 16k
+ *   budget, suspend-on-approval. For high-stakes reasoning where lossy compression is unsafe.
+ * - `governed-deep` — the deep-agent one-liner: `balanced` tier, full efficiency (12k budget),
+ *   suspend-on-approval, and the governed virtual filesystem enabled.
+ */
+export type AgentProfile = "fast" | "frontier-careful" | "governed-deep";
+
+/**
+ * An EFFICIENCY-only middleware a user may append to an agent (ADR 0025 phase 3d). The
+ * governance kinds (`redact` / `approvalGate` / `fsPolicy`) are deliberately NOT part of this
+ * union — they are engine-injected and sealed, so a user cannot express an ungoverned stack
+ * (the governed-by-construction invariant). `retry` / `rateLimit` are ADR phase 3e.
+ *
+ * - `compress` — route messages through the prompt-compression service (no-op if unconfigured).
+ * - `terse` — append a compact-output directive to the system prompt (lossy; prose only).
+ * - `contextBudget` — cap the agent's seed message (the injected `Input`/`State` dump) to `chars` characters.
+ */
+export type EfficiencyMiddlewareSpec =
+  | { kind: "compress" }
+  | { kind: "terse" }
+  | { kind: "contextBudget"; params: { chars: number } };
+
+/**
+ * Governance middleware kinds the SDK rejects in {@link AgentNodeConfig.middleware}: they are
+ * engine-injected (the GOVERNED layer), never user-supplied. Shared so the SDK throw-gate and
+ * the contracts efficiency-only schema list the SAME kinds (they cannot drift). Passing one to
+ * the builder throws `GovernanceMiddlewareRejectedError`. (The runtime enforcer on the Rust
+ * side is independent: the bridge match only honours efficiency kinds and ignores these.)
+ */
+export const GOVERNANCE_MIDDLEWARE_KINDS = ["redact", "approvalGate", "fsPolicy"] as const;
 
 /** A filesystem permission verb (ADR 0024): `deny` < `read` < `gate` < `write`. */
 export type FsPermVerb = "deny" | "read" | "write" | "gate";
@@ -191,12 +249,21 @@ export type RustAgentConfig = {
   outputChannel: string;
   /** ADR 0014 — terse output directive on the system prompt. */
   outputStyle?: "terse";
-  /** ADR 0014 — cap (chars) on the injected serialized state. */
+  /** ADR 0014 — cap (chars) on the injected seed message (the `Input`/`State` dump). */
   contextBudget?: number;
   /** ADR 0022/0023 — durable channel the `writeTodos` list is persisted into. */
   todosChannel?: string;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
+  /**
+   * ADR 0025 phase 3d — the SDK-resolved EFFICIENCY middleware list: the profile + explicit
+   * `middleware[]` + the legacy `outputStyle`/`contextBudget` knobs expanded into one ordered
+   * list of `{ kind, params }` data entries the Rust bridge turns into `push_efficiency`
+   * calls. The governed layer is never carried here (the bridge injects it). Always present
+   * (possibly empty) on the live builder path; absent on a pre-3d persisted carrier (the Rust
+   * bridge then falls back to the legacy flat knobs).
+   */
+  resolvedMiddleware?: EfficiencyMiddlewareSpec[];
   /** JS-backed tool executes, one per tool in the registry. */
   toolBindings: RustToolBinding[];
   /**
@@ -258,9 +325,91 @@ const approvalToolNamesOf = (tools: ToolRegistry | undefined): string[] => {
 };
 
 /**
+ * The signed-off {@link AgentProfile} expansion table (ADR 0025 phase 3d). Each profile is a
+ * named data bundle of a model tier, suspend/fs defaults, and an ordered efficiency-middleware
+ * list. The governed layer is identical across all three. `governed-deep → balanced` is the
+ * ADR-literal tier (decision confirmed 2026-06-23). Reflection is ADR phase 3e, so it is not
+ * yet part of any profile's middleware.
+ */
+const PROFILES: Record<
+  AgentProfile,
+  {
+    tier: ModelTier;
+    suspendForApproval: boolean;
+    enableFs: boolean;
+    middleware: EfficiencyMiddlewareSpec[];
+  }
+> = {
+  fast: {
+    tier: "fast",
+    suspendForApproval: false,
+    enableFs: false,
+    middleware: [{ kind: "compress" }, { kind: "terse" }, { kind: "contextBudget", params: { chars: 4000 } }]
+  },
+  "frontier-careful": {
+    tier: "frontier",
+    suspendForApproval: true,
+    enableFs: false,
+    // No compression — lossy compression is unsafe for high-stakes reasoning.
+    middleware: [{ kind: "contextBudget", params: { chars: 16000 } }]
+  },
+  "governed-deep": {
+    tier: "balanced",
+    suspendForApproval: true,
+    enableFs: true,
+    middleware: [{ kind: "compress" }, { kind: "terse" }, { kind: "contextBudget", params: { chars: 12000 } }]
+  }
+};
+
+/**
+ * Resolve suspend-on-approval, honouring the {@link AgentProfile} default when the config
+ * leaves it unset (an explicit `suspendForApproval`, including `false`, always wins). Shared
+ * by {@link toRustAgentConfig} (the Rust/persisted path) and {@link createAgentNodeHandler}
+ * (the TS handler) so the two cannot disagree on a profile's human-gate default.
+ */
+const resolveSuspendForApproval = (
+  config: Pick<AgentNodeConfig, "suspendForApproval" | "profile">
+): boolean =>
+  config.suspendForApproval ??
+  (config.profile !== undefined ? PROFILES[config.profile].suspendForApproval : false);
+
+/**
+ * Desugar an agent config's {@link AgentProfile} + flat `outputStyle`/`contextBudget` knobs +
+ * explicit {@link AgentNodeConfig.middleware} into ONE ordered EFFICIENCY-middleware list (ADR
+ * 0025 phase 3d). Precedence (most specific wins): profile → flat knobs → explicit middleware,
+ * deduped by `kind` keeping the last writer. Throws {@link GovernanceMiddlewareRejectedError}
+ * if an explicit entry names a governance kind — the SDK's authoritative live-path reject gate.
+ */
+const resolveMiddleware = (config: AgentNodeConfig): EfficiencyMiddlewareSpec[] => {
+  // Insertion order is preserved by Map; re-`set`ting a kind updates the value in place
+  // (last-writer-wins) without changing its position — order among efficiency hooks is
+  // immaterial (they act on disjoint parts of the request).
+  const byKind = new Map<string, EfficiencyMiddlewareSpec>();
+  if (config.profile !== undefined) {
+    for (const middleware of PROFILES[config.profile].middleware) {
+      byKind.set(middleware.kind, middleware);
+    }
+  }
+  if (config.outputStyle === "terse") {
+    byKind.set("terse", { kind: "terse" });
+  }
+  if (typeof config.contextBudget === "number") {
+    byKind.set("contextBudget", { kind: "contextBudget", params: { chars: config.contextBudget } });
+  }
+  for (const middleware of config.middleware ?? []) {
+    if ((GOVERNANCE_MIDDLEWARE_KINDS as readonly string[]).includes(middleware.kind)) {
+      throw new GovernanceMiddlewareRejectedError(middleware.kind);
+    }
+    byKind.set(middleware.kind, middleware);
+  }
+  return [...byKind.values()];
+};
+
+/**
  * Project an {@link AgentNodeConfig} into the {@link RustAgentConfig} the Rust engine
- * bridge consumes. Resolves the system prompt to a concrete string and pulls the tool
- * names / approval flags / executes out of the registry. Pure — no LLM call.
+ * bridge consumes. Resolves the system prompt to a concrete string, pulls the tool
+ * names / approval flags / executes out of the registry, and desugars the profile +
+ * middleware into a {@link RustAgentConfig.resolvedMiddleware} list. Pure — no LLM call.
  */
 export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): RustAgentConfig => {
   const { registry, id, version } = resolvePrompt(nodeId, config.prompt);
@@ -270,20 +419,23 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
   } catch {
     system = undefined;
   }
+  // A profile supplies tier / suspend / fs defaults; an explicit field always wins.
+  const profile = config.profile !== undefined ? PROFILES[config.profile] : undefined;
   return {
     provider: config.provider ?? "anthropic",
     model: config.model,
-    tier: config.tier,
+    tier: config.tier ?? profile?.tier,
     system,
     toolNames: config.tools?.list().map((definition) => definition.name) ?? [],
     maxIterations: config.maxIterations,
-    suspendForApproval: config.suspendForApproval === true,
+    suspendForApproval: resolveSuspendForApproval(config),
     approvalToolNames: approvalToolNamesOf(config.tools),
     outputChannel: config.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL,
     outputStyle: config.outputStyle,
     contextBudget: config.contextBudget,
     todosChannel: config.todosChannel,
-    enableFs: config.enableFs,
+    enableFs: config.enableFs ?? profile?.enableFs,
+    resolvedMiddleware: resolveMiddleware(config),
     toolBindings: toolBindingsOf(config.tools),
     usesApprovalEngine: config.approvalEngine !== undefined
   };
@@ -442,7 +594,9 @@ export const createAgentNodeHandler = (nodeId: string, config: AgentNodeConfig):
     // Native suspend-on-approval: stop the whole run cleanly (a checkpointed,
     // resumable suspension) rather than leaving routing to the caller. The pending
     // result — including its approvalRequests — is persisted to the output channel.
-    if (config.suspendForApproval === true && result.requiresHumanReview) {
+    // Honour the profile's suspend default (shared with toRustAgentConfig so the TS
+    // handler and the Rust/persisted path agree on a profile's human-gate default).
+    if (resolveSuspendForApproval(config) && result.requiresHumanReview) {
       const patch: Record<string, unknown> = { [outputChannel]: result };
 
       // File one ApprovalEngine request per gated tool and stash the ids, so resume

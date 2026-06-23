@@ -9,7 +9,7 @@ import { ModelTierDtoSchema } from "./catalog.js";
  * { kind, params }`; a catalog AGENT node carries `node.metadata.agent =
  * { provider?, model?, tier?, system?, toolNames?, maxIterations?,
  *   suspendForApproval?, approvalToolNames?, outputChannel?, outputStyle?,
- *   contextBudget?, todosChannel?, enableFs? }`.
+ *   contextBudget?, todosChannel?, enableFs?, resolvedMiddleware? }`.
  *
  * The graph editor EMITS these into `node.metadata`; the API run path READS
  * `node.metadata` to assemble `EngineSpec.componentNodes` (kind + params) and
@@ -39,12 +39,31 @@ export const AgentNodeMetadataSchema = z.object({
   outputChannel: z.string().min(1).optional(),
   /** ADR 0014 — terse output directive on the system prompt. */
   outputStyle: z.literal("terse").optional(),
-  /** ADR 0014 — cap (chars) on the serialized state injected into the agent. */
+  /** ADR 0014 — cap (chars) on the agent's seed message (the injected `Input`/`State` dump). */
   contextBudget: z.number().int().min(1).optional(),
   /** ADR 0022/0023 — durable channel the agent's `writeTodos` list is persisted into. */
   todosChannel: z.string().min(1).optional(),
   /** ADR 0024 phase 2c/2d — opt this agent into the governed virtual filesystem tools. */
-  enableFs: z.boolean().optional()
+  enableFs: z.boolean().optional(),
+  /**
+   * ADR 0025 phase 3d — the resolved EFFICIENCY middleware list. A discriminated union of
+   * efficiency-only kinds (compress / terse / contextBudget): a GOVERNANCE kind (redact /
+   * approvalGate / fsPolicy) fails this schema BY CONSTRUCTION, so any consumer that runs it
+   * (e.g. `readAgentMetadata`) drops the malformed agent. This is a **type-level + validation
+   * guarantee** for callers that opt to validate; it is NOT auto-applied on the persisted
+   * catalog run path today (that path reads an unvalidated carrier — the RUNTIME enforcer
+   * there is the Rust bridge, whose match only honours efficiency kinds and ignores governance
+   * kinds). The SDK's `toRustAgentConfig` throw-gate covers the in-process builder path.
+   */
+  resolvedMiddleware: z
+    .array(
+      z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("compress") }),
+        z.object({ kind: z.literal("terse") }),
+        z.object({ kind: z.literal("contextBudget"), params: z.object({ chars: z.number().int().min(1) }) })
+      ])
+    )
+    .optional()
 });
 
 /**

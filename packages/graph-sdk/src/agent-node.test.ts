@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createGraph,
   DefaultLLMGateway,
+  GovernanceMiddlewareRejectedError,
   InMemoryToolRegistry,
   MockLLMProviderAdapter,
   streamAgentTokens,
   toRustAgentConfig,
+  type AgentProfile,
+  type EfficiencyMiddlewareSpec,
   type LLMGateway,
   type Message,
   type ToolId
@@ -165,6 +168,91 @@ describe("@adriane-ai/graph-sdk agent node — writeTodos durable channel (ADR 0
     expect(agent?.outputStyle).toBe("terse");
     expect(agent?.contextBudget).toBe(2000);
     expect(agent?.enableFs).toBe(true);
+  });
+});
+
+describe("@adriane-ai/graph-sdk agent node — profiles + middleware (ADR 0025 phase 3d)", () => {
+  const resolved = (config: Partial<Parameters<typeof toRustAgentConfig>[1]>) =>
+    toRustAgentConfig("a", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "s" },
+      ...config
+    });
+  const kinds = (mw: EfficiencyMiddlewareSpec[] | undefined) => (mw ?? []).map((m) => m.kind);
+  const budget = (mw: EfficiencyMiddlewareSpec[] | undefined): number | undefined => {
+    const entry = (mw ?? []).find((m) => m.kind === "contextBudget");
+    return entry?.kind === "contextBudget" ? entry.params.chars : undefined;
+  };
+
+  it("expands the `fast` profile (tier + full efficiency, no suspend)", () => {
+    const config = resolved({ profile: "fast" });
+    expect(config.tier).toBe("fast");
+    expect(config.suspendForApproval).toBe(false);
+    expect(kinds(config.resolvedMiddleware).sort()).toEqual(["compress", "contextBudget", "terse"]);
+    expect(budget(config.resolvedMiddleware)).toBe(4000);
+  });
+
+  it("expands `frontier-careful` (frontier tier, suspend, NO compression)", () => {
+    const config = resolved({ profile: "frontier-careful" });
+    expect(config.tier).toBe("frontier");
+    expect(config.suspendForApproval).toBe(true);
+    expect(kinds(config.resolvedMiddleware)).toEqual(["contextBudget"]);
+    expect(budget(config.resolvedMiddleware)).toBe(16000);
+  });
+
+  it("expands `governed-deep` (balanced tier, suspend, fs enabled, full efficiency)", () => {
+    const config = resolved({ profile: "governed-deep" });
+    expect(config.tier).toBe("balanced");
+    expect(config.suspendForApproval).toBe(true);
+    expect(config.enableFs).toBe(true);
+    expect(kinds(config.resolvedMiddleware).sort()).toEqual(["compress", "contextBudget", "terse"]);
+    expect(budget(config.resolvedMiddleware)).toBe(12000);
+  });
+
+  it("lets an explicit field win over the profile default", () => {
+    // Explicit tier overrides the profile's; explicit middleware overrides the profile's
+    // same-kind entry (dedup, last-writer-wins).
+    const config = resolved({
+      profile: "fast",
+      tier: "frontier",
+      middleware: [{ kind: "contextBudget", params: { chars: 9999 } }]
+    });
+    expect(config.tier).toBe("frontier");
+    expect(budget(config.resolvedMiddleware)).toBe(9999);
+  });
+
+  it("lets an explicit suspendForApproval:false override a profile that mandates suspend", () => {
+    // governed-deep mandates suspend, but an explicit `false` wins (shared resolution, so the
+    // TS handler and the Rust/persisted path agree — no human-gate divergence).
+    expect(resolved({ profile: "governed-deep", suspendForApproval: false }).suspendForApproval).toBe(false);
+    // …and the profile default applies when left unset.
+    expect(resolved({ profile: "governed-deep" }).suspendForApproval).toBe(true);
+  });
+
+  it("desugars the flat outputStyle/contextBudget knobs into the resolved list", () => {
+    const config = resolved({ outputStyle: "terse", contextBudget: 2000 });
+    expect(kinds(config.resolvedMiddleware).sort()).toEqual(["contextBudget", "terse"]);
+    expect(budget(config.resolvedMiddleware)).toBe(2000);
+  });
+
+  it("rejects a governance middleware kind on the builder path", () => {
+    expect(() =>
+      resolved({
+        // A JS caller could smuggle a governance kind past the type — the runtime gate rejects it.
+        middleware: [{ kind: "redact" }] as unknown as EfficiencyMiddlewareSpec[]
+      })
+    ).toThrow(GovernanceMiddlewareRejectedError);
+  });
+
+  it("carries resolvedMiddleware on the persisted metadata.agent carrier", () => {
+    const profile: AgentProfile = "governed-deep";
+    const compiled = createGraph({ name: "carrier" })
+      .agentNode("planner", { llm: new DefaultLLMGateway(), prompt: { system: "Plan." }, profile })
+      .compile();
+    const node = compiled.definition.nodes.find((candidate) => String(candidate.id) === "planner");
+    const agent = (node?.metadata as { agent?: { resolvedMiddleware?: EfficiencyMiddlewareSpec[] } } | undefined)
+      ?.agent;
+    expect(kinds(agent?.resolvedMiddleware).sort()).toEqual(["compress", "contextBudget", "terse"]);
   });
 });
 
