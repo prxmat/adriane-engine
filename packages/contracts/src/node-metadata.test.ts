@@ -9,19 +9,21 @@ import { AgentNodeMetadataSchema, readAgentMetadata } from "./node-metadata.js";
  * schema would be silently dropped on the catalog/Studio path (the bug this guards).
  */
 describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
-  it("keeps outputStyle, contextBudget and todosChannel through a parse round-trip", () => {
+  it("keeps outputStyle, contextBudget, todosChannel and enableFs through a parse round-trip", () => {
     const carrier = {
       provider: "anthropic",
       toolNames: ["writeTodos"],
       outputChannel: "agentResult",
       outputStyle: "terse" as const,
       contextBudget: 4000,
-      todosChannel: "__todos"
+      todosChannel: "__todos",
+      enableFs: true
     };
     const parsed = AgentNodeMetadataSchema.parse(carrier);
     expect(parsed.outputStyle).toBe("terse");
     expect(parsed.contextBudget).toBe(4000);
     expect(parsed.todosChannel).toBe("__todos");
+    expect(parsed.enableFs).toBe(true);
   });
 
   it("reads the carrier off an open metadata bag without dropping the new fields", () => {

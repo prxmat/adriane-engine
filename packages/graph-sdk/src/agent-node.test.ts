@@ -155,7 +155,8 @@ describe("@adriane-ai/graph-sdk agent node — writeTodos durable channel (ADR 0
         prompt: { system: "Plan, then act." },
         todosChannel: "__todos",
         outputStyle: "terse",
-        contextBudget: 2000
+        contextBudget: 2000,
+        enableFs: true
       })
       .compile();
     const node = compiled.definition.nodes.find((candidate) => String(candidate.id) === "planner");
@@ -163,6 +164,7 @@ describe("@adriane-ai/graph-sdk agent node — writeTodos durable channel (ADR 0
     expect(agent?.todosChannel).toBe("__todos");
     expect(agent?.outputStyle).toBe("terse");
     expect(agent?.contextBudget).toBe(2000);
+    expect(agent?.enableFs).toBe(true);
   });
 });
 
