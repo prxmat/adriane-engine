@@ -5,7 +5,12 @@ import type { RunEvent } from "@adriane-ai/graph-runtime";
 
 import type { ModelTier } from "@adriane-ai/llm-gateway";
 
-import type { EfficiencyMiddlewareSpec, FsPolicyRule, RustAgentConfig } from "./agent-node.js";
+import type {
+  EfficiencyMiddlewareSpec,
+  FsPolicyRule,
+  RustAgentConfig,
+  RustMapAgentConfig
+} from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
 import type { ChannelValues, TypedGraphState } from "./typed.js";
 
@@ -130,6 +135,8 @@ export type RustRunnerParts<TState extends ChannelValues> = {
    * {@link jsNodeIds} (its TS fallback handler) — Rust takes the component path.
    */
   components: Map<string, RustComponentConfig>;
+  /** Per `mapAgents`-node dynamic-fan-out config (ADR 0027 phase 4b), keyed by node id. */
+  mapAgents: Map<string, RustMapAgentConfig>;
   /** Node ids whose handler is a JS closure (action / custom / tool nodes). */
   jsNodeIds: Set<string>;
   /** Tool names that are backed by a JS `execute` (in {@link toolFns}). */
@@ -182,6 +189,14 @@ type ComponentNodeSpecWire = {
   params: Record<string, unknown>;
 };
 
+/** One `mapAgents` dynamic-fan-out node serialized for the wire (matches Rust `MapAgentSpec`). */
+type MapAgentSpecWire = {
+  overChannel: string;
+  joinAt: string;
+  agent: AgentSpecWire;
+  suspendForApproval: boolean;
+};
+
 /**
  * One granted tool on the approve path, with the governance provenance the Rust
  * guard-rail validates (matches Rust `ApprovedTool`, camelCase): the principal who
@@ -219,6 +234,8 @@ type EngineSpecWire = {
    * {@link EngineSpecWire.jsNodeIds}.
    */
   componentNodes: Record<string, ComponentNodeSpecWire>;
+  /** Per-node `mapAgents` dynamic-fan-out config (ADR 0027 phase 4b), keyed by node id. */
+  mapAgents: Record<string, MapAgentSpecWire>;
   jsNodeIds: string[];
   jsToolNames: string[];
   /**
@@ -337,24 +354,41 @@ export class RustGraphRunner<TState extends ChannelValues> {
     }
   };
 
+  private agentWire(config: RustAgentConfig): AgentSpecWire {
+    return {
+      provider: config.provider,
+      model: config.model,
+      tier: config.tier,
+      system: config.system,
+      toolNames: config.toolNames,
+      maxIterations: config.maxIterations,
+      suspendForApproval: config.suspendForApproval,
+      approvalToolNames: config.approvalToolNames,
+      outputChannel: config.outputChannel,
+      outputStyle: config.outputStyle,
+      contextBudget: config.contextBudget,
+      todosChannel: config.todosChannel,
+      enableFs: config.enableFs,
+      resolvedMiddleware: config.resolvedMiddleware
+    };
+  }
+
   private buildAgentsWire(): Record<string, AgentSpecWire> {
     const out: Record<string, AgentSpecWire> = {};
     for (const [nodeId, config] of this.parts.agents) {
+      out[nodeId] = this.agentWire(config);
+    }
+    return out;
+  }
+
+  private buildMapAgentsWire(): Record<string, MapAgentSpecWire> {
+    const out: Record<string, MapAgentSpecWire> = {};
+    for (const [nodeId, config] of this.parts.mapAgents) {
       out[nodeId] = {
-        provider: config.provider,
-        model: config.model,
-        tier: config.tier,
-        system: config.system,
-        toolNames: config.toolNames,
-        maxIterations: config.maxIterations,
-        suspendForApproval: config.suspendForApproval,
-        approvalToolNames: config.approvalToolNames,
-        outputChannel: config.outputChannel,
-        outputStyle: config.outputStyle,
-        contextBudget: config.contextBudget,
-        todosChannel: config.todosChannel,
-        enableFs: config.enableFs,
-        resolvedMiddleware: config.resolvedMiddleware
+        overChannel: config.overChannel,
+        joinAt: config.joinAt,
+        agent: this.agentWire(config.agent),
+        suspendForApproval: config.suspendForApproval
       };
     }
     return out;
@@ -381,6 +415,7 @@ export class RustGraphRunner<TState extends ChannelValues> {
     | "subgraphs"
     | "agents"
     | "componentNodes"
+    | "mapAgents"
     | "jsNodeIds"
     | "jsToolNames"
     | "providerKeys"
@@ -391,6 +426,7 @@ export class RustGraphRunner<TState extends ChannelValues> {
       subgraphs: this.parts.subgraphs,
       agents: this.buildAgentsWire(),
       componentNodes: this.buildComponentsWire(),
+      mapAgents: this.buildMapAgentsWire(),
       jsNodeIds: [...this.parts.jsNodeIds],
       jsToolNames: [...this.parts.jsToolNames],
       providerKeys: this.parts.providerKeys ?? {},

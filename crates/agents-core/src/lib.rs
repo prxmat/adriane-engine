@@ -26,7 +26,7 @@ pub use middleware::{
     RedactMiddleware, ReflectionMiddleware, RunCtx, TerseMiddleware, ToolCallCtx, ToolControl,
 };
 pub use node::{
-    agent_node_handler, AGENT_APPROVAL_INTERRUPT, APPROVED_TOOLS_CHANNEL,
+    agent_node_handler, map_node_handler, AGENT_APPROVAL_INTERRUPT, APPROVED_TOOLS_CHANNEL,
     DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 pub use plan_execute::{PlanExecuteAgent, PlanExecuteResult, PlanStep, PLANNER_MODEL};

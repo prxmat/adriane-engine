@@ -27,7 +27,9 @@ import {
   type AgentApprovalBinding,
   type AgentNodeConfig,
   type FsPolicyRule,
+  type MapAgentNodeConfig,
   type RustAgentConfig,
+  type RustMapAgentConfig,
   type TaskNodeConfig,
   type ToolNodeConfig
 } from "./agent-node.js";
@@ -96,6 +98,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
   private readonly conditions = new Map<string, ConditionFn>();
   /** Per agent node, the serializable config the Rust engine bridge needs. */
   private readonly agentConfigs = new Map<string, RustAgentConfig>();
+  private readonly mapAgentConfigs = new Map<string, RustMapAgentConfig>();
   /** Per agent node, the governance binding (approval engine + requester) for resume. */
   private readonly agentApprovals = new Map<string, AgentApprovalBinding>();
   /** Per component node, the `{ kind, params }` carrier the Rust engine bridge needs. */
@@ -337,6 +340,9 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
     for (const [nodeId, config] of childParts.agentConfigs) {
       this.agentConfigs.set(nodeId, config);
     }
+    for (const [nodeId, config] of childParts.mapAgentConfigs) {
+      this.mapAgentConfigs.set(nodeId, config);
+    }
     for (const [nodeId, binding] of childParts.agentApprovals) {
       this.agentApprovals.set(nodeId, binding);
     }
@@ -415,6 +421,54 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
   }
 
   /**
+   * Add a **mapAgents node** (ADR 0027 phase 4b — dynamic fan-out): run `config.subAgent` once
+   * per item in the `config.overChannel` array, **concurrently**, and write the per-item results
+   * — in **input order** (deterministic, resumable) — into `config.joinAt` as an array. Each spawn
+   * gets one item as its `input` and shares the run's channels. If a spawn needs approval and
+   * `suspendForApproval` is set, the whole map suspends; resume re-runs it.
+   *
+   * ```ts
+   * createGraph({ name: "fanout" })
+   *   .channel("items", { type: "json", default: [] })
+   *   .mapAgents("research", {
+   *     overChannel: "items",
+   *     subAgent: { llm, prompt: { system: "Summarise the item." } },
+   *     joinAt: "summaries"
+   *   });
+   * ```
+   */
+  public mapAgents<TJoin extends string>(
+    id: string,
+    config: MapAgentNodeConfig & { joinAt: TJoin }
+  ): GraphBuilder<TState & { [K in TJoin]: AgentResult[] }> {
+    // The sub-agent is projected exactly like an ordinary agent; the bridge runs it per item.
+    const agent = toRustAgentConfig(`${id}__agent`, config.subAgent);
+    // A native node (Rust dispatch routes it via the `mapAgents` carrier); no TS handler — the
+    // SDK runs on the Rust engine. The node carries the SHARED CARRIER so the catalog/Studio path
+    // can run it too.
+    this.pushNode(id, "agent", config.label ?? id, undefined, {
+      metadata: {
+        mapAgent: {
+          overChannel: config.overChannel,
+          joinAt: config.joinAt,
+          suspendForApproval: config.suspendForApproval === true,
+          agent
+        }
+      }
+    });
+    this.mapAgentConfigs.set(id, {
+      overChannel: config.overChannel,
+      joinAt: config.joinAt,
+      agent,
+      suspendForApproval: config.suspendForApproval === true
+    });
+    this.ensureChannel(config.overChannel, { type: "json", reducer: "replace", default: [] });
+    this.ensureChannel(config.joinAt, { type: "json", reducer: "replace", default: [] });
+    this.ensureChannel(APPROVED_TOOLS_CHANNEL, { type: "string[]", reducer: "replace", default: [] });
+    return this.widen<TState & { [K in TJoin]: AgentResult[] }>();
+  }
+
+  /**
    * @internal Extract this builder's wiring so it can be nested as a subgraph by a
    * parent {@link GraphBuilder.subgraph}. Returns live maps (the parent merges them);
    * not part of the public authoring API.
@@ -424,6 +478,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
     handlers: Map<string, NodeHandler>;
     conditions: Map<string, ConditionFn>;
     agentConfigs: Map<string, RustAgentConfig>;
+    mapAgentConfigs: Map<string, RustMapAgentConfig>;
     agentApprovals: Map<string, AgentApprovalBinding>;
     componentConfigs: Map<string, RustComponentConfig>;
     subgraphDefs: Map<string, GraphDefinition>;
@@ -433,6 +488,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
       handlers: this.handlers,
       conditions: this.conditions,
       agentConfigs: this.agentConfigs,
+      mapAgentConfigs: this.mapAgentConfigs,
       agentApprovals: this.agentApprovals,
       componentConfigs: this.componentConfigs,
       subgraphDefs: this.subgraphDefs
@@ -556,6 +612,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
         handlers: this.handlers,
         conditions: this.conditions,
         agentConfigs: this.agentConfigs,
+        mapAgentConfigs: this.mapAgentConfigs,
         agentApprovals: this.agentApprovals,
         componentConfigs: this.componentConfigs,
         subgraphs,

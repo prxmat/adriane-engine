@@ -181,6 +181,32 @@ export type FsPermVerb = "deny" | "read" | "write" | "gate";
  */
 export type FsPolicyRule = { glob: string; verb: FsPermVerb };
 
+/**
+ * Config for {@link GraphBuilder.mapAgents} — a dynamic fan-out (ADR 0027 phase 4b): run
+ * `subAgent` once per item in the `overChannel` array, concurrently, and write the per-item
+ * results — in input order (deterministic) — into `joinAt` as an array. Each spawn gets one item
+ * as its input and shares the run's channels.
+ */
+export type MapAgentNodeConfig = {
+  /** Channel holding the array of items to map the sub-agent over. */
+  overChannel: string;
+  /** The sub-agent to run per item (its own ReAct agent config). */
+  subAgent: AgentNodeConfig;
+  /** Channel the array of per-item results lands in (one entry per item, in input order). */
+  joinAt: string;
+  /** When true, a spawn that needs approval suspends the whole map (default false). */
+  suspendForApproval?: boolean;
+  label?: string;
+};
+
+/** The wire projection of a {@link MapAgentNodeConfig} the Rust bridge consumes (`map_agents`). */
+export type RustMapAgentConfig = {
+  overChannel: string;
+  joinAt: string;
+  agent: RustAgentConfig;
+  suspendForApproval: boolean;
+};
+
 /** Config for {@link GraphBuilder.toolNode}. */
 export type ToolNodeConfig = {
   tools: ToolRegistry;
