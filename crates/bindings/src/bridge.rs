@@ -859,20 +859,17 @@ impl MediaResolver for ArtifactMediaResolver {
     }
 }
 
-fn build_gateway(
-    agent_spec: &AgentSpec,
-    resolved: &ModelChoice,
+/// Register the real provider adapter for `provider` into `gateway`, resolving its API key
+/// (control-plane tenant key first, then env). Returns `true` when a real adapter was
+/// registered, `false` when credentials are missing / the provider is `Mock` (the caller then
+/// installs a mock). Shared by the graph path ([`build_gateway`]) and the standalone one-shot
+/// ([`build_standalone_gateway`], ADR 0031 — the `Model.invoke()` path).
+fn register_provider_adapter(
+    gateway: &mut DefaultLlmGateway,
+    provider: LlmProvider,
+    model: Option<String>,
     keys: &BTreeMap<String, String>,
-    fs_store: Option<&Arc<dyn ArtifactStore>>,
-) -> Arc<DefaultLlmGateway> {
-    let mut gateway = DefaultLlmGateway::new();
-
-    let model = if resolved.model.is_empty() {
-        None
-    } else {
-        Some(resolved.model.clone())
-    };
-
+) -> bool {
     // Resolve a provider's API key: the control-plane-injected tenant key (ADR 0010) first,
     // then the process env. So admin-managed per-tenant keys win, with env as the fallback.
     let key_for = |provider: &str, env: &str| -> Option<String> {
@@ -882,7 +879,7 @@ fn build_gateway(
             .or_else(|| std::env::var(env).ok().filter(|value| !value.is_empty()))
     };
 
-    let registered = match resolved.provider {
+    let registered = match provider {
         LlmProvider::Mistral => key_for("mistral", "MISTRAL_API_KEY").map(|key| {
             gateway.register_adapter(Box::new(OpenAiCompatibleAdapter::mistral(
                 Some(key),
@@ -957,7 +954,23 @@ fn build_gateway(
         _ => None,
     };
 
-    if registered.is_none() {
+    registered.is_some()
+}
+
+fn build_gateway(
+    agent_spec: &AgentSpec,
+    resolved: &ModelChoice,
+    keys: &BTreeMap<String, String>,
+    fs_store: Option<&Arc<dyn ArtifactStore>>,
+) -> Arc<DefaultLlmGateway> {
+    let mut gateway = DefaultLlmGateway::new();
+    let model = if resolved.model.is_empty() {
+        None
+    } else {
+        Some(resolved.model.clone())
+    };
+
+    if !register_provider_adapter(&mut gateway, resolved.provider, model, keys) {
         // Register the mock under the RESOLVED provider — the slot the agent actually
         // drives with (`with_provider(resolved.provider)`). When no real provider is
         // available and a tier is set, ModelPolicy resolves to `Mock`, so the mock must
@@ -973,6 +986,25 @@ fn build_gateway(
         })),
         None => gateway,
     };
+    Arc::new(gateway)
+}
+
+/// Build a gateway for a STANDALONE one-shot completion (ADR 0031 — the `Model.invoke()` path
+/// over the napi seam). Registers the adapter for `provider` (with the request's model + keys);
+/// when credentials are missing it installs a deterministic mock so offline `invoke()` still
+/// resolves. No agent spec, no media resolver — a bare provider router for a single request.
+pub fn build_standalone_gateway(
+    provider: LlmProvider,
+    model: Option<String>,
+    keys: &BTreeMap<String, String>,
+) -> Arc<DefaultLlmGateway> {
+    let mut gateway = DefaultLlmGateway::new();
+    if !register_provider_adapter(&mut gateway, provider, model, keys) {
+        gateway.register_adapter(Box::new(MockAdapter::new(
+            provider,
+            vec![final_text("done", provider)],
+        )));
+    }
     Arc::new(gateway)
 }
 

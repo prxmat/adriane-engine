@@ -7,6 +7,7 @@ import {
   type ModelTier,
   type PromptRegistry
 } from "@adriane-ai/llm-gateway";
+import { toModelSpec, type ModelLike } from "@adriane-ai/model-core";
 import { createToolNode, DynamicInterrupt, type NodeHandler } from "@adriane-ai/graph-runtime";
 // Type-only: keeps the ApprovalEngine contract without pulling its Pg/db implementation
 // (and a `pg` dependency) into consumers such as the Studio bundle.
@@ -44,11 +45,23 @@ export type AgentPromptSource =
 
 /** Config for {@link GraphBuilder.agentNode}. */
 export type AgentNodeConfig = {
-  llm: LLMGateway;
+  /**
+   * @deprecated (ADR 0031) Optional + dead on the Rust path — the engine builds its own gateway
+   * from the provider slug + env keys. Pass a {@link AgentNodeConfig.model} overlay
+   * (`@adriane-ai/model-openai`, …) instead. Still consulted only by the removed TS fallback.
+   */
+  llm?: LLMGateway;
   prompt: AgentPromptSource;
   tools?: ToolRegistry;
+  /** @deprecated (ADR 0031) Use a {@link AgentNodeConfig.model} overlay. */
   provider?: LLMProvider;
-  model?: string;
+  /**
+   * The model to run. Either a provider overlay from a per-model package (ADR 0031) —
+   * `model: openai("gpt-4o")` / `new OpenAIModel("gpt-4o")` — or a bare model-id string
+   * (legacy; pairs with {@link AgentNodeConfig.provider}). A `ModelLike` carries its own
+   * provider/tier and wins over the flat `provider`/`tier` fields.
+   */
+  model?: string | ModelLike;
   /**
    * Abstract capability tier (`"frontier" | "balanced" | "fast" | "creative"`). When
    * set and no explicit {@link AgentNodeConfig.model} is given, the concrete model is
@@ -489,10 +502,14 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
   }
   // A profile supplies tier / suspend / fs defaults; an explicit field always wins.
   const profile = config.profile !== undefined ? PROFILES[config.profile] : undefined;
+  // ADR 0031: a `model` overlay (ModelSpec/Model) carries its own provider/model/tier and wins
+  // over the flat provider/model/tier aliases; a bare string `model` stays a legacy model id.
+  const spec = typeof config.model === "object" ? toModelSpec(config.model) : undefined;
+  const modelId = spec?.model ?? (typeof config.model === "string" ? config.model : undefined);
   return {
-    provider: config.provider ?? "anthropic",
-    model: config.model,
-    tier: config.tier ?? profile?.tier,
+    provider: spec?.provider ?? config.provider ?? "anthropic",
+    model: modelId,
+    tier: spec?.tier ?? config.tier ?? profile?.tier,
     system,
     toolNames: config.tools?.list().map((definition) => definition.name) ?? [],
     maxIterations: config.maxIterations,
@@ -620,14 +637,20 @@ const resolveApprovedTools = async (
 export const resolveAgentModel = (
   config: Pick<AgentNodeConfig, "provider" | "model" | "tier">
 ): { provider?: LLMProvider; model?: string } => {
+  // ADR 0031: normalize a `model` overlay (ModelSpec/Model) or a legacy string to a model id +
+  // tier. (This is the removed TS-fallback resolver; the overlay's provider is honoured on the
+  // Rust path in toRustAgentConfig — here only the flat provider feeds the legacy ModelPolicy.)
+  const spec = typeof config.model === "object" ? toModelSpec(config.model) : undefined;
+  const modelId = spec?.model ?? (typeof config.model === "string" ? config.model : undefined);
+  const tier = spec?.tier ?? config.tier;
   // No tier, or an explicit model already pins the choice: keep what was given so the
   // explicit override wins and the ReActAgent default applies when unset.
-  if (config.tier === undefined || config.model !== undefined) {
-    return { provider: config.provider, model: config.model };
+  if (tier === undefined || modelId !== undefined) {
+    return { provider: config.provider, model: modelId };
   }
   const policy = new ModelPolicy();
   const available = policy.availableFromEnv();
-  const choice = policy.resolve(config.tier, available, { provider: config.provider });
+  const choice = policy.resolve(tier, available, { provider: config.provider });
   return { provider: choice.provider, model: choice.model };
 };
 
@@ -637,6 +660,17 @@ export const createAgentNodeHandler = (nodeId: string, config: AgentNodeConfig):
   const { provider, model } = resolveAgentModel(config);
 
   return async (input, state, context) => {
+    // ADR 0016/0031: this is the removed TS-fallback handler — the Rust engine runs agents
+    // natively (it never invokes this), so building it must NOT require `llm`. Only if a run
+    // actually routes here (the dead TS path) is a gateway required. Checked at call time so
+    // `agentNode({ model })` (no llm) builds cleanly for the Rust path.
+    const llm = config.llm;
+    if (llm === undefined) {
+      throw new Error(
+        "This run reached the legacy TS-fallback agent handler, which needs `llm`. On the Rust " +
+          "engine agents run natively — declare a `model` overlay (e.g. openai('gpt-4o'))."
+      );
+    }
     const channels = state.channels as Record<string, unknown>;
     const approvedToolNames = await resolveApprovedTools(channels, config.approvalEngine);
 
@@ -644,7 +678,7 @@ export const createAgentNodeHandler = (nodeId: string, config: AgentNodeConfig):
       id: nodeId as AgentId,
       name: config.name ?? nodeId,
       description: config.description ?? `agent node ${nodeId}`,
-      llm: config.llm,
+      llm,
       tools: config.tools,
       provider,
       model,

@@ -14,6 +14,14 @@ export function validateGraphJson(definitionJson: string): string;
 export function compileGraphYamlJson(yaml: string): string;
 
 /**
+ * One-shot LLM completion over the Rust gateway (ADR 0031 — backs the SDK `Model.invoke()`
+ * overlay). `requestJson` is a serialized `LlmRequest`; `providerKeysJson` is a
+ * `{ "<provider>": "<key>" }` map (`"{}"` → env keys, else a deterministic mock). Resolves to
+ * a serialized `LlmResponse`. The HTTP happens in Rust — no TS provider client.
+ */
+export function llmComplete(requestJson: string, providerKeysJson: string): Promise<string>;
+
+/**
  * A JS callback invoked from Rust during a run. Receives a JSON string payload.
  *
  * `onNode` and `onCondition` may be **async**: they can return a `Promise`, and Rust

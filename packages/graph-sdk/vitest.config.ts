@@ -22,7 +22,8 @@ export default defineConfig({
       "@adriane-ai/graph-core": fromHere("../graph-core/src/index.ts"),
       "@adriane-ai/graph-runtime": fromHere("../graph-runtime/src/index.ts"),
       "@adriane-ai/agents-core": fromHere("../agents-core/src/index.ts"),
-      "@adriane-ai/llm-gateway": fromHere("../llm-gateway/src/index.ts")
+      "@adriane-ai/llm-gateway": fromHere("../llm-gateway/src/index.ts"),
+      "@adriane-ai/model-core": fromHere("../model-core/src/index.ts")
     }
   }
 });
