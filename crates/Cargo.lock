@@ -98,7 +98,6 @@ dependencies = [
  "adriane-artifact-store",
  "adriane-graph-core",
  "async-trait",
- "reqwest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

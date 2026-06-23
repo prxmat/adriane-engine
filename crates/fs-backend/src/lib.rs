@@ -18,8 +18,6 @@
 pub mod artifact_backend;
 pub mod backend;
 pub mod edits;
-#[cfg(feature = "http")]
-pub mod http_backend;
 pub mod path;
 pub mod policy;
 pub mod types;
@@ -31,8 +29,6 @@ pub use adriane_artifact_store::{ArtifactMediaType, ArtifactRef, ArtifactVersion
 pub use artifact_backend::ArtifactFsBackend;
 pub use backend::{FilesystemBackend, NoopFilesystemBackend};
 pub use edits::apply_edits;
-#[cfg(feature = "http")]
-pub use http_backend::HttpFilesystemBackend;
 pub use path::normalize_path;
 pub use policy::{glob_match, PathPolicy, PathRule, StaticPathPolicy};
 pub use types::{EditOp, FileContent, FileEntry, FsError, FsPermVerb, FsWriteCtx, GrepMatch};

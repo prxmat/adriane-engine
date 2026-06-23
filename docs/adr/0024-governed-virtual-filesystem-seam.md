@@ -1,8 +1,6 @@
 # ADR 0024 — Governed virtual filesystem seam (deep-agent harness phase 2)
 
-- Status: Accepted — implemented, phases 2a–2e (2a primitive, 2b engine+SDK wiring, 2c gate
-  verb, 2d carrier + control-plane policy, 2e external durable HTTP backend). The `execute`
-  shell seam remains out of scope (its own future ADR). Studio fs-policy panel UI is a follow-on.
+- Status: Proposed (detailed design for sign-off; **no code until approved** — security-relevant)
 - Date: 2026-06-22
 - Deciders: Mathieu (owner)
 - Implements: [ADR 0023](0023-governed-deep-agent-platform-landscape.md) **phase 2** (the "real build")
