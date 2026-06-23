@@ -83,15 +83,15 @@ Extend `redactor.rs` to also collect + rewrite **text** blocks inside `content_b
 
 ## Phasing & delivery status
 
-This is a large feature; it lands as a **foundation increment** first, then focused follow-ups on the stable base.
+This is a large feature; it landed across one PR (#58) as a foundation increment then focused follow-ups on the stable base. **All engine-path phases are shipped; the only non-shipped item (9f, TS parity) is obsolete — there is no TS engine.**
 
-**Shipped in the foundation PR:**
+**Shipped:**
 - **9a** ✅ Types (Rust): `ContentBlock` (text/image/audio/file) + `MediaSource` (artifact/url/base64) enums; additive `content_blocks` on `LlmMessage` **and** `LlmResponse`; `with_blocks` constructor; `content: String` kept; text-only serializes byte-identically (tested). Wire field casing: tags `snake_case`, fields `camelCase` (TS parity).
 - **9b** ✅ Per-adapter input fan-out (anthropic / openai / gemini), gated on `content_blocks.is_some()` so the text path is byte-identical; image (base64 + url) tested per adapter; audio/file mapped where each provider supports it (OpenAI `input_audio`/`file`, Gemini `inlineData`, Anthropic `document`).
 - **9d** ✅ Redaction: the PII redactor now scrubs **text blocks** inside `content_blocks` (closing the bypass); media-PII is a documented text-redactor gap. Compress/context-budget operate on `content` only — documented coverage gap.
 - **9e** ✅ Entry surface — `AgentSpec.input_blocks_channel` (SDK `inputBlocksChannel`) names a channel whose value is a `Vec<ContentBlock>`; the agent's seed message becomes multimodal (text Input/State digest + the media blocks) and that channel is **excluded from the stringified State** (no re-feeding binary bytes as text). Threaded SDK → wire → bridge → `react.rs` seed; the run seeds the channel via `initialData`. (This realizes D3's "explicit run input" as a node-level channel binding — unambiguous per-agent, vs a run-level field that would be ambiguous across a multi-agent graph.)
 - **9c** ✅ `MediaResolver` seam — a `MediaResolver` trait + `resolve_request_media` walk on `DefaultLlmGateway` resolves `Artifact` sources to inline bytes **at the gateway boundary** (adapters stay pure; `GraphState`/checkpoints never carry bytes). `ArtifactMediaResolver` (bindings) reads the run-scoped artifact store the fs also uses; wired in `build_gateway`. Enforces a hard inline-size cap (`MAX_INLINE_MEDIA_BASE64_LEN`) → never unbounded inline (D5). `Base64`/`Url` pass through.
+- **9out** ✅ Output — the Gemini adapter parses `inlineData` response parts into `LlmResponse.content_blocks` (image/audio/file by mime prefix), so model-returned inline media surfaces on the result. OpenAI/Anthropic chat do not emit media; media *generation* (separate provider APIs) remains a named future seam.
 
-**Deferred (named follow-ups on this base):**
-- **9f** ⏳ TS parity — the `LLMContentBlock` image/audio/file variants + the deprecated TS adapters' fan-out (kept out so it does not touch the dead TS engine; the engine path is Rust, and the wire is JSON).
-- **9out** ⏳ Output — parse `LlmResponse.content_blocks` where the chat API returns inline media (Gemini). Media *generation* (OpenAI/Anthropic separate APIs) = named future seam.
+**Obsolete / not applicable:**
+- **9f** ❌ TS parity / TS-adapter fan-out — **dropped**. There is no TypeScript execution engine or fallback (the runtime is Rust-only; `RustEngineRequiredError`), so the vestigial TS gateway adapters are dead code and need no multimodal fan-out. SDK authoring uses a plain channel value (JSON `ContentBlock[]`) via `inputBlocksChannel` — no TS `LLMContentBlock` type is load-bearing. The wire is JSON; the Rust `ContentBlock`/`MediaSource` are the source of truth. (Follow-up cleanup, separate review: remove the vestigial `packages/llm-gateway` TS adapters.)

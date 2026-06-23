@@ -31,8 +31,8 @@ pub use error::LlmError;
 pub use gateway::{DefaultLlmGateway, LlmGateway, LlmProviderAdapter};
 pub use gemini::{
     build_request_body as build_gemini_request_body, GeminiAdapter, GeminiCandidate, GeminiContent,
-    GeminiFunctionCall, GeminiPart, GeminiPort, GeminiRawResponse, GeminiUsageMetadata,
-    HttpGeminiPort, DEFAULT_GEMINI_MODEL,
+    GeminiFunctionCall, GeminiInlineData, GeminiPart, GeminiPort, GeminiRawResponse,
+    GeminiUsageMetadata, HttpGeminiPort, DEFAULT_GEMINI_MODEL,
 };
 pub use media_resolver::{resolve_request_media, MediaResolver, MAX_INLINE_MEDIA_BASE64_LEN};
 pub use mock::MockAdapter;

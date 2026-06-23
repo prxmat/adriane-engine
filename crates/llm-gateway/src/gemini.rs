@@ -18,9 +18,9 @@
 //!   present,
 //! - a model that does not start with `gemini` resolves to the default model.
 //!
-//! Deviation (deferred, by design, same as the Anthropic adapter): the Rust
-//! [`LlmMessage`] content is a plain `String` today, so structured content blocks
-//! (`tool_use` / `tool_result` turns) and streaming are not ported yet.
+//! Multimodal (ADR 0030): a message's `content_blocks` fan out to `inlineData`/`fileData`
+//! parts (in), and inline media a model returns is surfaced on `LlmResponse.content_blocks`
+//! (out). Streaming is not ported yet.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -59,6 +59,18 @@ pub struct GeminiPart {
     pub text: Option<String>,
     #[serde(default, rename = "functionCall")]
     pub function_call: Option<GeminiFunctionCall>,
+    /// ADR 0030 9out: inline media a vision/multimodal model returned (e.g. a generated image).
+    #[serde(default, rename = "inlineData")]
+    pub inline_data: Option<GeminiInlineData>,
+}
+
+/// ADR 0030 9out: a Gemini `inlineData` response part (`{ mimeType, data: <base64> }`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct GeminiInlineData {
+    #[serde(default, rename = "mimeType")]
+    pub mime_type: String,
+    #[serde(default)]
+    pub data: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -296,6 +308,7 @@ fn to_response(request: &LlmRequest, model: String, raw: GeminiRawResponse) -> L
 
     let mut content = String::new();
     let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+    let mut out_blocks: Vec<ContentBlock> = Vec::new();
     for (index, part) in candidate.content.parts.into_iter().enumerate() {
         if let Some(text) = part.text {
             content.push_str(&text);
@@ -310,6 +323,21 @@ fn to_response(request: &LlmRequest, model: String, raw: GeminiRawResponse) -> L
                 } else {
                     call.args
                 },
+            });
+        }
+        // ADR 0030 9out: surface inline media the model returned as an output content block,
+        // classified by mime prefix (image/* | audio/* | else file).
+        if let Some(inline) = part.inline_data {
+            let source = MediaSource::Base64 {
+                media_type: inline.mime_type.clone(),
+                data: inline.data,
+            };
+            out_blocks.push(if inline.mime_type.starts_with("image/") {
+                ContentBlock::Image { source }
+            } else if inline.mime_type.starts_with("audio/") {
+                ContentBlock::Audio { source }
+            } else {
+                ContentBlock::File { source }
             });
         }
     }
@@ -340,7 +368,11 @@ fn to_response(request: &LlmRequest, model: String, raw: GeminiRawResponse) -> L
         },
         model,
         provider: request.provider,
-        content_blocks: None,
+        content_blocks: if out_blocks.is_empty() {
+            None
+        } else {
+            Some(out_blocks)
+        },
     }
 }
 
@@ -467,6 +499,7 @@ mod tests {
                     parts: vec![GeminiPart {
                         text: Some("hello".to_owned()),
                         function_call: None,
+                        inline_data: None,
                     }],
                     role: Some("model".to_owned()),
                 },
@@ -635,6 +668,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn surfaces_inline_media_output_as_content_blocks() {
+        // ADR 0030 9out: an inlineData response part → an output content block on the response.
+        let response = GeminiRawResponse {
+            candidates: vec![GeminiCandidate {
+                content: GeminiContent {
+                    parts: vec![
+                        GeminiPart {
+                            text: Some("here is the image".to_owned()),
+                            function_call: None,
+                            inline_data: None,
+                        },
+                        GeminiPart {
+                            text: None,
+                            function_call: None,
+                            inline_data: Some(GeminiInlineData {
+                                mime_type: "image/png".to_owned(),
+                                data: "GENERATED".to_owned(),
+                            }),
+                        },
+                    ],
+                    role: Some("model".to_owned()),
+                },
+                finish_reason: Some("STOP".to_owned()),
+            }],
+            usage_metadata: None,
+        };
+        let (port, _calls) = recording_port(response);
+        let adapter = GeminiAdapter::new(port);
+
+        let result = adapter.complete(base_request()).await.unwrap();
+        assert_eq!(result.content, "here is the image");
+        let blocks = result
+            .content_blocks
+            .expect("inline media surfaced as blocks");
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            ContentBlock::Image {
+                source: MediaSource::Base64 { media_type, data },
+            } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(data, "GENERATED");
+            }
+            other => panic!("expected an image output block, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn surfaces_function_calls_as_structured_tool_calls() {
         let (port, _calls) = recording_port(GeminiRawResponse {
             candidates: vec![GeminiCandidate {
@@ -643,6 +723,7 @@ mod tests {
                         GeminiPart {
                             text: Some("Let me search.".to_owned()),
                             function_call: None,
+                            inline_data: None,
                         },
                         GeminiPart {
                             text: None,
@@ -650,6 +731,7 @@ mod tests {
                                 name: "search".to_owned(),
                                 args: json!({ "query": "adriane" }),
                             }),
+                            inline_data: None,
                         },
                     ],
                     role: Some("model".to_owned()),
