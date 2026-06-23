@@ -83,10 +83,33 @@ so "governed deep agent" = a default middleware stack rather than bespoke wiring
    change.
 2. **Phase 2 (the real build) — ✅ IMPLEMENTED ([ADR 0024](0024-governed-virtual-filesystem-seam.md), Accepted).** The governed `fs` seam (8 tools) + pluggable backends (artifact + durable HTTP, fail-closed) + the per-path permission DSL (`deny`<`read`<`gate`<`write`) → approval-gate integration with content-scoped grants. Phases 2a–2e shipped.
 3. **Phase 3 (composition) — ✅ IMPLEMENTED ([ADR 0025](0025-unified-agent-middleware-api.md), Accepted).** The unified **middleware API**: one `AgentMiddleware` trait (7 hooks) + `MiddlewareStack` (governed/efficiency, onion); folded the scattered seams in (redaction, compression, terse, context-budget); the **approval gate is intrinsic** to `before_tool`; **profiles** (`fast`/`frontier-careful`/`governed-deep`) + user `middleware[]` ride on it (3d); **reflection** middleware (3e). Governed-by-construction: a governance kind in user data is unrepresentable.
-4. **Phase 4 (async + streaming) — ⏳ NEXT.** async sub-agents (concurrent spawn, human-gate preserved per spawn) + wired event streaming (tool-transcript → SSE; `LlmStreamChunk` is typed but unwired). Touches the runtime + napi bridge → **own detailed ADR + sign-off** (structural).
+4. **Phase 4 (async + streaming) — ✅ IMPLEMENTED ([ADR 0027](0027-async-subagents-and-streaming.md), Accepted).** 4a: incremental event streaming on the Rust engine (already shipped — `streamViaRust` projects forwarded events per node, all four `StreamMode`s). 4b: `mapAgents` dynamic fan-out (`map_node_handler` + `GraphBuilder.mapAgents`) — one sub-agent per item, concurrent, deterministic input-order merge, human-gate preserved per spawn. 4c (LLM token-delta streaming) deferred.
 5. **Phase 5 (interop + UI)** — ACP/ADK protocol adapter (control-plane) + Studio sub-agent
    streaming UI.
 6. **Phase 6 — skills/memory** — long-term cross-thread agent memory over `memory-store` (the four memory planes M1–M4, [ADR 0026](0026-memory-architecture-engine-studio.md), Proposed) + the progressive-skill (`SKILL.md`) convention over the KB. Best surfaced as a `MemoryMiddleware` (`before_run`/`after_run`) now that the middleware API exists.
+
+### Beyond the deep-agent core — general-engine roadmap (the capability audit, 2026-06-23)
+
+These came out of a deepagents/LangChain parity audit. Each is its own ADR + sign-off; all keep the governed-by-construction bet (a seam → policy → gate → audit → checkpoint, like the PII / fs / middleware seams). Numbering continues the platform roadmap:
+
+7. **Phase 7 — observability (OTel + cost + dev-tools).** The `observability` crate has a `Tracer`/`MetricCollector` abstraction (in-memory only) but **no OTLP exporter** and it is **not documented**. Add an env-gated **OTLP exporter seam** (→ an OTel collector; LangSmith / Langfuse / Phoenix all consume OTLP), surface per-call token usage (`LlmUsage` already captures prompt/completion/cache) on `AgentResult` + the spans, and a **price-per-model → cost** mapping so a trace carries its cost. ⭐⭐⭐ (answers the Monitor gap: traces, cost, dev-tools).
+8. **Phase 8 — structured output.** No `response_format`/`json_schema`-constrained generation today (tools give structured *input* only). Add a structured-output API (native Anthropic / Gemini / OpenAI), validated against a schema.
+9. **Phase 9 — multimodal.** `LlmMessage.content` is text-only. Move it to content blocks (`text` | `image`), mapped per adapter — images in, at least.
+10. **Phase 10 — secrets redaction + no-log.** PII redaction is a shipped seam (`RedactMiddleware`); add a **secrets** redactor middleware (API keys / tokens, mirror the PII seam) + a "never log this channel" marker to prevent sensitive-data leakage into events/logs.
+
+### Deep-agent completion — explicit phases (expand the coarse phases 5 + 6 + 4c)
+
+Phases 5 (interop + UI) and 6 (skills/memory) and 4c (token streaming) were coarse buckets; broken out as explicit phases (each its own ADR + sign-off, governed-by-construction):
+
+11. **Phase 11 — long-term cross-thread memory.** ADR 0026 exists (Proposed — needs GO). Missing impl: **M3** agent memory (`memory-store` `PgStore` is a stub that throws), **M2** pgvector (no semantic recall), **M4** portable export; and the wiring as a **`MemoryMiddleware`** (`before_run` loads relevant memories → injects; `after_run` persists) — clean now the middleware API exists. Plus scoping/governance (per-tenant/agent, attributable). The moat-#1 build.
+12. **Phase 12 — skills (`SKILL.md` progressive disclosure).** Nothing built. Missing: the skill format (frontmatter + body), progressive loading (load the body on demand, not always in-context), a skill registry over the KB, versioning + governance. No ADR yet.
+13. **Phase 13 — token / tool / sub-agent event streaming.** 4a wired **node + tool lifecycle** events (done). Missing: per-**token** LLM deltas (`LlmStreamChunk` → napi → `messages` mode at token granularity) + **nested sub-agent** event tagging (so a UI can show each spawn's stream). The napi token-stream bridge is the work. (= the old "4c".)
+14. **Phase 14 — ACP / Google ADK protocols.** Nothing. Missing: a control-plane adapter exposing a *governed* Adriane agent over Agent Client Protocol (Zed) + Google ADK — external clients (editors/orchestrators) drive + stream the agent over a standard (auth, session, streaming mapping). (= part of the old phase 5.)
+15. **Phase 15 — Studio sub-agent UI.** Nothing (Studio = the commercial product). Missing: the nested sub-agent stream visualization, consuming phase-13 events. Product, not engine. (= part of the old phase 5.)
+
+> Also unphased (candidates): **sandbox / interpreters** (code/shell exec — an external, always-approval-gated seam, documented in integrations/sandboxes; never in the OSS engine per the security rule) and the **retry / rate-limit / tool-call-limit** middleware deferred from phase 3e (net-new efficiency/safety middleware on the existing hooks).
+
+> Minor / cosmetic (no phase): per-provider SDK sub-packages (`@adriane-ai/graph-sdk/openai` config helpers) à la LangChain — the engine already covers every provider via native (Anthropic/Gemini) + one OpenAI-compatible adapter (ADR 0005), so this is packaging ergonomics, not a capability.
 
 ### Integrations taxonomy (the doc-site surface)
 

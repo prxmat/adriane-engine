@@ -824,6 +824,7 @@ mod tests {
             approval_requests: vec![],
             requires_human_review: false,
             todos: None,
+            usage: None,
         }
     }
 
