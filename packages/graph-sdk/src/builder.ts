@@ -219,11 +219,13 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
           suspendForApproval: rustConfig.suspendForApproval,
           approvalToolNames: rustConfig.approvalToolNames,
           outputChannel: rustConfig.outputChannel,
-          // ADR 0014 (terse/trim) + ADR 0022/0023 (durable todos channel): carried so the
-          // persisted GraphDefinition runs identically on the catalog/Studio path.
+          // ADR 0014 (terse/trim) + ADR 0022/0023 (durable todos channel) + ADR 0024
+          // (fs enablement): carried so the persisted GraphDefinition runs identically on
+          // the catalog/Studio path.
           outputStyle: rustConfig.outputStyle,
           contextBudget: rustConfig.contextBudget,
-          todosChannel: rustConfig.todosChannel
+          todosChannel: rustConfig.todosChannel,
+          enableFs: rustConfig.enableFs
         }
       }
     });
