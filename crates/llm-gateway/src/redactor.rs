@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::LlmError;
 use crate::gateway::LlmGateway;
-use crate::types::{LlmRequest, LlmResponse};
+use crate::types::{ContentBlock, LlmRequest, LlmResponse};
 
 /// Scrubs PII from an outbound request before it reaches a provider.
 #[async_trait]
@@ -144,12 +144,26 @@ impl PiiRedactor for HttpPiiRedactor {
     async fn redact_request(&self, mut request: LlmRequest) -> Result<LlmRequest, LlmError> {
         // Collect system + every message content, redact as one batch, write back in the
         // same order. Guard each write so a short/garbled response never drops content.
+        // ADR 0030: when a message carries content blocks, the adapter sends the TEXT BLOCKS
+        // (not `content`) — so they must be scrubbed too, or block text bypasses redaction.
+        // Traversal order (system, then per-message: each Text block OR `content`) is mirrored
+        // exactly in the write-back below. Image/audio/file blocks are binary to the text
+        // redactor (a documented media-PII gap — see ADR 0030).
         let mut texts: Vec<String> = Vec::with_capacity(request.messages.len() + 1);
         if let Some(system) = &request.system {
             texts.push(system.clone());
         }
         for message in &request.messages {
-            texts.push(message.content.clone());
+            match &message.content_blocks {
+                Some(blocks) => {
+                    for block in blocks {
+                        if let ContentBlock::Text { text } = block {
+                            texts.push(text.clone());
+                        }
+                    }
+                }
+                None => texts.push(message.content.clone()),
+            }
         }
 
         if texts.is_empty() {
@@ -172,8 +186,21 @@ impl PiiRedactor for HttpPiiRedactor {
                     }
                 }
                 for message in request.messages.iter_mut() {
-                    if let Some(value) = next.next() {
-                        message.content = value;
+                    match &mut message.content_blocks {
+                        Some(blocks) => {
+                            for block in blocks.iter_mut() {
+                                if let ContentBlock::Text { text } = block {
+                                    if let Some(value) = next.next() {
+                                        *text = value;
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            if let Some(value) = next.next() {
+                                message.content = value;
+                            }
+                        }
                     }
                 }
                 Ok(request)
@@ -216,6 +243,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 

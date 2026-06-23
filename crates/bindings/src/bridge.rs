@@ -950,6 +950,7 @@ fn tool_use(name: &str, provider: LlmProvider) -> LlmResponse {
         usage: LlmUsage::default(),
         model: "mock".to_owned(),
         provider,
+        content_blocks: None,
     }
 }
 
@@ -961,6 +962,7 @@ fn final_text(answer: &str, provider: LlmProvider) -> LlmResponse {
         usage: LlmUsage::default(),
         model: "mock".to_owned(),
         provider,
+        content_blocks: None,
     }
 }
 

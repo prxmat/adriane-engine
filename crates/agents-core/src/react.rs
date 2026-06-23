@@ -286,6 +286,7 @@ impl ReActAgent {
                     tool_calls: Some(tool_calls.clone()),
                     tool_call_id: None,
                     tool_name: None,
+                    content_blocks: None,
                 });
                 for call in &tool_calls {
                     let outcome = self
@@ -470,6 +471,7 @@ impl ReActAgent {
                 tool_calls: None,
                 tool_call_id: Some(id.to_owned()),
                 tool_name: Some(name.to_owned()),
+                content_blocks: None,
             }),
             None => conversation.push(LlmMessage::text("user", format!("observation:{output}"))),
         }
@@ -535,6 +537,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 
@@ -550,6 +553,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 
@@ -869,6 +873,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         };
 
         let agent = ReActAgent::new(
@@ -910,6 +915,7 @@ mod tests {
                 usage: LlmUsage::default(),
                 model: "mock".to_owned(),
                 provider: LlmProvider::Anthropic,
+                content_blocks: None,
             }
         }
         fn guarded_agent(calls: &Arc<AtomicUsize>, responses: Vec<LlmResponse>) -> ReActAgent {

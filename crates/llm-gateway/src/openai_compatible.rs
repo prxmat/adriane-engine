@@ -29,7 +29,9 @@ use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
 use crate::gateway::LlmProviderAdapter;
-use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat};
+use crate::types::{
+    ContentBlock, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat,
+};
 
 /// Mistral cloud base URL.
 pub const MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
@@ -301,6 +303,7 @@ fn to_response(request: &LlmRequest, model: String, raw: OpenAiChatResponse) -> 
         },
         model,
         provider: request.provider,
+        content_blocks: None,
     }
 }
 
@@ -341,10 +344,44 @@ pub fn build_request_body(req: &LlmRequest, default_model: &str) -> Value {
         }
     }
 
+    fn openai_content_parts(blocks: &[ContentBlock]) -> Vec<Value> {
+        // Each block → an OpenAI content part. Image/file via a (data-URI or URL) `url`;
+        // audio via inline base64 `input_audio`. An unresolved Artifact source yields no
+        // url/data and is skipped (the gateway resolves artifacts before the adapter runs).
+        blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(json!({ "type": "text", "text": text })),
+                ContentBlock::Image { source } => source
+                    .as_url_or_data_uri()
+                    .map(|url| json!({ "type": "image_url", "image_url": { "url": url } })),
+                ContentBlock::Audio { source } => source.as_base64().map(|(media_type, data)| {
+                    let format = media_type.rsplit('/').next().unwrap_or("mp3");
+                    json!({ "type": "input_audio", "input_audio": { "data": data, "format": format } })
+                }),
+                ContentBlock::File { source } => source
+                    .as_url_or_data_uri()
+                    .map(|url| json!({ "type": "file", "file": { "file_data": url } })),
+            })
+            .collect()
+    }
+
     for message in &req.messages {
         let mut m = Map::new();
         m.insert("role".to_owned(), json!(message.role));
-        m.insert("content".to_owned(), json!(message.content));
+        // ADR 0030: multimodal — when content blocks are present, content becomes an array of
+        // typed parts; otherwise it stays a plain string (byte-identical to before).
+        match &message.content_blocks {
+            Some(blocks) => {
+                m.insert(
+                    "content".to_owned(),
+                    Value::Array(openai_content_parts(blocks)),
+                );
+            }
+            None => {
+                m.insert("content".to_owned(), json!(message.content));
+            }
+        }
         // Assistant tool calls → OpenAI `tool_calls` (function `arguments` is a JSON string).
         if let Some(calls) = &message.tool_calls {
             m.insert(
@@ -533,7 +570,7 @@ mod tests {
 
     use super::*;
     use crate::gateway::{DefaultLlmGateway, LlmGateway};
-    use crate::types::{LlmMessage, LlmToolDef, ResponseFormat};
+    use crate::types::{LlmMessage, LlmToolDef, MediaSource, ResponseFormat};
 
     /// Captures each body the adapter sends and returns a canned response.
     struct RecordingPort {
@@ -653,6 +690,69 @@ mod tests {
         assert_eq!(
             rf["json_schema"]["schema"],
             json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } })
+        );
+    }
+
+    #[tokio::test]
+    async fn image_content_block_maps_to_an_image_url_part() {
+        // ADR 0030: a message with content blocks → an OpenAI content ARRAY of typed parts.
+        let (port, bodies) = recording_port(text_response());
+        let adapter = OpenAiCompatibleAdapter::new(port, MISTRAL_DEFAULT_MODEL);
+
+        let request = LlmRequest {
+            messages: vec![LlmMessage::with_blocks(
+                "user",
+                vec![
+                    ContentBlock::Text {
+                        text: "what is this?".to_owned(),
+                    },
+                    ContentBlock::Image {
+                        source: MediaSource::Base64 {
+                            media_type: "image/png".to_owned(),
+                            data: "AAAA".to_owned(),
+                        },
+                    },
+                ],
+            )],
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        let bodies = bodies.lock().unwrap();
+        let msgs = bodies[0]["messages"].as_array().unwrap();
+        let user = msgs.iter().find(|m| m["content"].is_array()).unwrap();
+        let parts = user["content"].as_array().unwrap();
+        assert_eq!(parts[0], json!({ "type": "text", "text": "what is this?" }));
+        assert_eq!(parts[1]["type"], json!("image_url"));
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            json!("data:image/png;base64,AAAA")
+        );
+    }
+
+    #[tokio::test]
+    async fn url_image_maps_to_the_url_verbatim() {
+        let (port, bodies) = recording_port(text_response());
+        let adapter = OpenAiCompatibleAdapter::new(port, MISTRAL_DEFAULT_MODEL);
+        let request = LlmRequest {
+            messages: vec![LlmMessage::with_blocks(
+                "user",
+                vec![ContentBlock::Image {
+                    source: MediaSource::Url {
+                        url: "https://cdn/x.png".to_owned(),
+                        media_type: None,
+                    },
+                }],
+            )],
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+        let bodies = bodies.lock().unwrap();
+        let msgs = bodies[0]["messages"].as_array().unwrap();
+        let user = msgs.iter().find(|m| m["content"].is_array()).unwrap();
+        assert_eq!(
+            user["content"][0]["image_url"]["url"],
+            json!("https://cdn/x.png")
         );
     }
 

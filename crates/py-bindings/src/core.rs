@@ -448,6 +448,7 @@ fn mock_adapter(provider: LlmProvider) -> MockAdapter {
         usage: LlmUsage::default(),
         model: "mock".to_owned(),
         provider,
+        content_blocks: None,
     };
     MockAdapter::new(provider, vec![response])
 }

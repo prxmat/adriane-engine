@@ -20,8 +20,8 @@ pub mod types;
 
 pub use anthropic::{
     build_request_body, AnthropicAdapter, AnthropicCreateParams, AnthropicMessage, AnthropicPort,
-    AnthropicRawResponse, AnthropicRole, AnthropicUsage, ContentBlock, HttpAnthropicPort,
-    SystemBlock, ToolParam, DEFAULT_MAX_TOKENS, DEFAULT_MODEL,
+    AnthropicRawResponse, AnthropicRole, AnthropicUsage, HttpAnthropicPort, SystemBlock, ToolParam,
+    DEFAULT_MAX_TOKENS, DEFAULT_MODEL,
 };
 pub use compressor::{
     CompressingGateway, HttpPromptCompressor, NoopPromptCompressor, PromptCompressor,
@@ -45,6 +45,6 @@ pub use openai_compatible::{
 };
 pub use redactor::{HttpPiiRedactor, NoopPiiRedactor, PiiRedactor, RedactingGateway};
 pub use types::{
-    LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk, LlmToolCall, LlmToolDef,
-    LlmUsage, ResponseFormat,
+    ContentBlock, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk, LlmToolCall,
+    LlmToolDef, LlmUsage, MediaSource, ResponseFormat,
 };

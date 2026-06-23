@@ -772,6 +772,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "m".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         };
         let _ = stack.after_model(response, &request, &ctx).await.unwrap();
 
@@ -1002,6 +1003,7 @@ mod tests {
                 usage: LlmUsage::default(),
                 model: "m".to_owned(),
                 provider: LlmProvider::Anthropic,
+                content_blocks: None,
             }],
         )));
         Arc::new(gateway)
@@ -1046,6 +1048,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "m".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 
@@ -1188,6 +1191,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "m".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         };
         let out = mw
             .after_model(response, &bare_request(None), &ctx)

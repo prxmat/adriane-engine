@@ -28,7 +28,10 @@ use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
 use crate::gateway::LlmProviderAdapter;
-use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat};
+use crate::types::{
+    ContentBlock, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, MediaSource,
+    ResponseFormat,
+};
 
 /// Model used when the request does not name a Gemini model.
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.0-flash";
@@ -169,6 +172,36 @@ fn collect_system(req: &LlmRequest) -> String {
 /// directly. System text folds into `systemInstruction`; `assistant` maps to the
 /// `model` role; tools become a single `functionDeclarations` group (omitted when
 /// empty); `temperature` / `maxOutputTokens` go under `generationConfig`.
+/// ADR 0030: map content blocks to Gemini parts. Inline bytes → `inlineData`, a URL →
+/// `fileData`; image/audio/file are uniform (the `mimeType` distinguishes them). An
+/// unresolved Artifact source yields no part (resolved upstream by the gateway, 9c).
+fn gemini_content_parts(blocks: &[ContentBlock]) -> Vec<Value> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(json!({ "text": text })),
+            ContentBlock::Image { source }
+            | ContentBlock::Audio { source }
+            | ContentBlock::File { source } => gemini_media_part(source),
+        })
+        .collect()
+}
+
+fn gemini_media_part(source: &MediaSource) -> Option<Value> {
+    if let Some((media_type, data)) = source.as_base64() {
+        Some(json!({ "inlineData": { "mimeType": media_type, "data": data } }))
+    } else if let MediaSource::Url { url, media_type } = source {
+        let mut file_data = Map::new();
+        if let Some(mime) = media_type {
+            file_data.insert("mimeType".to_owned(), json!(mime));
+        }
+        file_data.insert("fileUri".to_owned(), json!(url));
+        Some(json!({ "fileData": Value::Object(file_data) }))
+    } else {
+        None // unresolved artifact
+    }
+}
+
 pub fn build_request_body(req: &LlmRequest) -> Value {
     let mut body = Map::new();
 
@@ -204,6 +237,10 @@ pub fn build_request_body(req: &LlmRequest) -> Value {
                     parts.push(json!({ "functionCall": { "name": call.name, "args": call.input } }));
                 }
                 return json!({ "role": role, "parts": parts });
+            }
+            // ADR 0030: multimodal — content blocks become Gemini parts.
+            if let Some(blocks) = &m.content_blocks {
+                return json!({ "role": role, "parts": gemini_content_parts(blocks) });
             }
             json!({ "role": role, "parts": [{ "text": m.content }] })
         })
@@ -303,6 +340,7 @@ fn to_response(request: &LlmRequest, model: String, raw: GeminiRawResponse) -> L
         },
         model,
         provider: request.provider,
+        content_blocks: None,
     }
 }
 
@@ -473,6 +511,39 @@ mod tests {
             gen["responseSchema"],
             json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } })
         );
+    }
+
+    #[tokio::test]
+    async fn image_content_block_maps_to_an_inline_data_part() {
+        // ADR 0030: content blocks → Gemini parts (inlineData for base64 bytes).
+        let request = LlmRequest {
+            messages: vec![LlmMessage::with_blocks(
+                "user",
+                vec![
+                    ContentBlock::Text {
+                        text: "what is this?".to_owned(),
+                    },
+                    ContentBlock::Image {
+                        source: MediaSource::Base64 {
+                            media_type: "image/png".to_owned(),
+                            data: "AAAA".to_owned(),
+                        },
+                    },
+                ],
+            )],
+            ..base_request()
+        };
+        let body = build_request_body(&request);
+        let user = body["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["parts"].as_array().map(|p| p.len() > 1).unwrap_or(false))
+            .unwrap();
+        let parts = user["parts"].as_array().unwrap();
+        assert_eq!(parts[0], json!({ "text": "what is this?" }));
+        assert_eq!(parts[1]["inlineData"]["mimeType"], json!("image/png"));
+        assert_eq!(parts[1]["inlineData"]["data"], json!("AAAA"));
     }
 
     #[tokio::test]

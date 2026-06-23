@@ -19,6 +19,11 @@ export type LLMToolResultBlock = {
 
 export type LLMContentBlock = LLMTextBlock | LLMToolUseBlock | LLMToolResultBlock;
 
+// ADR 0030 (phase 9): multimodal media blocks (image / audio / file) + `LLMMediaSource`
+// live on the Rust `ContentBlock`/`MediaSource` (the engine execution path). The TS
+// parity types + the deprecated TS adapters' fan-out land with the SDK authoring entry
+// point (ADR 0030 9e) — deferred so this foundation PR does not touch the dead TS engine.
+
 export type LLMMessage = {
   role: "system" | "user" | "assistant";
   /**
