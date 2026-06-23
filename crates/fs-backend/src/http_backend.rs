@@ -210,6 +210,9 @@ mod tests {
         // An unroutable address → ServiceUnavailable (never a silent success).
         let backend = backend_at("http://127.0.0.1:1/fs".to_owned());
         let err = backend.read("x", None).await.expect_err("must fail closed");
-        assert!(matches!(err, FsError::ServiceUnavailable { .. }), "got: {err:?}");
+        assert!(
+            matches!(err, FsError::ServiceUnavailable { .. }),
+            "got: {err:?}"
+        );
     }
 }
