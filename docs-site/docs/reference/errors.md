@@ -59,6 +59,13 @@ Expected result: logs `MISSING_ENTRY_NODE` (the graph declared no nodes).
 | **When** | An `action` node is added via `node(id, config)` with no `handler`. Thrown immediately at build time. |
 | **Handle** | Provide a handler, or use a node type that doesn't need one (e.g. `humanGate`, `agentNode`, `component`). |
 
+### `GovernanceMiddlewareRejectedError`
+
+| | |
+| --- | --- |
+| **When** | An `agentNode`'s `middleware` names a **governance** kind (`redact` / `approvalGate` / `fsPolicy`). Those are engine-injected and sealed — only efficiency kinds (`compress` / `terse` / `contextBudget` / `reflection`) are user-supplied. Thrown at build time. |
+| **Handle** | Remove the governance kind. Governance is always on — you cannot add, remove, or replace it (see [middleware & profiles](/docs/advanced-agents/middleware-and-profiles#governance-kinds-are-rejected)). This is the *governed-by-construction* guarantee: an ungoverned stack is unrepresentable. |
+
 ## TypeScript: engine errors and interrupts
 
 These come from `@adriane-ai/graph-runtime` and `@adriane-ai/agents-core`. They surface during

@@ -11,8 +11,18 @@ const FEATURES = [
   },
   {
     eyebrow: "Governed",
-    title: "Approval gates as a primitive",
-    body: "Human-in-the-loop is built into the graph, not bolted on. An agent never approves its own output; sensitive tool calls route through an attested approval gate, enforced in the Rust engine and the control plane."
+    title: "Governed by construction",
+    body: "Governance — PII redaction, the human-approval gate, the filesystem policy — is sealed engine middleware you cannot turn off. An agent never approves its own output. An ungoverned agent is unrepresentable, not just discouraged."
+  },
+  {
+    eyebrow: "Composable",
+    title: "Middleware & profiles",
+    body: "Compose an agent from one ordered stack of governed + efficiency middleware. Dial its whole posture with a profile — `profile: \"governed-deep\"` is a governed deep agent in a single word; explicit overrides always win."
+  },
+  {
+    eyebrow: "Deep agents",
+    title: "Filesystem, todos, tasks",
+    body: "Give an agent a scratchpad bounded by a fail-closed path policy, a durable plan via writeTodos, and isolated sub-agents that return one compressed report — every mutation checkpointed and attributed."
   },
   {
     eyebrow: "One engine",

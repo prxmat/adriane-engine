@@ -125,6 +125,12 @@ Add a ReAct agent node. Its `AgentResult` lands in `config.outputChannel` (defau
 | `name` | `string` | `id` | Agent name; also the approval requester principal. |
 | `description` | `string` | `agent node <id>` | Agent description. |
 | `outputChannel` | `string` | `"agentResult"` | Channel the result lands in. |
+| `profile` | `AgentProfile` | `undefined` | `"fast" \| "frontier-careful" \| "governed-deep"` — a tier + efficiency-middleware + suspend/fs bundle. Explicit fields override it. See [middleware & profiles](/docs/advanced-agents/middleware-and-profiles#profiles). |
+| `middleware` | `EfficiencyMiddlewareSpec[]` | `undefined` | Extra efficiency middleware (`compress` / `terse` / `contextBudget` / `reflection`). Governance kinds are rejected ([`GovernanceMiddlewareRejectedError`](/docs/reference/errors)). |
+| `outputStyle` | `"terse"` | `undefined` | Token-efficiency: append a compact-output directive to the system prompt (desugars to a `terse` middleware). |
+| `contextBudget` | `number` | `undefined` | Cap (chars) on the injected seed message (desugars to a `contextBudget` middleware). |
+| `enableFs` | `boolean` | `false` | Opt into the [governed virtual filesystem](/docs/advanced-agents/governed-filesystem) tools (bound by the graph's `fsPolicy`). |
+| `todosChannel` | `string` | `undefined` | Durable channel the agent's `writeTodos` list is persisted into. See [deep agents](/docs/advanced-agents/deep-agents). |
 | `suspendForApproval` | `boolean` | `false` | Suspend the run when a gated tool is reached. |
 | `approvalEngine` | `ApprovalEngine` | `undefined` | Route approvals through an engine (TS-engine only — see caveats). |
 | `label` | `string` | `id` | Display label. |
@@ -153,6 +159,41 @@ Rust engine its handler throws a `DynamicInterrupt` that surfaces as a *node fai
 clean suspension. Route such a graph with `ADRIANE_SDK_ENGINE=ts` if you need it. (Source:
 `compiled-graph.ts`.)
 :::
+
+### `taskNode(id, config)`
+
+```ts
+taskNode(id: string, config: TaskNodeConfig): GraphBuilder<TState & { [K: string]: AgentResult }>;
+```
+
+Spawn a sub-agent in an isolated context that returns one compressed report — sugar over a
+one-node subgraph (checkpointed, audited, suspension-propagating). Full walkthrough in
+[deep agents](/docs/advanced-agents/deep-agents).
+
+| `TaskNodeConfig` field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `subAgent` | `AgentNodeConfig` | — (required) | The sub-agent to spawn. |
+| `objectiveChannel` | `string` | `"objective"` | The only channel projected into the child. |
+| `reportChannel` | `string` | `"report"` | The only channel the child's report lands in. |
+| `compress` | `boolean` | `true` | Run the sub-agent terse (a summary, not a full transcript). |
+
+### `fsPolicy(rules)`
+
+```ts
+fsPolicy(rules: FsPolicyRule[]): this;
+```
+
+Set the run's filesystem path policy — the per-path permission rules every `enableFs` agent in the
+graph is bound by. Each rule is `{ glob, verb }` with `verb` one of `"deny" | "read" | "gate" |
+"write"`. **Fail-closed**: an unmatched path is read-only. Full reference in the
+[governed virtual filesystem](/docs/advanced-agents/governed-filesystem#the-path-policy).
+
+```ts
+createGraph({ name: "researcher" })
+  .fsPolicy([{ glob: "notes/**", verb: "write" }, { glob: "secret/**", verb: "deny" }])
+  .agentNode("worker", { llm, prompt: { system: "…" }, enableFs: true })
+  .compile();
+```
 
 ### `component(id, descriptor, options?)`
 
