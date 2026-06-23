@@ -681,6 +681,10 @@ fn build_react_agent(
     if let Some(max) = agent_spec.max_iterations {
         agent = agent.with_max_iterations(max as usize);
     }
+    // ADR 0030 9e: bind the multimodal input channel so the seed message carries media blocks.
+    if let Some(channel) = &agent_spec.input_blocks_channel {
+        agent = agent.with_input_blocks_channel(channel.clone());
+    }
     // ADR 0025: install the middleware stack — governed (env-injected redaction) + the
     // SDK-resolved efficiency list (compress / terse / context-budget / reflection). The
     // approval gate is intrinsic to the stack and applies regardless. The gateway is threaded
@@ -1207,6 +1211,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
 
         let gateway = build_gateway(
@@ -1352,6 +1357,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
         let gateway = build_gateway(
             &agent_spec,
@@ -1511,6 +1517,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1562,6 +1569,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1620,6 +1628,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
 
         let resolved = resolve_agent_model(&agent_spec);

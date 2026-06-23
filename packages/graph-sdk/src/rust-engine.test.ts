@@ -82,6 +82,34 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
     expect(agentResult).toBeDefined();
   });
 
+  it("threads a multimodal input channel through to the Rust engine (ADR 0030 9e)", async () => {
+    // An agent bound to inputBlocksChannel reads media blocks from that channel and builds a
+    // multimodal seed. The deterministic mock gateway ignores the image, so we assert the run
+    // completes — proving the channel binding threads SDK → wire → bridge → react seed.
+    const app = createGraph({ name: "rust-multimodal" })
+      .channel("__media", { type: "json", default: [] })
+      .agentNode("vision", {
+        llm: new DefaultLLMGateway(),
+        prompt: { system: "Describe the image." },
+        maxIterations: 2,
+        inputBlocksChannel: "__media"
+      })
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+    const result = await app.run(
+      {
+        __media: [
+          { type: "image", source: { kind: "base64", mediaType: "image/png", data: "AAAA" } }
+        ]
+      },
+      { runId: "run_rust_multimodal" as never }
+    );
+    expect(result.status).toBe("completed");
+    const agentResult = (result.channels as Record<string, AgentResult>).agentResult;
+    expect(agentResult).toBeDefined();
+  });
+
   it("threads a structuredOutput middleware through to the Rust engine (ADR 0029)", async () => {
     // The `structuredOutput` efficiency kind must travel SDK → wire → bridge →
     // StructuredOutputMiddleware. The deterministic mock gateway does not emit our schema,
