@@ -65,6 +65,27 @@ pub struct AgentSpec {
     /// run-scoped and enforced by [`EngineSpec::fs_policy`] (fail-closed). Default off.
     #[serde(default)]
     pub enable_fs: bool,
+    /// The SDK-resolved EFFICIENCY middleware list (ADR 0025 phase 3d): the SDK expands a
+    /// `profile` + the user's explicit `middleware[]` + the legacy `output_style`/
+    /// `context_budget` knobs into one ordered list of `{kind, params}` data entries, which
+    /// the bridge turns into `push_efficiency` calls. The GOVERNED layer (redaction, the
+    /// approval gate, fs policy) is **never** carried here — the bridge injects it — and a
+    /// governance kind appearing in this list is ignored by the bridge's `_ => {}` arm (the
+    /// runtime enforcer), never honoured. Default empty.
+    #[serde(default)]
+    pub resolved_middleware: Vec<MiddlewareSpec>,
+}
+
+/// One entry of [`AgentSpec::resolved_middleware`]: an EFFICIENCY middleware the bridge
+/// builds by `kind` (`"compress" | "terse" | "contextBudget"`), with kind-specific `params`
+/// (e.g. `{ "chars": 4000 }` for `contextBudget`). Mirrors [`ComponentNodeSpec`]'s
+/// data-driven shape. Unknown / governance kinds are ignored by the bridge (never applied).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MiddlewareSpec {
+    pub kind: String,
+    #[serde(default)]
+    pub params: Value,
 }
 
 /// One per-path permission rule (ADR 0024), compiled into the engine's
@@ -346,6 +367,48 @@ mod tests {
         let bare: EngineSpec =
             serde_json::from_value(json!({ "graph": minimal_graph_json() })).expect("parses");
         assert!(bare.fs_policy.is_empty());
+    }
+
+    #[test]
+    fn deserializes_resolved_middleware_from_camel_case() {
+        let spec_json = json!({
+            "graph": minimal_graph_json(),
+            "agents": {
+                "assistant": {
+                    "provider": "anthropic",
+                    "resolvedMiddleware": [
+                        { "kind": "compress" },
+                        { "kind": "terse" },
+                        { "kind": "contextBudget", "params": { "chars": 4000 } }
+                    ]
+                }
+            }
+        });
+        let spec: EngineSpec = serde_json::from_value(spec_json).expect("spec parses");
+        let agent = spec.agents.get("assistant").expect("agent present");
+        assert_eq!(agent.resolved_middleware.len(), 3);
+        assert_eq!(agent.resolved_middleware[0].kind, "compress");
+        assert_eq!(agent.resolved_middleware[2].kind, "contextBudget");
+        assert_eq!(
+            agent.resolved_middleware[2]
+                .params
+                .get("chars")
+                .and_then(Value::as_u64),
+            Some(4000)
+        );
+
+        // Omitted → empty list (no efficiency middleware; the governed gate still applies).
+        let bare: EngineSpec = serde_json::from_value(json!({
+            "graph": minimal_graph_json(),
+            "agents": { "assistant": { "provider": "anthropic" } }
+        }))
+        .expect("spec parses");
+        assert!(bare
+            .agents
+            .get("assistant")
+            .expect("agent present")
+            .resolved_middleware
+            .is_empty());
     }
 
     #[test]

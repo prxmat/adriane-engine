@@ -22,8 +22,8 @@ pub mod working_memory;
 
 pub use fs_tools::{fs_tools, register_fs_tools};
 pub use middleware::{
-    AgentMiddleware, CompressMiddleware, Flow, MiddlewareStack, RedactMiddleware, RunCtx,
-    ToolCallCtx, ToolControl,
+    AgentMiddleware, CompressMiddleware, ContextBudgetMiddleware, Flow, MiddlewareStack,
+    RedactMiddleware, ReflectionMiddleware, RunCtx, TerseMiddleware, ToolCallCtx, ToolControl,
 };
 pub use node::{
     agent_node_handler, AGENT_APPROVAL_INTERRUPT, APPROVED_TOOLS_CHANNEL,

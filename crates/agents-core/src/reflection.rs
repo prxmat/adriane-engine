@@ -98,7 +98,7 @@ pub fn parse_critique(raw: &str) -> Option<Critique> {
 /// Decide whether the draft needs another revision, plus the concrete issues to fix. A structured
 /// critique revises unless `ok` or `score >= score_threshold`; otherwise the legacy substring
 /// heuristic applies (no issues). Mirrors the TS `critiqueRequestsRevision`.
-fn requests_revision(raw: &str, score_threshold: f64) -> (bool, Vec<String>) {
+pub fn requests_revision(raw: &str, score_threshold: f64) -> (bool, Vec<String>) {
     if let Some(critique) = parse_critique(raw) {
         let accept = critique.ok || critique.score >= score_threshold;
         return (!accept, critique.issues);
@@ -106,6 +106,37 @@ fn requests_revision(raw: &str, score_threshold: f64) -> (bool, Vec<String>) {
     let lower = raw.to_lowercase();
     let revise = REVISE_MARKERS.iter().any(|marker| lower.contains(marker));
     (revise, Vec::new())
+}
+
+/// Run ONE critique pass over `draft` and report whether it requests a revision, plus the
+/// concrete issues. The single-shot core shared by [`ReflectionAgent::run`]'s loop and the
+/// middleware form ([`crate::middleware::ReflectionMiddleware`], ADR 0025 phase 3e): one LLM
+/// call with the structured-critique prompt, parsed via [`requests_revision`]. The middleware
+/// uses this to ESCALATE a weak result to human review without re-running the agent (the full
+/// revise loop stays in [`ReflectionAgent`] / the standalone reflection node — additive, not a
+/// replacement).
+pub async fn reflect_once(
+    gateway: &Arc<dyn LlmGateway>,
+    provider: LlmProvider,
+    model: &str,
+    draft: &str,
+    score_threshold: f64,
+) -> Result<(bool, Vec<String>), LlmError> {
+    let response = gateway
+        .complete(LlmRequest {
+            provider,
+            model: model.to_owned(),
+            messages: vec![LlmMessage::text(
+                "user",
+                format!("{CRITIQUE_INSTRUCTION}\n\nOutput to critique: {draft}"),
+            )],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+        })
+        .await?;
+    Ok(requests_revision(&response.content, score_threshold))
 }
 
 /// What a reflection run produces: the accepted (or budget-exhausted) draft, how

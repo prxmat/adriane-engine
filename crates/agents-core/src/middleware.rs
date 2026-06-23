@@ -16,11 +16,13 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use adriane_llm_gateway::{
-    LlmError, LlmMessage, LlmRequest, LlmResponse, PiiRedactor, PromptCompressor,
+    LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequest, LlmResponse, PiiRedactor,
+    PromptCompressor,
 };
 use serde_json::Value;
 
 use crate::react::{AgentResult, ApprovalRequestItem};
+use crate::reflection::reflect_once;
 use crate::tools::approval_key;
 
 /// Control-flow signal a hook returns: continue the run, or stop it with a reason.
@@ -369,6 +371,135 @@ impl AgentMiddleware for CompressMiddleware {
     }
 }
 
+/// The terse-output directive (ADR 0014) [`TerseMiddleware`] appends to the system prompt.
+const TERSE_SUFFIX: &str = " Respond in a terse, telegraphic style: sentence fragments, no \
+    filler, no pleasantries. Preserve ALL technical substance, numbers, code and exact values.";
+
+/// EFFICIENCY — terse output (ADR 0014) as a before-model hook: appends [`TERSE_SUFFIX`] to
+/// the request's system prompt so the model answers compactly (cuts output tokens on prose;
+/// lossy — the SDK only sets it for prose stages). Idempotent per request: the loop rebuilds
+/// the request from the agent's bare system prompt each iteration, so exactly one suffix is
+/// appended each call. Folds the former flat `output_style:"terse"` bridge knob (ADR 0025 3d).
+pub struct TerseMiddleware;
+
+#[async_trait::async_trait]
+impl AgentMiddleware for TerseMiddleware {
+    fn name(&self) -> &str {
+        "terse"
+    }
+    async fn before_model(
+        &self,
+        mut request: LlmRequest,
+        _ctx: &RunCtx<'_>,
+    ) -> Result<LlmRequest, LlmError> {
+        request.system = Some(match request.system {
+            Some(system) => format!("{system}{TERSE_SUFFIX}"),
+            None => TERSE_SUFFIX.trim().to_owned(),
+        });
+        Ok(request)
+    }
+}
+
+/// EFFICIENCY — context-budget trim (ADR 0014) as a before-run hook: caps the agent's seed
+/// message (the injected `Input/State`) to `chars` characters so an unbounded channel map is
+/// not re-fed to the model. Truncates on a char boundary and marks the cut with `…`. Folds
+/// the former flat `context_budget` agent knob into a composable middleware (ADR 0025 3d).
+pub struct ContextBudgetMiddleware {
+    chars: usize,
+}
+
+impl ContextBudgetMiddleware {
+    pub fn new(chars: usize) -> Self {
+        Self { chars }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentMiddleware for ContextBudgetMiddleware {
+    fn name(&self) -> &str {
+        "context-budget"
+    }
+    async fn before_run(
+        &self,
+        conversation: &mut Vec<LlmMessage>,
+        _ctx: &RunCtx<'_>,
+    ) -> Result<Flow, LlmError> {
+        if let Some(first) = conversation.first_mut() {
+            if first.content.chars().count() > self.chars {
+                let truncated: String = first.content.chars().take(self.chars).collect();
+                first.content = truncated + "…";
+            }
+        }
+        Ok(Flow::Continue)
+    }
+}
+
+/// EFFICIENCY (opt-in quality signal) — reflection as an after-run hook (ADR 0025 phase 3e).
+/// Runs ONE self-critique over the agent's reasoning ([`reflect_once`]); when the critique
+/// rejects the output it ANNOTATES the reasoning with `reflection:needs_review:<issues>`.
+///
+/// It deliberately does **NOT** set `requires_human_review`: that field drives the
+/// approval-suspend gate (`node.rs`), and since a suspended agent node re-runs the whole agent
+/// (and so re-critiques) on resume, a quality escalation through that flag would re-suspend
+/// forever with no approval to grant. Quality escalation is therefore a graph-level concern — a
+/// conditional edge can route on the `reflection:needs_review` marker into a human-gate node —
+/// not an agent-internal flag. **Additive**: the full critique→revise loop stays the standalone
+/// [`crate::reflection::ReflectionAgent`] / reflection node (ADR 0025: add the middleware form
+/// WITHOUT removing the node). **Fail-open**: a critique-call error never fails the run.
+pub struct ReflectionMiddleware {
+    gateway: Arc<dyn LlmGateway>,
+    provider: LlmProvider,
+    model: String,
+    score_threshold: f64,
+}
+
+impl ReflectionMiddleware {
+    pub fn new(
+        gateway: Arc<dyn LlmGateway>,
+        provider: LlmProvider,
+        model: impl Into<String>,
+        score_threshold: f64,
+    ) -> Self {
+        Self {
+            gateway,
+            provider,
+            model: model.into(),
+            score_threshold,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentMiddleware for ReflectionMiddleware {
+    fn name(&self) -> &str {
+        "reflection"
+    }
+    async fn after_run(&self, result: &mut AgentResult, _ctx: &RunCtx<'_>) -> Result<(), LlmError> {
+        // Fail-open: a critique-call failure must not sink an otherwise-good run. On a rejecting
+        // critique, annotate the reasoning (a graph may route on the marker) — but never touch
+        // `requires_human_review` (see the type doc: it would re-suspend forever on resume).
+        if let Ok((revise_needed, issues)) = reflect_once(
+            &self.gateway,
+            self.provider,
+            &self.model,
+            &result.reasoning,
+            self.score_threshold,
+        )
+        .await
+        {
+            if revise_needed {
+                let note = if issues.is_empty() {
+                    "reflection:needs_review".to_owned()
+                } else {
+                    format!("reflection:needs_review:{}", issues.join("; "))
+                };
+                result.reasoning = format!("{}\n{note}", result.reasoning);
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,5 +736,163 @@ mod tests {
             stack.before_tool(&other_call, &ctx).await.unwrap(),
             ToolControl::Gate(_)
         ));
+    }
+
+    fn empty_ctx<'a>(
+        approved: &'a HashSet<String>,
+        channels: &'a BTreeMap<String, Value>,
+    ) -> RunCtx<'a> {
+        RunCtx {
+            iteration: 0,
+            approved_tool_names: approved,
+            channels,
+        }
+    }
+
+    fn bare_request(system: Option<&str>) -> LlmRequest {
+        use adriane_llm_gateway::LlmProvider;
+        LlmRequest {
+            provider: LlmProvider::Anthropic,
+            model: "m".to_owned(),
+            messages: vec![],
+            system: system.map(str::to_owned),
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn terse_middleware_appends_the_directive_idempotently_per_request() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        let terse = TerseMiddleware;
+
+        // With a base system → suffix appended after it.
+        let out = terse
+            .before_model(bare_request(Some("Be helpful.")), &ctx)
+            .await
+            .unwrap();
+        let system = out.system.expect("system set");
+        assert!(system.starts_with("Be helpful."));
+        assert!(system.contains("terse, telegraphic"));
+
+        // Without a base system → the trimmed directive becomes the system.
+        let out = terse.before_model(bare_request(None), &ctx).await.unwrap();
+        let system = out.system.expect("system set");
+        assert!(system.starts_with("Respond in a terse"));
+
+        // Per-request idempotency: re-running on a fresh (bare) request appends exactly once
+        // (the loop never persists the suffix back onto the agent's system prompt).
+        let out = terse
+            .before_model(bare_request(Some("Be helpful.")), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(out.system.unwrap().matches("terse, telegraphic").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn context_budget_middleware_trims_only_when_over_budget() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        let mw = ContextBudgetMiddleware::new(10);
+
+        // Over budget → truncated to `chars` + ellipsis marker.
+        let mut conversation = vec![LlmMessage::text("user", "0123456789ABCDEF")];
+        assert_eq!(
+            mw.before_run(&mut conversation, &ctx).await.unwrap(),
+            Flow::Continue
+        );
+        assert_eq!(conversation[0].content, "0123456789…");
+
+        // Within budget → untouched (no ellipsis).
+        let mut conversation = vec![LlmMessage::text("user", "short")];
+        mw.before_run(&mut conversation, &ctx).await.unwrap();
+        assert_eq!(conversation[0].content, "short");
+
+        // Empty conversation → no panic.
+        let mut empty: Vec<LlmMessage> = vec![];
+        mw.before_run(&mut empty, &ctx).await.unwrap();
+        assert!(empty.is_empty());
+    }
+
+    fn result_with(reasoning: &str) -> AgentResult {
+        AgentResult {
+            reasoning: reasoning.to_owned(),
+            approval_requests: vec![],
+            requires_human_review: false,
+            todos: None,
+        }
+    }
+
+    fn gateway_returning(content: &str) -> Arc<adriane_llm_gateway::DefaultLlmGateway> {
+        use adriane_llm_gateway::{DefaultLlmGateway, LlmResponse, LlmUsage, MockAdapter};
+        let mut gateway = DefaultLlmGateway::new();
+        gateway.register_adapter(Box::new(MockAdapter::new(
+            LlmProvider::Anthropic,
+            vec![LlmResponse {
+                content: content.to_owned(),
+                tool_calls: None,
+                stop_reason: Some("end_turn".to_owned()),
+                usage: LlmUsage::default(),
+                model: "m".to_owned(),
+                provider: LlmProvider::Anthropic,
+            }],
+        )));
+        Arc::new(gateway)
+    }
+
+    #[tokio::test]
+    async fn reflection_middleware_annotates_a_weak_result_without_forcing_suspend() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        // A rejecting structured critique (score 0.2 < 0.8) → annotate the reasoning with the
+        // issue, but DO NOT set requires_human_review (that would re-suspend forever on resume).
+        let mw = ReflectionMiddleware::new(
+            gateway_returning(r#"{"ok": false, "score": 0.2, "issues": ["weak intro"]}"#),
+            LlmProvider::Anthropic,
+            "m",
+            0.8,
+        );
+        let mut result = result_with("the agent's answer");
+        mw.after_run(&mut result, &ctx).await.unwrap();
+        assert!(!result.requires_human_review);
+        assert!(result.reasoning.contains("reflection:needs_review"));
+        assert!(result.reasoning.contains("weak intro"));
+    }
+
+    #[tokio::test]
+    async fn reflection_middleware_leaves_an_accepted_result_untouched() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        let mw = ReflectionMiddleware::new(
+            gateway_returning(r#"{"ok": true, "score": 0.95, "issues": []}"#),
+            LlmProvider::Anthropic,
+            "m",
+            0.8,
+        );
+        let mut result = result_with("a solid answer");
+        mw.after_run(&mut result, &ctx).await.unwrap();
+        assert!(!result.requires_human_review);
+        assert_eq!(result.reasoning, "a solid answer");
+    }
+
+    #[tokio::test]
+    async fn reflection_middleware_is_fail_open_on_a_critique_error() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        // A gateway with no adapter registered → the critique call errors → fail-open: the
+        // result is returned unchanged rather than failing the run.
+        let gateway = Arc::new(adriane_llm_gateway::DefaultLlmGateway::new());
+        let mw = ReflectionMiddleware::new(gateway, LlmProvider::Anthropic, "m", 0.8);
+        let mut result = result_with("an answer");
+        mw.after_run(&mut result, &ctx).await.unwrap();
+        assert!(!result.requires_human_review);
+        assert_eq!(result.reasoning, "an answer");
     }
 }

@@ -225,7 +225,11 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
           outputStyle: rustConfig.outputStyle,
           contextBudget: rustConfig.contextBudget,
           todosChannel: rustConfig.todosChannel,
-          enableFs: rustConfig.enableFs
+          enableFs: rustConfig.enableFs,
+          // ADR 0025 phase 3d — the resolved efficiency middleware list (profile + explicit
+          // middleware + flat knobs, already desugared) so the catalog/Studio path reaches
+          // the bridge with the same stack as the in-process builder.
+          resolvedMiddleware: rustConfig.resolvedMiddleware
         }
       }
     });

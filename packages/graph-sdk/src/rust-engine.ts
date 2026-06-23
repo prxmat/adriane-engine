@@ -5,7 +5,7 @@ import type { RunEvent } from "@adriane-ai/graph-runtime";
 
 import type { ModelTier } from "@adriane-ai/llm-gateway";
 
-import type { FsPolicyRule, RustAgentConfig } from "./agent-node.js";
+import type { EfficiencyMiddlewareSpec, FsPolicyRule, RustAgentConfig } from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
 import type { ChannelValues, TypedGraphState } from "./typed.js";
 
@@ -168,6 +168,8 @@ type AgentSpecWire = {
   todosChannel?: string;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
+  /** ADR 0025 phase 3d — the SDK-resolved efficiency middleware list (→ Rust `resolvedMiddleware`). */
+  resolvedMiddleware?: EfficiencyMiddlewareSpec[];
 };
 
 /**
@@ -351,7 +353,8 @@ export class RustGraphRunner<TState extends ChannelValues> {
         outputStyle: config.outputStyle,
         contextBudget: config.contextBudget,
         todosChannel: config.todosChannel,
-        enableFs: config.enableFs
+        enableFs: config.enableFs,
+        resolvedMiddleware: config.resolvedMiddleware
       };
     }
     return out;
