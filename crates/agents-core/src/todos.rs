@@ -113,6 +113,7 @@ pub fn write_todos_tool() -> (ToolDefinition, ToolHandler) {
             "required": ["todos"],
             "additionalProperties": false
         })),
+        content_scoped: false,
     };
     let handler = sync_tool(|input| {
         let todos = normalize_todos(&input);

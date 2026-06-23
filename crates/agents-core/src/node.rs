@@ -199,6 +199,7 @@ mod tests {
                 description: "Issues a refund.".to_owned(),
                 requires_approval: true,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             sync_tool(move |_input| {
                 counter.fetch_add(1, Ordering::SeqCst);

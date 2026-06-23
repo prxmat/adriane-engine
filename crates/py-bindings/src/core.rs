@@ -212,6 +212,7 @@ pub fn run_prebuilt(
                 description: format!("Tool '{tool_name}'."),
                 requires_approval,
                 input_schema: Some(json!({ "type": "object" })),
+                content_scoped: false,
             },
             // Deterministic no-op tool so the agent loop can observe a result.
             adriane_agents_core::sync_tool({

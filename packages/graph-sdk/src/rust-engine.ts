@@ -190,6 +190,12 @@ export type ApprovedToolWire = {
   name: string;
   requestedBy: string;
   resolvedBy: string;
+  /**
+   * Content-scoped grant key (ADR 0024 phase 2c): `"<name>#<sha256(input)>"` for a
+   * guarded fs write, pinning the grant to the exact call. When set, the engine writes
+   * THIS key (not the bare name) into `__approvedTools`. Omitted for a name-only grant.
+   */
+  key?: string;
 };
 
 /** The `EngineSpec` shape the Rust bridge deserializes (camelCase). */
@@ -226,7 +232,12 @@ type EngineSpecWire = {
 type RunOutcomeWire = {
   state: GraphState;
   status: string;
-  pendingApprovals: { subject: string; reason: string }[];
+  /**
+   * Pending approvals when suspended. For a content-scoped guarded fs write (ADR 0024
+   * phase 2c) the item also carries `approvalKey` (the composite grant to send back on
+   * approve) + `input` (the path/content, so a reviewer sees what is approved).
+   */
+  pendingApprovals: { subject: string; reason: string; approvalKey?: string; input?: unknown }[];
 };
 
 /** Payload the Rust `on_node` seam sends for a JS node handler or a JS tool. */
