@@ -26,6 +26,7 @@ import {
   toRustAgentConfig,
   type AgentApprovalBinding,
   type AgentNodeConfig,
+  type FsPolicyRule,
   type RustAgentConfig,
   type TaskNodeConfig,
   type ToolNodeConfig
@@ -101,6 +102,8 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
   private readonly componentConfigs = new Map<string, RustComponentConfig>();
   /** Child graphs registered as `subgraph` nodes, keyed by their (global) graph id. */
   private readonly subgraphDefs = new Map<string, GraphDefinition>();
+  /** Per-path filesystem permission rules (ADR 0024 phase 2b), applied run-wide. */
+  private readonly fsPolicyRules: FsPolicyRule[] = [];
   private entryNodeId: string | undefined;
 
   public constructor(options: CreateGraphOptions) {
@@ -509,6 +512,24 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
     };
   }
 
+  /**
+   * Declare per-path filesystem permission rules (ADR 0024 phase 2b) applied run-wide
+   * to every agent created with `enableFs: true`. Verbs: `deny|read|write|gate`;
+   * resolution is most-specific-glob-wins, fail-closed — an unmatched path resolves to
+   * `read`, so writes need an explicit `write` rule (`gate` is enforced from phase 2c).
+   * Repeated calls append. `*` matches within a path segment, `**` across segments.
+   *
+   * ```ts
+   * createGraph({ name: "deep" })
+   *   .fsPolicy([{ glob: "scratch/**", verb: "write" }, { glob: "secret/**", verb: "deny" }])
+   *   .agentNode("worker", { llm, prompt: { system: "..." }, enableFs: true });
+   * ```
+   */
+  public fsPolicy(rules: FsPolicyRule[]): this {
+    this.fsPolicyRules.push(...rules);
+    return this;
+  }
+
   /** Validate and compile, returning a {@link Result} instead of throwing. */
   public safeCompile(): Result<CompiledGraph<TState>, GraphCompileError> {
     const definition = this.buildDefinition();
@@ -531,7 +552,8 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
         agentConfigs: this.agentConfigs,
         agentApprovals: this.agentApprovals,
         componentConfigs: this.componentConfigs,
-        subgraphs
+        subgraphs,
+        fsPolicy: this.fsPolicyRules
       })
     };
   }
