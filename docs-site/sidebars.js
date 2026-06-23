@@ -140,6 +140,7 @@ const sidebars = {
       label: "Cookbook",
       items: [
         "recipes/governed-refund-agent",
+        "recipes/react-planner-critic",
         "recipes/idea-to-ship-pipeline",
         "recipes/rag-question-answerer",
         "recipes/resume-across-processes",
