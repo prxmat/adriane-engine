@@ -30,7 +30,7 @@ use adriane_agents_core::{
     ToolDefinition, APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
-use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
+use adriane_artifact_store::{ArtifactId, ArtifactStore, InMemoryArtifactStore};
 use adriane_components::ComponentRegistry;
 use adriane_fs_backend::{
     ArtifactFsBackend, FilesystemBackend, FsWriteCtx, HttpFilesystemBackend, PathRule,
@@ -43,9 +43,11 @@ use adriane_graph_runtime::{
 };
 use adriane_llm_gateway::{
     AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort, HttpGeminiPort,
-    HttpPiiRedactor, HttpPromptCompressor, LlmProvider, LlmResponse, LlmToolCall, LlmUsage,
-    MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter,
+    HttpPiiRedactor, HttpPromptCompressor, LlmError, LlmProvider, LlmResponse, LlmToolCall,
+    LlmUsage, MediaResolver, MediaSource, MockAdapter, ModelChoice, ModelPolicy,
+    OpenAiCompatibleAdapter,
 };
+use async_trait::async_trait;
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::{json, Value};
@@ -610,7 +612,7 @@ fn build_react_agent(
     // ADR 0025 phase 3b: the gateway is now the BARE provider router; PII redaction +
     // prompt compression are agent middleware on the stack (built below), not gateway
     // wrappers. The RedactingGateway/CompressingGateway structs remain for non-agent callers.
-    let gateway = build_gateway(agent_spec, &resolved, &spec.provider_keys);
+    let gateway = build_gateway(agent_spec, &resolved, &spec.provider_keys, Some(fs_store));
 
     let approval_tools: HashSet<&str> = agent_spec
         .approval_tool_names
@@ -680,6 +682,10 @@ fn build_react_agent(
     }
     if let Some(max) = agent_spec.max_iterations {
         agent = agent.with_max_iterations(max as usize);
+    }
+    // ADR 0030 9e: bind the multimodal input channel so the seed message carries media blocks.
+    if let Some(channel) = &agent_spec.input_blocks_channel {
+        agent = agent.with_input_blocks_channel(channel.clone());
     }
     // ADR 0025: install the middleware stack — governed (env-injected redaction) + the
     // SDK-resolved efficiency list (compress / terse / context-budget / reflection). The
@@ -812,10 +818,52 @@ fn resolve_agent_model(agent_spec: &AgentSpec) -> ModelChoice {
 /// The resolved model (when non-empty) is threaded in as the adapter's default model.
 /// If the chosen real provider's credentials are not actually present in env, the
 /// build falls back to the mock so a run still completes deterministically offline.
+/// ADR 0030 9c: resolves a multimodal `Artifact` media reference to inline base64 by reading
+/// the run-scoped artifact store. The artifact's `content` is expected to be a base64 string;
+/// the block's own `media_type` is authoritative (the store's `ArtifactMediaType` enum is a
+/// closed text/json/octet-stream set). `Base64`/`Url` sources pass through unchanged.
+struct ArtifactMediaResolver {
+    store: Arc<dyn ArtifactStore>,
+}
+
+#[async_trait]
+impl MediaResolver for ArtifactMediaResolver {
+    async fn resolve(&self, source: &MediaSource) -> Result<MediaSource, LlmError> {
+        let MediaSource::Artifact {
+            artifact_id,
+            version,
+            media_type,
+        } = source
+        else {
+            return Ok(source.clone());
+        };
+        let id = ArtifactId(artifact_id.clone());
+        let artifact = match version {
+            Some(v) => self.store.read_version(&id, *v as i64).await,
+            None => self.store.read(&id).await,
+        }
+        .ok_or_else(|| LlmError::MediaResolution(format!("artifact '{artifact_id}' not found")))?;
+        let data = artifact
+            .content
+            .as_str()
+            .ok_or_else(|| {
+                LlmError::MediaResolution(format!(
+                    "artifact '{artifact_id}' content is not a base64 string"
+                ))
+            })?
+            .to_owned();
+        Ok(MediaSource::Base64 {
+            media_type: media_type.clone(),
+            data,
+        })
+    }
+}
+
 fn build_gateway(
     agent_spec: &AgentSpec,
     resolved: &ModelChoice,
     keys: &BTreeMap<String, String>,
+    fs_store: Option<&Arc<dyn ArtifactStore>>,
 ) -> Arc<DefaultLlmGateway> {
     let mut gateway = DefaultLlmGateway::new();
 
@@ -917,6 +965,14 @@ fn build_gateway(
         gateway.register_adapter(Box::new(mock_adapter(agent_spec, resolved.provider)));
     }
 
+    // ADR 0030 9c: bind the artifact-backed media resolver so multimodal `Artifact` refs are
+    // resolved to bytes at the gateway boundary (the run-scoped store the fs also uses).
+    let gateway = match fs_store {
+        Some(store) => gateway.with_media_resolver(Arc::new(ArtifactMediaResolver {
+            store: store.clone(),
+        })),
+        None => gateway,
+    };
     Arc::new(gateway)
 }
 
@@ -950,6 +1006,7 @@ fn tool_use(name: &str, provider: LlmProvider) -> LlmResponse {
         usage: LlmUsage::default(),
         model: "mock".to_owned(),
         provider,
+        content_blocks: None,
     }
 }
 
@@ -961,6 +1018,7 @@ fn final_text(answer: &str, provider: LlmProvider) -> LlmResponse {
         usage: LlmUsage::default(),
         model: "mock".to_owned(),
         provider,
+        content_blocks: None,
     }
 }
 
@@ -1130,6 +1188,55 @@ mod tests {
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[tokio::test]
+    async fn artifact_media_resolver_resolves_a_ref_to_inline_base64() {
+        use adriane_artifact_store::{ArtifactMediaType, ArtifactWriteInput};
+        use adriane_graph_core::{NodeId, RunId};
+
+        let store: Arc<dyn ArtifactStore> = Arc::new(InMemoryArtifactStore::new());
+        let written = store
+            .write(ArtifactWriteInput {
+                run_id: RunId("run-1".to_owned()),
+                node_id: NodeId::from("n1".to_owned()),
+                name: "photo".to_owned(),
+                media_type: ArtifactMediaType::ApplicationOctetStream,
+                content: json!("BASE64BYTES"),
+                metadata: None,
+            })
+            .await;
+
+        let resolver = ArtifactMediaResolver {
+            store: store.clone(),
+        };
+        // An Artifact ref resolves to inline base64, keeping the block's own media type.
+        let resolved = resolver
+            .resolve(&MediaSource::Artifact {
+                artifact_id: written.id.0.clone(),
+                version: None,
+                media_type: "image/png".to_owned(),
+            })
+            .await
+            .unwrap();
+        match resolved {
+            MediaSource::Base64 { media_type, data } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(data, "BASE64BYTES");
+            }
+            other => panic!("expected base64, got {other:?}"),
+        }
+
+        // A missing artifact fails closed.
+        let err = resolver
+            .resolve(&MediaSource::Artifact {
+                artifact_id: "nope".to_owned(),
+                version: None,
+                media_type: "image/png".to_owned(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::MediaResolution(_)));
+    }
+
     fn replace_channel() -> ChannelDefinition {
         ChannelDefinition {
             channel_type: "json".to_owned(),
@@ -1205,12 +1312,14 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
 
         let gateway = build_gateway(
             &agent_spec,
             &resolve_agent_model(&agent_spec),
             &BTreeMap::new(),
+            None,
         );
         let mut registry = InMemoryToolRegistry::new();
         registry.register(
@@ -1350,11 +1459,13 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
         let gateway = build_gateway(
             &agent_spec,
             &resolve_agent_model(&agent_spec),
             &BTreeMap::new(),
+            None,
         );
 
         let mut registry = InMemoryToolRegistry::new();
@@ -1509,6 +1620,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1560,6 +1672,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1568,7 +1681,7 @@ mod tests {
 
         // The gateway registers a real adapter (not the mock) for the resolved
         // Mistral provider, since MISTRAL_API_KEY is present.
-        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new());
+        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new(), None);
         assert!(Arc::strong_count(&gateway) >= 1);
 
         // Restore env so other tests see a pristine environment.
@@ -1618,6 +1731,7 @@ mod tests {
             todos_channel: None,
             enable_fs: false,
             resolved_middleware: vec![],
+            input_blocks_channel: None,
         };
 
         let resolved = resolve_agent_model(&agent_spec);
@@ -1627,7 +1741,7 @@ mod tests {
             "no keys + tier should resolve to Mock"
         );
 
-        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new());
+        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new(), None);
         let mut registry = InMemoryToolRegistry::new();
         registry.register(
             ToolDefinition {

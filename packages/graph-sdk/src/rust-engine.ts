@@ -173,6 +173,8 @@ type AgentSpecWire = {
   contextBudget?: number;
   /** ADR 0022/0023 — durable channel the `writeTodos` list is persisted into (→ Rust `todosChannel`). */
   todosChannel?: string;
+  /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks (→ Rust `inputBlocksChannel`). */
+  inputBlocksChannel?: string;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /** ADR 0025 phase 3d — the SDK-resolved efficiency middleware list (→ Rust `resolvedMiddleware`). */
@@ -368,6 +370,7 @@ export class RustGraphRunner<TState extends ChannelValues> {
       outputStyle: config.outputStyle,
       contextBudget: config.contextBudget,
       todosChannel: config.todosChannel,
+      inputBlocksChannel: config.inputBlocksChannel,
       enableFs: config.enableFs,
       resolvedMiddleware: config.resolvedMiddleware
     };

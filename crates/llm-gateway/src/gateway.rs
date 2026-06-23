@@ -2,10 +2,12 @@
 //! only seam onto real provider SDKs (a real adapter lands later behind this trait).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::error::LlmError;
+use crate::media_resolver::{resolve_request_media, MediaResolver};
 use crate::types::{LlmProvider, LlmRequest, LlmResponse};
 
 #[async_trait]
@@ -22,6 +24,10 @@ pub trait LlmGateway: Send + Sync {
 #[derive(Default)]
 pub struct DefaultLlmGateway {
     adapters: HashMap<LlmProvider, Box<dyn LlmProviderAdapter>>,
+    /// ADR 0030 9c: resolves multimodal `Artifact` references to inline bytes at the boundary,
+    /// before the adapter runs. `None` → no resolution (artifact refs reach adapters as-is and
+    /// are skipped there; base64/url already work).
+    media_resolver: Option<Arc<dyn MediaResolver>>,
 }
 
 impl DefaultLlmGateway {
@@ -32,11 +38,22 @@ impl DefaultLlmGateway {
     pub fn register_adapter(&mut self, adapter: Box<dyn LlmProviderAdapter>) {
         self.adapters.insert(adapter.provider(), adapter);
     }
+
+    /// Install the media resolver (ADR 0030 9c) used to resolve `Artifact` media references.
+    pub fn with_media_resolver(mut self, resolver: Arc<dyn MediaResolver>) -> Self {
+        self.media_resolver = Some(resolver);
+        self
+    }
 }
 
 #[async_trait]
 impl LlmGateway for DefaultLlmGateway {
-    async fn complete(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+    async fn complete(&self, mut request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        // ADR 0030 9c: resolve any Artifact media references to inline bytes before dispatch,
+        // so the adapter only ever sees base64/url (and oversized inline media is rejected).
+        if let Some(resolver) = &self.media_resolver {
+            resolve_request_media(&mut request, resolver.as_ref()).await?;
+        }
         let adapter = self
             .adapters
             .get(&request.provider)
@@ -59,6 +76,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 

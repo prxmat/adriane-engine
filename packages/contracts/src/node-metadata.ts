@@ -43,6 +43,8 @@ export const AgentNodeMetadataSchema = z.object({
   contextBudget: z.number().int().min(1).optional(),
   /** ADR 0022/0023 — durable channel the agent's `writeTodos` list is persisted into. */
   todosChannel: z.string().min(1).optional(),
+  /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks. */
+  inputBlocksChannel: z.string().min(1).optional(),
   /** ADR 0024 phase 2c/2d — opt this agent into the governed virtual filesystem tools. */
   enableFs: z.boolean().optional(),
   /**

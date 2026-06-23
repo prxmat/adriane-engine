@@ -74,6 +74,12 @@ pub struct AgentSpec {
     /// runtime enforcer), never honoured. Default empty.
     #[serde(default)]
     pub resolved_middleware: Vec<MiddlewareSpec>,
+    /// Channel carrying this run's multimodal input blocks (ADR 0030 phase 9e): a
+    /// `Vec<ContentBlock>` value. When set, the agent's seed message becomes multimodal
+    /// (text Input/State digest + the media blocks) and the channel is excluded from the
+    /// stringified State. `None` = text-only seed (default).
+    #[serde(default)]
+    pub input_blocks_channel: Option<String>,
 }
 
 /// One entry of [`AgentSpec::resolved_middleware`]: an EFFICIENCY middleware the bridge

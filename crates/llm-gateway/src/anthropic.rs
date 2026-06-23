@@ -28,7 +28,10 @@ use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
 use crate::gateway::LlmProviderAdapter;
-use crate::types::{LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat};
+use crate::types::{
+    ContentBlock, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, MediaSource,
+    ResponseFormat,
+};
 
 /// Model used when the request does not name a Claude model.
 pub const DEFAULT_MODEL: &str = "claude-opus-4-8";
@@ -104,7 +107,7 @@ pub struct AnthropicCreateParams {
 /// One content block of the raw Messages API response. Only the fields the
 /// adapter reads; everything is optional except the discriminant.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-pub struct ContentBlock {
+pub struct AnthropicContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     #[serde(default)]
@@ -131,7 +134,7 @@ pub struct AnthropicUsage {
 /// Deserializes straight from Anthropic's wire JSON (snake_case).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct AnthropicRawResponse {
-    pub content: Vec<ContentBlock>,
+    pub content: Vec<AnthropicContentBlock>,
     #[serde(default)]
     pub stop_reason: Option<String>,
     pub usage: AnthropicUsage,
@@ -227,6 +230,13 @@ impl AnthropicAdapter {
                     return AnthropicMessage {
                         role,
                         content: Value::Array(blocks),
+                    };
+                }
+                // ADR 0030: multimodal — content blocks become an Anthropic content array.
+                if let Some(content_blocks) = &m.content_blocks {
+                    return AnthropicMessage {
+                        role,
+                        content: Value::Array(anthropic_content_blocks(content_blocks)),
                     };
                 }
                 AnthropicMessage {
@@ -355,6 +365,7 @@ fn to_response(request: &LlmRequest, model: String, raw: AnthropicRawResponse) -
         },
         model,
         provider: request.provider,
+        content_blocks: None,
     }
 }
 
@@ -404,6 +415,35 @@ impl HttpAnthropicPort {
 /// `"cache_control": {"type": "ephemeral"}` on that block; tool `input_schema`
 /// is emitted with `"type": "object"` merged in (schema keys win), exactly like
 /// the TS port.
+/// ADR 0030: map content blocks to Anthropic content blocks. Image → `image` block,
+/// File → `document` block (base64 or url source). Audio is unsupported by Anthropic
+/// messages and is skipped; an unresolved Artifact source yields no block.
+fn anthropic_content_blocks(blocks: &[ContentBlock]) -> Vec<Value> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(json!({ "type": "text", "text": text })),
+            ContentBlock::Image { source } => {
+                anthropic_source(source).map(|s| json!({ "type": "image", "source": s }))
+            }
+            ContentBlock::File { source } => {
+                anthropic_source(source).map(|s| json!({ "type": "document", "source": s }))
+            }
+            ContentBlock::Audio { .. } => None,
+        })
+        .collect()
+}
+
+fn anthropic_source(source: &MediaSource) -> Option<Value> {
+    if let Some((media_type, data)) = source.as_base64() {
+        Some(json!({ "type": "base64", "media_type": media_type, "data": data }))
+    } else if let MediaSource::Url { url, .. } = source {
+        Some(json!({ "type": "url", "url": url }))
+    } else {
+        None // unresolved artifact — resolved upstream by the gateway (ADR 0030 9c)
+    }
+}
+
 pub fn build_request_body(params: &AnthropicCreateParams) -> Value {
     let mut body = Map::new();
     body.insert("model".to_owned(), json!(params.model));
@@ -555,10 +595,10 @@ mod tests {
 
     fn text_response() -> AnthropicRawResponse {
         AnthropicRawResponse {
-            content: vec![ContentBlock {
+            content: vec![AnthropicContentBlock {
                 block_type: "text".to_owned(),
                 text: Some("hello".to_owned()),
-                ..ContentBlock::default()
+                ..AnthropicContentBlock::default()
             }],
             stop_reason: None,
             usage: AnthropicUsage {
@@ -650,6 +690,44 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "Out");
         assert!(tools[0].cacheable, "the only tool carries the breakpoint");
+    }
+
+    #[tokio::test]
+    async fn image_content_block_maps_to_an_anthropic_image_block() {
+        // ADR 0030: content blocks → an Anthropic content array (image source base64).
+        let (port, calls) = recording_port(text_response());
+        let adapter = AnthropicAdapter::new(port);
+        let request = LlmRequest {
+            messages: vec![LlmMessage::with_blocks(
+                "user",
+                vec![
+                    ContentBlock::Text {
+                        text: "describe".to_owned(),
+                    },
+                    ContentBlock::Image {
+                        source: MediaSource::Base64 {
+                            media_type: "image/png".to_owned(),
+                            data: "AAAA".to_owned(),
+                        },
+                    },
+                ],
+            )],
+            ..base_request()
+        };
+        adapter.complete(request).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        let msg = calls[0]
+            .messages
+            .iter()
+            .find(|m| m.content.is_array())
+            .unwrap();
+        let blocks = msg.content.as_array().unwrap();
+        assert_eq!(blocks[0], json!({ "type": "text", "text": "describe" }));
+        assert_eq!(blocks[1]["type"], json!("image"));
+        assert_eq!(blocks[1]["source"]["type"], json!("base64"));
+        assert_eq!(blocks[1]["source"]["media_type"], json!("image/png"));
+        assert_eq!(blocks[1]["source"]["data"], json!("AAAA"));
     }
 
     #[tokio::test]
@@ -790,17 +868,17 @@ mod tests {
         let (port, _calls) = recording_port(AnthropicRawResponse {
             stop_reason: Some("tool_use".to_owned()),
             content: vec![
-                ContentBlock {
+                AnthropicContentBlock {
                     block_type: "text".to_owned(),
                     text: Some("Let me search.".to_owned()),
-                    ..ContentBlock::default()
+                    ..AnthropicContentBlock::default()
                 },
-                ContentBlock {
+                AnthropicContentBlock {
                     block_type: "tool_use".to_owned(),
                     id: Some("tu_1".to_owned()),
                     name: Some("search".to_owned()),
                     input: Some(json!({ "query": "adriane" })),
-                    ..ContentBlock::default()
+                    ..AnthropicContentBlock::default()
                 },
             ],
             ..text_response()

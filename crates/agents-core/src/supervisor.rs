@@ -203,6 +203,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 

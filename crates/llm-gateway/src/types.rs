@@ -36,6 +36,12 @@ pub struct LlmMessage {
     /// by function name, not by id, so the result must carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// Multimodal content blocks (ADR 0030 phase 9). Additive + optional: when `None` the
+    /// message is plain `content` text and serializes byte-identically to before. When set,
+    /// the adapters fan it out to each provider's content-array wire form. `content` stays
+    /// the text fallback (and the text part for providers that take a leading text block).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<ContentBlock>>,
 }
 
 impl LlmMessage {
@@ -47,6 +53,106 @@ impl LlmMessage {
             tool_calls: None,
             tool_call_id: None,
             tool_name: None,
+            content_blocks: None,
+        }
+    }
+
+    /// A multimodal message (ADR 0030): role + content blocks. `content` keeps a plain-text
+    /// digest of the text blocks (the fallback for any text-only consumer / redaction).
+    pub fn with_blocks(role: impl Into<String>, blocks: Vec<ContentBlock>) -> Self {
+        let content = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        LlmMessage {
+            role: role.into(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            content_blocks: Some(blocks),
+        }
+    }
+}
+
+/// One multimodal content block (ADR 0030 phase 9). A tagged enum on the wire
+/// (`{ "type": "text", "text": … }` / `{ "type": "image", "source": … }` / …), mirroring the
+/// provider content-array convention and the TS `LLMContentBlock` union.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ContentBlock {
+    Text { text: String },
+    Image { source: MediaSource },
+    Audio { source: MediaSource },
+    File { source: MediaSource },
+}
+
+/// How a non-text block carries its payload (ADR 0030 D1/D5). **Default = `Artifact`**
+/// (a small, stable pointer resolved to bytes just-in-time at the gateway boundary, so
+/// checkpoints/events stay small + replay-stable). `Url` must be stable / content-addressed
+/// (a volatile signed URL would break replay). `Base64` is the inline escape hatch — keep it
+/// size-capped (the gateway/caller spills large media to the artifact store).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum MediaSource {
+    Artifact {
+        artifact_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<u32>,
+        media_type: String,
+    },
+    Url {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+    },
+    Base64 {
+        media_type: String,
+        data: String,
+    },
+}
+
+impl MediaSource {
+    /// The declared media type (`image/png`, `audio/mpeg`, …), if known.
+    pub fn media_type(&self) -> Option<&str> {
+        match self {
+            MediaSource::Artifact { media_type, .. } => Some(media_type),
+            MediaSource::Base64 { media_type, .. } => Some(media_type),
+            MediaSource::Url { media_type, .. } => media_type.as_deref(),
+        }
+    }
+
+    /// `(media_type, base64_data)` when the bytes are inline. `None` for `Url` and for an
+    /// unresolved `Artifact` (the gateway resolves artifacts to `Base64`/`Url` before the
+    /// adapter runs — see ADR 0030 9c).
+    pub fn as_base64(&self) -> Option<(&str, &str)> {
+        match self {
+            MediaSource::Base64 { media_type, data } => Some((media_type, data)),
+            _ => None,
+        }
+    }
+
+    /// A value usable as a provider URL field: a `data:<mime>;base64,<data>` URI for inline
+    /// bytes, or the `Url` verbatim. `None` for an unresolved `Artifact`.
+    pub fn as_url_or_data_uri(&self) -> Option<String> {
+        match self {
+            MediaSource::Base64 { media_type, data } => {
+                Some(format!("data:{media_type};base64,{data}"))
+            }
+            MediaSource::Url { url, .. } => Some(url.clone()),
+            MediaSource::Artifact { .. } => None,
         }
     }
 }
@@ -128,10 +234,99 @@ pub struct LlmResponse {
     pub usage: LlmUsage,
     pub model: String,
     pub provider: LlmProvider,
+    /// Multimodal output blocks (ADR 0030 phase 9). Additive + optional: populated where a
+    /// chat API returns inline media (e.g. Gemini inline images); `None` for text-only
+    /// responses, which serialize byte-identically to before. Media *generation* on
+    /// OpenAI/Anthropic is a separate provider API (a named future seam), not this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<ContentBlock>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LlmStreamChunk {
     pub delta: String,
     pub done: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn text_only_message_omits_content_blocks_on_the_wire() {
+        // ADR 0030 back-compat: a `::text` message serializes byte-identically to before —
+        // the new `contentBlocks` field is absent when None.
+        let value = serde_json::to_value(LlmMessage::text("user", "hi")).unwrap();
+        assert_eq!(value, json!({ "role": "user", "content": "hi" }));
+        assert!(value.get("contentBlocks").is_none());
+    }
+
+    #[test]
+    fn with_blocks_carries_blocks_and_a_text_digest() {
+        let msg = LlmMessage::with_blocks(
+            "user",
+            vec![
+                ContentBlock::Text {
+                    text: "what is this?".to_owned(),
+                },
+                ContentBlock::Image {
+                    source: MediaSource::Base64 {
+                        media_type: "image/png".to_owned(),
+                        data: "AAAA".to_owned(),
+                    },
+                },
+            ],
+        );
+        // `content` keeps a text digest (fallback for text-only consumers / redaction).
+        assert_eq!(msg.content, "what is this?");
+        assert_eq!(msg.content_blocks.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn content_block_and_media_source_serde_tags() {
+        let block = ContentBlock::Image {
+            source: MediaSource::Artifact {
+                artifact_id: "a1".to_owned(),
+                version: Some(3),
+                media_type: "image/jpeg".to_owned(),
+            },
+        };
+        let value = serde_json::to_value(&block).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "type": "image",
+                "source": { "kind": "artifact", "artifactId": "a1", "version": 3, "mediaType": "image/jpeg" }
+            })
+        );
+        // Round-trips.
+        let back: ContentBlock = serde_json::from_value(value).unwrap();
+        assert_eq!(back, block);
+    }
+
+    #[test]
+    fn url_source_omits_optional_media_type() {
+        let value = serde_json::to_value(MediaSource::Url {
+            url: "https://cdn/x.png".to_owned(),
+            media_type: None,
+        })
+        .unwrap();
+        assert_eq!(value, json!({ "kind": "url", "url": "https://cdn/x.png" }));
+    }
+
+    #[test]
+    fn text_only_response_omits_content_blocks() {
+        let resp = LlmResponse {
+            content: "ok".to_owned(),
+            tool_calls: None,
+            stop_reason: None,
+            usage: LlmUsage::default(),
+            model: "m".to_owned(),
+            provider: LlmProvider::Anthropic,
+            content_blocks: None,
+        };
+        let value = serde_json::to_value(&resp).unwrap();
+        assert!(value.get("contentBlocks").is_none());
+    }
 }

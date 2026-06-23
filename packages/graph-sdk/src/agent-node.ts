@@ -101,6 +101,15 @@ export type AgentNodeConfig = {
    */
   todosChannel?: string;
   /**
+   * Channel carrying this run's multimodal input (ADR 0030 phase 9e): a `ContentBlock[]`
+   * value (`{ type: "image" | "audio" | "file", source }` + optional `{ type: "text" }`).
+   * When set, the agent's seed message becomes multimodal — a text Input/State digest plus
+   * the media blocks — and this channel is excluded from the stringified State (so binary
+   * bytes are never re-fed as text). Seed the channel via the run's `initialData`. Default:
+   * text-only seed.
+   */
+  inputBlocksChannel?: string;
+  /**
    * Opt this agent into the governed virtual filesystem tools (ADR 0024 phase 2b):
    * `read_file`/`ls`/`glob`/`grep`/`write_file`/`edit_file`/`delete_file`/`move_file`,
    * run-scoped over a versioned artifact store and enforced by the graph's
@@ -304,6 +313,8 @@ export type RustAgentConfig = {
   contextBudget?: number;
   /** ADR 0022/0023 — durable channel the `writeTodos` list is persisted into. */
   todosChannel?: string;
+  /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks. */
+  inputBlocksChannel?: string;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /**
@@ -491,6 +502,7 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
     outputStyle: config.outputStyle,
     contextBudget: config.contextBudget,
     todosChannel: config.todosChannel,
+    inputBlocksChannel: config.inputBlocksChannel,
     enableFs: config.enableFs ?? profile?.enableFs,
     resolvedMiddleware: resolveMiddleware(config),
     toolBindings: toolBindingsOf(config.tools),

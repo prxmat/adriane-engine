@@ -66,6 +66,8 @@ export type AgentCarrier = {
   contextBudget?: number;
   /** ADR 0022/0023 — durable channel the agent's `writeTodos` list is persisted into. */
   todosChannel?: string;
+  /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks. */
+  inputBlocksChannel?: string;
   /** ADR 0024 — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /**
@@ -183,6 +185,7 @@ const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean
   outputStyle: carrier.outputStyle,
   contextBudget: carrier.contextBudget,
   todosChannel: carrier.todosChannel,
+  inputBlocksChannel: carrier.inputBlocksChannel,
   // ADR 0024 — fs enablement carried on the persisted node; the run's fs policy is
   // supplied separately by the control plane (RunCatalogGraphOptions.fsPolicy).
   enableFs: carrier.enableFs,

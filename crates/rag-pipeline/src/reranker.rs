@@ -181,6 +181,7 @@ mod tests {
                 usage: LlmUsage::default(),
                 model: request.model,
                 provider: request.provider,
+                content_blocks: None,
             })
         }
     }

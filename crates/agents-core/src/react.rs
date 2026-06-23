@@ -8,15 +8,15 @@
 //!   its name is in `approved_tool_names`, an approval request is recorded and the
 //!   loop stops — no self-approval, ever.
 //!
-//! One adaptation: the Rust `LlmMessage` is text-only (no content blocks yet), so
-//! tool results are fed back as `observation:<json>` user messages on both paths,
-//! the way the TS text protocol does.
+//! One adaptation: tool results are fed back as `observation:<json>` user messages on
+//! both paths, the way the TS text protocol does. The seed user message may be multimodal
+//! when an `input_blocks_channel` is bound (ADR 0030 phase 9e); tool-result turns stay text.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use adriane_llm_gateway::{
-    LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequest, LlmToolDef, LlmUsage,
+    ContentBlock, LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequest, LlmToolDef, LlmUsage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -111,6 +111,12 @@ pub struct ReActAgent {
     /// intrinsic (see `MiddlewareStack::before_tool`); efficiency hooks (compress, terse,
     /// context-budget trim) fold on via the stack rather than as flat agent knobs (3d).
     middleware: MiddlewareStack,
+    /// ADR 0030 phase 9 (9e): the channel whose value carries this run's multimodal input
+    /// (a `Vec<ContentBlock>`). When set and present, the seed user message becomes a
+    /// multimodal `with_blocks` message (text Input/State digest + the media blocks), and
+    /// the channel is excluded from the stringified State dump so binary bytes are not
+    /// re-fed as text. `None` → text-only seed (unchanged).
+    input_blocks_channel: Option<String>,
 }
 
 impl ReActAgent {
@@ -131,7 +137,14 @@ impl ReActAgent {
             system: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             middleware: MiddlewareStack::new(),
+            input_blocks_channel: None,
         }
+    }
+
+    /// Bind the channel carrying this run's multimodal input blocks (ADR 0030 9e).
+    pub fn with_input_blocks_channel(mut self, channel: impl Into<String>) -> Self {
+        self.input_blocks_channel = Some(channel.into());
+        self
     }
 
     /// Install the agent middleware stack (ADR 0025). Default is empty (the approval gate
@@ -186,20 +199,35 @@ impl ReActAgent {
         let mut usage = LlmUsage::default();
         let tool_defs = self.build_tool_defs();
 
+        // ADR 0030 9e: pull the run's multimodal input blocks from the bound channel (if any),
+        // and exclude that channel from the stringified State so binary bytes are not re-fed as
+        // text (and don't bloat the seed).
+        let input_blocks: Option<Vec<ContentBlock>> = self
+            .input_blocks_channel
+            .as_deref()
+            .and_then(|channel| channels.get(channel))
+            .and_then(|value| serde_json::from_value::<Vec<ContentBlock>>(value.clone()).ok());
+
         // `Value`'s Display is compact JSON — same output as `serde_json::to_string`. The
         // full state is injected; a `ContextBudgetMiddleware` (ADR 0025 phase 3d, installed
         // when the SDK requests it) trims this seed message in `before_run` if a cap is set.
         let state_value = Value::Object(
             channels
                 .iter()
+                .filter(|(key, _)| Some(key.as_str()) != self.input_blocks_channel.as_deref())
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
         );
         let state_str = state_value.to_string();
-        let mut conversation = vec![LlmMessage::text(
-            "user",
-            format!("Input: {input}\nState: {state_str}"),
-        )];
+        let seed_text = format!("Input: {input}\nState: {state_str}");
+        let mut conversation = match input_blocks {
+            Some(blocks) if !blocks.is_empty() => {
+                let mut all = vec![ContentBlock::Text { text: seed_text }];
+                all.extend(blocks);
+                vec![LlmMessage::with_blocks("user", all)]
+            }
+            _ => vec![LlmMessage::text("user", seed_text)],
+        };
 
         // ADR 0025: `before_run` — fires once before the loop (empty stack = no-op). A
         // middleware may trim the seed state or stop the run.
@@ -286,6 +314,7 @@ impl ReActAgent {
                     tool_calls: Some(tool_calls.clone()),
                     tool_call_id: None,
                     tool_name: None,
+                    content_blocks: None,
                 });
                 for call in &tool_calls {
                     let outcome = self
@@ -470,6 +499,7 @@ impl ReActAgent {
                 tool_calls: None,
                 tool_call_id: Some(id.to_owned()),
                 tool_name: Some(name.to_owned()),
+                content_blocks: None,
             }),
             None => conversation.push(LlmMessage::text("user", format!("observation:{output}"))),
         }
@@ -535,6 +565,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 
@@ -550,6 +581,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         }
     }
 
@@ -560,6 +592,92 @@ mod tests {
             responses,
         )));
         Arc::new(gateway)
+    }
+
+    /// A gateway that captures the first request, to inspect the seed message (ADR 0030 9e).
+    struct CapturingGateway {
+        last: Mutex<Option<LlmRequest>>,
+    }
+
+    #[async_trait]
+    impl LlmGateway for CapturingGateway {
+        async fn complete(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let mut slot = self.last.lock().unwrap();
+            if slot.is_none() {
+                *slot = Some(request.clone());
+            }
+            Ok(text("FINAL: ok"))
+        }
+    }
+
+    #[tokio::test]
+    async fn input_blocks_channel_builds_a_multimodal_seed_and_excludes_the_channel() {
+        let gateway = Arc::new(CapturingGateway {
+            last: Mutex::new(None),
+        });
+        let agent = ReActAgent::new("a", "", gateway.clone()).with_input_blocks_channel("__media");
+
+        let mut channels = BTreeMap::new();
+        channels.insert(
+            "__media".to_owned(),
+            json!([{ "type": "image", "source": { "kind": "base64", "mediaType": "image/png", "data": "AAAA" } }]),
+        );
+        channels.insert("topic".to_owned(), json!("cats"));
+        let approved = HashSet::new();
+
+        agent.run(&Value::Null, &channels, &approved).await.unwrap();
+
+        let req = gateway
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("a request was sent");
+        let seed = &req.messages[0];
+        let blocks = seed.content_blocks.as_ref().expect("a multimodal seed");
+        // First block = the text digest: it carries the rest of State but NOT the media channel
+        // (no re-feeding binary bytes as text).
+        match &blocks[0] {
+            ContentBlock::Text { text } => {
+                assert!(text.contains("topic"), "state still injected");
+                assert!(
+                    !text.contains("__media"),
+                    "media channel excluded from State"
+                );
+                assert!(
+                    !text.contains("AAAA"),
+                    "image bytes not stringified into the seed"
+                );
+            }
+            other => panic!("expected a leading text block, got {other:?}"),
+        }
+        // Second block = the image itself.
+        assert!(matches!(&blocks[1], ContentBlock::Image { .. }));
+    }
+
+    #[tokio::test]
+    async fn no_input_blocks_channel_keeps_a_text_only_seed() {
+        let gateway = Arc::new(CapturingGateway {
+            last: Mutex::new(None),
+        });
+        let agent = ReActAgent::new("a", "", gateway.clone());
+        let mut channels = BTreeMap::new();
+        channels.insert("topic".to_owned(), json!("cats"));
+        let approved = HashSet::new();
+
+        agent.run(&Value::Null, &channels, &approved).await.unwrap();
+
+        let req = gateway
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("a request was sent");
+        assert!(
+            req.messages[0].content_blocks.is_none(),
+            "text-only seed unchanged"
+        );
+        assert!(req.messages[0].content.contains("topic"));
     }
 
     fn counting_tool(
@@ -869,6 +987,7 @@ mod tests {
             usage: LlmUsage::default(),
             model: "mock".to_owned(),
             provider: LlmProvider::Anthropic,
+            content_blocks: None,
         };
 
         let agent = ReActAgent::new(
@@ -910,6 +1029,7 @@ mod tests {
                 usage: LlmUsage::default(),
                 model: "mock".to_owned(),
                 provider: LlmProvider::Anthropic,
+                content_blocks: None,
             }
         }
         fn guarded_agent(calls: &Arc<AtomicUsize>, responses: Vec<LlmResponse>) -> ReActAgent {
