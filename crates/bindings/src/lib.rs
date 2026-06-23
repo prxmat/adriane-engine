@@ -32,8 +32,11 @@
 mod bridge;
 mod spec;
 
+use std::collections::BTreeMap;
+
 use adriane_graph_adriane::compile_graph_yaml;
 use adriane_graph_core::{validate_graph, GraphDefinition};
+use adriane_llm_gateway::{LlmGateway, LlmRequest};
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction};
 use napi_derive::napi;
 use serde_json::Value;
@@ -68,6 +71,35 @@ pub fn compile_graph_yaml_json(yaml: String) -> napi::Result<String> {
     let definition =
         compile_graph_yaml(&yaml).map_err(|error| napi::Error::from_reason(error.to_string()))?;
     serde_json::to_string(&definition).map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// One-shot LLM completion over the Rust gateway (ADR 0031 — backs the SDK `Model.invoke()`
+/// overlay). `request_json` is a serialized `LlmRequest` (provider / model / messages / …);
+/// `provider_keys_json` is a `{ "<provider>": "<key>" }` map (may be `"{}"` → env keys, else a
+/// deterministic mock). Resolves to a serialized `LlmResponse`. The HTTP happens in Rust — no
+/// TS provider client, one engine.
+#[napi(ts_return_type = "Promise<string>")]
+pub async fn llm_complete(
+    request_json: String,
+    provider_keys_json: String,
+) -> napi::Result<String> {
+    let request: LlmRequest = serde_json::from_str(&request_json)
+        .map_err(|error| napi::Error::from_reason(format!("invalid LLM request JSON: {error}")))?;
+    let keys: BTreeMap<String, String> =
+        serde_json::from_str(&provider_keys_json).map_err(|error| {
+            napi::Error::from_reason(format!("invalid provider keys JSON: {error}"))
+        })?;
+    let model = if request.model.is_empty() {
+        None
+    } else {
+        Some(request.model.clone())
+    };
+    let gateway = bridge::build_standalone_gateway(request.provider, model, &keys);
+    let response = gateway
+        .complete(request)
+        .await
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    serde_json::to_string(&response).map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 /// Start a fresh run of a graph on the Rust engine.

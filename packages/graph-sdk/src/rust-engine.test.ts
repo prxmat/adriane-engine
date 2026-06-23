@@ -82,6 +82,25 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
     expect(agentResult).toBeDefined();
   });
 
+  it("runs an agent declared with a model overlay (no llm) on the Rust engine (ADR 0031)", async () => {
+    // ADR 0031: `model` (a ModelSpec overlay) replaces the required `llm`. The provider routes
+    // on the Rust path; with no API key it falls to the deterministic mock, so the run completes
+    // — proving the overlay threads SDK → wire → bridge without an llm gateway.
+    const app = createGraph({ name: "rust-model-overlay" })
+      .agentNode("assistant", {
+        prompt: { system: "Be brief." },
+        model: { provider: "openai", model: "gpt-4o" },
+        maxIterations: 2
+      })
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+    const result = await app.run({ question: "hi" }, { runId: "run_rust_model" as never });
+    expect(result.status).toBe("completed");
+    const agentResult = (result.channels as unknown as Record<string, AgentResult>).agentResult;
+    expect(agentResult).toBeDefined();
+  });
+
   it("threads a multimodal input channel through to the Rust engine (ADR 0030 9e)", async () => {
     // An agent bound to inputBlocksChannel reads media blocks from that channel and builds a
     // multimodal seed. The deterministic mock gateway ignores the image, so we assert the run

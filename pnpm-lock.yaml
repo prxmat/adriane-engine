@@ -197,6 +197,9 @@ importers:
 
   packages/graph-sdk:
     dependencies:
+      '@adriane-ai/model-core':
+        specifier: workspace:*
+        version: link:../model-core
       '@adriane-ai/napi':
         specifier: workspace:*
         version: link:../../crates/bindings
@@ -268,6 +271,71 @@ importers:
         version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
 
   packages/memory-store:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
+  packages/model-anthropic:
+    dependencies:
+      '@adriane-ai/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
+  packages/model-core:
+    dependencies:
+      '@adriane-ai/napi':
+        specifier: workspace:*
+        version: link:../../crates/bindings
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
+  packages/model-gemini:
+    dependencies:
+      '@adriane-ai/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
+  packages/model-mistral:
+    dependencies:
+      '@adriane-ai/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+
+  packages/model-openai:
+    dependencies:
+      '@adriane-ai/model-core':
+        specifier: workspace:*
+        version: link:../model-core
     devDependencies:
       typescript:
         specifier: ^5.8.3

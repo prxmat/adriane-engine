@@ -53,6 +53,21 @@
       "@adriane-ai/contracts": [
         "packages/contracts/src/index.ts"
       ],
+      "@adriane-ai/model-core": [
+        "packages/model-core/src/index.ts"
+      ],
+      "@adriane-ai/model-openai": [
+        "packages/model-openai/src/index.ts"
+      ],
+      "@adriane-ai/model-anthropic": [
+        "packages/model-anthropic/src/index.ts"
+      ],
+      "@adriane-ai/model-gemini": [
+        "packages/model-gemini/src/index.ts"
+      ],
+      "@adriane-ai/model-mistral": [
+        "packages/model-mistral/src/index.ts"
+      ],
       "@adriane-ai/okf": [
         "packages/okf/src/index.ts"
       ],

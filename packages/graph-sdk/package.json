@@ -39,6 +39,7 @@
     "example:docqa": "node --import tsx examples/doc-qa-reference.ts"
   },
   "dependencies": {
+    "@adriane-ai/model-core": "workspace:*",
     "@adriane-ai/napi": "workspace:*",
     "@anthropic-ai/sdk": "^0.69.0",
     "drizzle-orm": "^0.45.2",

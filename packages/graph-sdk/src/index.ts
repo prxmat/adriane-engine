@@ -288,3 +288,17 @@ export type {
 } from "@adriane-ai/llm-gateway";
 export { InMemoryToolRegistry } from "@adriane-ai/agents-core";
 export type { ToolRegistry, ToolDefinition, ToolId, AgentResult } from "@adriane-ai/agents-core";
+
+// ADR 0031: per-model provider overlays. Install a provider package for the concrete classes
+// (`@adriane-ai/model-openai`, `-anthropic`, `-gemini`, `-mistral`); these shared base types +
+// the OpenAI-compatible escape hatch are re-exported here for convenience.
+export { Model, OpenAICompatibleModel, openaiCompatible, toModelSpec, assertKnownProvider } from "@adriane-ai/model-core";
+export type {
+  ModelSpec,
+  ModelLike,
+  ProviderSlug,
+  ChatMessage,
+  ModelResponse,
+  ModelUsage,
+  InvokeOptions
+} from "@adriane-ai/model-core";
