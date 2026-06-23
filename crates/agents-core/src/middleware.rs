@@ -21,6 +21,7 @@ use adriane_llm_gateway::{
 use serde_json::Value;
 
 use crate::react::{AgentResult, ApprovalRequestItem};
+use crate::tools::approval_key;
 
 /// Control-flow signal a hook returns: continue the run, or stop it with a reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,10 +142,14 @@ pub trait AgentMiddleware: Send + Sync {
 }
 
 /// The ordered stack the loop drives. Two layers: **governed** (sealed, builder-injected
-/// — redaction, approval gate, fs policy) and **efficiency** (user-tunable — compression,
-/// terse, context-budget). Request-path hooks fold governed→efficiency; response-path
-/// hooks fold in reverse (onion semantics). The default is **empty** = a strict no-op
-/// (today's behaviour); only the builder may populate `governed`.
+/// — redaction, fs policy) and **efficiency** (user-tunable — compression, terse,
+/// context-budget). Request-path hooks fold governed→efficiency; response-path hooks fold
+/// in reverse (onion semantics). The **approval gate is intrinsic** to [`before_tool`] (ADR
+/// 0025 phase 3c) — evaluated before any installed middleware and impossible to omit, so an
+/// empty stack still gates. Apart from that gate an empty stack is a strict no-op; only the
+/// builder may populate `governed`.
+///
+/// [`before_tool`]: MiddlewareStack::before_tool
 #[derive(Default, Clone)]
 pub struct MiddlewareStack {
     governed: Vec<Arc<dyn AgentMiddleware>>,
@@ -221,7 +226,31 @@ impl MiddlewareStack {
         call: &ToolCallCtx<'_>,
         ctx: &RunCtx<'_>,
     ) -> Result<ToolControl, LlmError> {
-        // The first non-Allow decision wins (a deny/gate short-circuits execution).
+        // BUILT-IN governed approval gate (ADR 0025 phase 3c) — intrinsic to the stack,
+        // evaluated before any installed middleware and impossible to omit (an empty stack
+        // still gates). A `requires_approval` tool is gated unless this exact grant was
+        // already approved by a human. The grant key is the tool name, OR — for a
+        // content-scoped tool (a guarded fs write, ADR 0024 phase 2c) — the composite
+        // "<name>#<sha256(input)>", so approving one call never unlocks a different
+        // path/content (the over-grant guard). This is the SAME decision the ReAct loop
+        // used to make inline; folding it here makes "no self-approval" a property of the
+        // stack, not of one call site.
+        if call.requires_approval {
+            let key = approval_key(call.name, call.content_scoped, call.input);
+            if !ctx.approved_tool_names.contains(&key) {
+                return Ok(ToolControl::Gate(ApprovalRequestItem {
+                    subject: format!("tool:{}", call.name),
+                    reason: format!(
+                        "Tool '{}' requires human approval before execution.",
+                        call.name
+                    ),
+                    approval_key: call.content_scoped.then(|| key.clone()),
+                    input: call.content_scoped.then(|| call.input.clone()),
+                }));
+            }
+        }
+        // Then installed before_tool middleware (fs policy, etc.); first non-Allow wins
+        // (a deny/gate short-circuits execution).
         for middleware in self.request_order() {
             match middleware.before_tool(call, ctx).await? {
                 ToolControl::Allow {
@@ -465,5 +494,116 @@ mod tests {
                 "after:redact"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn intrinsic_approval_gate_fires_even_on_an_empty_stack() {
+        // The gate is built into the stack (ADR 0025 3c), so an EMPTY stack still gates a
+        // `requires_approval` tool — "no self-approval" is a property of the stack itself,
+        // not of any installed middleware that a caller could forget to add.
+        let stack = MiddlewareStack::new();
+        assert!(stack.is_empty());
+        let channels = BTreeMap::new();
+        let input = serde_json::json!({ "path": "/x" });
+        let call = ToolCallCtx {
+            name: "writeFile",
+            input: &input,
+            requires_approval: true,
+            content_scoped: false,
+        };
+
+        // Not granted → gated.
+        let none = HashSet::new();
+        let ctx = RunCtx {
+            iteration: 0,
+            approved_tool_names: &none,
+            channels: &channels,
+        };
+        assert!(matches!(
+            stack.before_tool(&call, &ctx).await.unwrap(),
+            ToolControl::Gate(_)
+        ));
+
+        // Granted by name → allowed.
+        let granted: HashSet<String> = ["writeFile".to_owned()].into_iter().collect();
+        let ctx = RunCtx {
+            iteration: 0,
+            approved_tool_names: &granted,
+            channels: &channels,
+        };
+        assert!(matches!(
+            stack.before_tool(&call, &ctx).await.unwrap(),
+            ToolControl::Allow {
+                input_override: None
+            }
+        ));
+
+        // A non-gated tool is always allowed.
+        let plain = ToolCallCtx {
+            name: "search",
+            input: &input,
+            requires_approval: false,
+            content_scoped: false,
+        };
+        assert!(matches!(
+            stack.before_tool(&plain, &ctx).await.unwrap(),
+            ToolControl::Allow { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn intrinsic_gate_content_scoped_pins_the_grant_to_the_exact_input() {
+        // The over-grant guard survives the fold: a content-scoped gate emits the composite
+        // "<name>#<hash>" key + echoes the input, and granting it unlocks only THAT call.
+        let stack = MiddlewareStack::new();
+        let channels = BTreeMap::new();
+        let input = serde_json::json!({ "path": "/secret", "content": "x" });
+        let call = ToolCallCtx {
+            name: "writeFile",
+            input: &input,
+            requires_approval: true,
+            content_scoped: true,
+        };
+
+        let none = HashSet::new();
+        let ctx = RunCtx {
+            iteration: 0,
+            approved_tool_names: &none,
+            channels: &channels,
+        };
+        let key = match stack.before_tool(&call, &ctx).await.unwrap() {
+            ToolControl::Gate(item) => {
+                assert_eq!(item.input.as_ref(), Some(&input));
+                item.approval_key
+                    .expect("a content-scoped gate carries the composite approval key")
+            }
+            other => panic!("expected Gate, got {other:?}"),
+        };
+        assert!(key.starts_with("writeFile#"));
+
+        // Granting that exact composite key unlocks this call …
+        let granted: HashSet<String> = [key].into_iter().collect();
+        let ctx = RunCtx {
+            iteration: 0,
+            approved_tool_names: &granted,
+            channels: &channels,
+        };
+        assert!(matches!(
+            stack.before_tool(&call, &ctx).await.unwrap(),
+            ToolControl::Allow { .. }
+        ));
+
+        // … but a different input re-gates (no over-grant across paths/contents).
+        let other_input = serde_json::json!({ "path": "/other", "content": "y" });
+        let other_call = ToolCallCtx {
+            name: "writeFile",
+            input: &other_input,
+            requires_approval: true,
+            content_scoped: true,
+        };
+        assert!(matches!(
+            stack.before_tool(&other_call, &ctx).await.unwrap(),
+            ToolControl::Gate(_)
+        ));
     }
 }
