@@ -19,6 +19,7 @@ use adriane_llm_gateway::{LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequ
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::middleware::{Flow, MiddlewareStack, RunCtx, ToolCallCtx, ToolControl};
 use crate::todos::{TodoItem, WRITE_TODOS_TOOL};
 use crate::tools::InMemoryToolRegistry;
 
@@ -95,6 +96,9 @@ pub struct ReActAgent {
     /// ADR 0014: cap (in chars) on the serialized `State` injected into the first message.
     /// `None` = inject the full state.
     context_budget: Option<usize>,
+    /// ADR 0025: the agent middleware stack the loop drives. Default empty = a strict
+    /// no-op (today's behaviour); seams fold onto it over phases 3b–3e.
+    middleware: MiddlewareStack,
 }
 
 impl ReActAgent {
@@ -115,7 +119,14 @@ impl ReActAgent {
             system: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             context_budget: None,
+            middleware: MiddlewareStack::new(),
         }
+    }
+
+    /// Install the agent middleware stack (ADR 0025). Default is empty (a no-op).
+    pub fn with_middleware(mut self, middleware: MiddlewareStack) -> Self {
+        self.middleware = middleware;
+        self
     }
 
     /// Cap the serialized `State` injected into the agent's first message (ADR 0014 trim).
@@ -188,22 +199,65 @@ impl ReActAgent {
             format!("Input: {input}\nState: {state_str}"),
         )];
 
-        'iterations: for _ in 0..self.max_iterations {
+        // ADR 0025: `before_run` — fires once before the loop (empty stack = no-op). A
+        // middleware may trim the seed state or stop the run.
+        if let Flow::Stop { reason } = self
+            .middleware
+            .before_run(
+                &mut conversation,
+                &RunCtx {
+                    iteration: 0,
+                    approved_tool_names,
+                    channels,
+                },
+            )
+            .await?
+        {
+            trace.push(format!("stopped:{reason}"));
+            return Ok(AgentResult {
+                reasoning: trace.join("\n"),
+                requires_human_review: !approval_requests.is_empty(),
+                approval_requests,
+                todos: last_todos,
+            });
+        }
+
+        'iterations: for iteration in 0..self.max_iterations {
+            let ctx = RunCtx {
+                iteration,
+                approved_tool_names,
+                channels,
+            };
+            // ADR 0025: `before_model` (fail-closed — an Err short-circuits the run).
+            let request = self
+                .middleware
+                .before_model(
+                    LlmRequest {
+                        provider: self.provider,
+                        model: self.model.clone(),
+                        messages: conversation.clone(),
+                        system: self.system.clone(),
+                        tools: tool_defs.clone(),
+                        max_tokens: None,
+                        temperature: None,
+                    },
+                    &ctx,
+                )
+                .await?;
+            let response = self.gateway.complete(request.clone()).await?;
+            // ADR 0025: `after_model`.
             let response = self
-                .gateway
-                .complete(LlmRequest {
-                    provider: self.provider,
-                    model: self.model.clone(),
-                    messages: conversation.clone(),
-                    system: self.system.clone(),
-                    tools: tool_defs.clone(),
-                    max_tokens: None,
-                    temperature: None,
-                })
+                .middleware
+                .after_model(response, &request, &ctx)
                 .await?;
 
             let content = response.content.trim().to_owned();
             trace.push(format!("thought:{content}"));
+            // ADR 0025: `on_iteration` (loop-detection / budget / reflection trigger).
+            if let Flow::Stop { reason } = self.middleware.on_iteration(iteration, &content, &ctx) {
+                trace.push(format!("stopped:{reason}"));
+                break;
+            }
 
             // Native tool-calling takes precedence over the text protocol.
             let tool_calls = response.tool_calls.unwrap_or_default();
@@ -224,13 +278,13 @@ impl ReActAgent {
                             &call.name,
                             call.input.clone(),
                             Some(&call.id),
-                            approved_tool_names,
+                            &ctx,
                             &mut trace,
                             &mut approval_requests,
                             &mut conversation,
                             &mut last_todos,
                         )
-                        .await;
+                        .await?;
                     if outcome == ToolOutcome::Approval {
                         break 'iterations;
                     }
@@ -248,13 +302,13 @@ impl ReActAgent {
                         &tool_name,
                         payload,
                         None,
-                        approved_tool_names,
+                        &ctx,
                         &mut trace,
                         &mut approval_requests,
                         &mut conversation,
                         &mut last_todos,
                     )
-                    .await;
+                    .await?;
                 if outcome == ToolOutcome::Approval {
                     break;
                 }
@@ -275,12 +329,24 @@ impl ReActAgent {
             break;
         }
 
-        Ok(AgentResult {
+        let mut result = AgentResult {
             reasoning: trace.join("\n"),
             requires_human_review: !approval_requests.is_empty(),
             approval_requests,
             todos: last_todos,
-        })
+        };
+        // ADR 0025: `after_run` — finalize / reflection / metadata (empty stack = no-op).
+        self.middleware
+            .after_run(
+                &mut result,
+                &RunCtx {
+                    iteration: self.max_iterations,
+                    approved_tool_names,
+                    channels,
+                },
+            )
+            .await?;
+        Ok(result)
     }
 
     /// Resolve a tool by name and either execute it or gate it. Shared by the
@@ -295,47 +361,58 @@ impl ReActAgent {
         // `role:"tool"` message linked to that call id. `None` on the `ACTION:` text
         // protocol → the result is a plain `user` observation (no structured id exists).
         tool_call_id: Option<&str>,
-        approved_tool_names: &HashSet<String>,
+        // The loop-turn context (iteration / approved grants / channels) the middleware
+        // hooks read. The approval gate reads `ctx.approved_tool_names`.
+        ctx: &RunCtx<'_>,
         trace: &mut Vec<String>,
         approval_requests: &mut Vec<ApprovalRequestItem>,
         conversation: &mut Vec<LlmMessage>,
         // When the tool is `writeTodos`, its normalized list is captured here so the
         // node handler can persist it into the durable todos channel (ADR 0022/0023).
         last_todos: &mut Option<Vec<TodoItem>>,
-    ) -> ToolOutcome {
+    ) -> Result<ToolOutcome, LlmError> {
         let resolved = self.tools.as_ref().and_then(|tools| tools.resolve(name));
         let Some((definition, handler)) = resolved else {
             trace.push(format!("observation:tool_not_found:{name}"));
-            return ToolOutcome::NotFound;
+            return Ok(ToolOutcome::NotFound);
         };
 
-        // Gate sensitive tools — unless this exact grant was already approved by a human
-        // (e.g. granted on resume). The grant key is the tool name, OR — for a
-        // content-scoped tool (a guarded fs write, ADR 0024 phase 2c) — the composite
-        // "<name>#<sha256(input)>", so approving one call does not unlock a different
-        // path/content (the over-grant guard).
-        if definition.requires_approval {
-            let key =
-                crate::tools::approval_key(&definition.name, definition.content_scoped, &input);
-            if !approved_tool_names.contains(&key) {
-                let content_scoped = definition.content_scoped;
-                approval_requests.push(ApprovalRequestItem {
-                    subject: format!("tool:{}", definition.name),
-                    reason: format!(
-                        "Tool '{}' requires human approval before execution.",
-                        definition.name
-                    ),
-                    approval_key: content_scoped.then(|| key.clone()),
-                    input: content_scoped.then(|| input.clone()),
-                });
+        // ADR 0025 phase 3c: the approval gate (now intrinsic to the stack) + any installed
+        // before_tool middleware (fs policy, …) decide here. The gate is enforced even with
+        // an empty stack — see `MiddlewareStack::before_tool`.
+        let decision = {
+            let call = ToolCallCtx {
+                name: &definition.name,
+                input: &input,
+                requires_approval: definition.requires_approval,
+                content_scoped: definition.content_scoped,
+            };
+            self.middleware.before_tool(&call, ctx).await?
+        };
+        let input = match decision {
+            // Approval-gated and not granted: record the request and stop here — the agent
+            // never self-approves.
+            ToolControl::Gate(item) => {
+                approval_requests.push(item);
                 trace.push(format!("observation:approval_required:{name}"));
-                return ToolOutcome::Approval;
+                return Ok(ToolOutcome::Approval);
             }
-        }
+            // A middleware refused the call (e.g. fs policy): the handler never runs; feed
+            // the denial back as an observation so the model can adapt or finalize.
+            ToolControl::Deny { reason } => {
+                let observation = format!("tool_error:denied:{reason}");
+                trace.push(format!("observation:{observation}"));
+                Self::push_observation(conversation, tool_call_id, name, observation);
+                return Ok(ToolOutcome::Executed);
+            }
+            // Allowed, possibly with an overridden input.
+            ToolControl::Allow { input_override } => input_override.unwrap_or(input),
+        };
 
         // A handler error is data, not a crash: it goes back to the model as an
         // observation so the loop can recover or finalize.
-        let output = match handler(input).await {
+        let input_for_after = input.clone();
+        let raw = match handler(input).await {
             Ok(value) => {
                 // `writeTodos` returns the authoritative normalized list — capture it
                 // (last write wins) for the node handler to persist durably.
@@ -344,14 +421,32 @@ impl ReActAgent {
                         *last_todos = Some(todos);
                     }
                 }
-                value.to_string()
+                value
             }
-            Err(message) => Value::String(format!("tool_error:{message}")).to_string(),
+            Err(message) => Value::String(format!("tool_error:{message}")),
         };
+        // ADR 0025 phase 3c: `after_tool` may transform the observation (empty stack = no-op).
+        let output = self
+            .middleware
+            .after_tool(name, &input_for_after, raw, ctx)
+            .await?
+            .to_string();
         trace.push(format!("observation:{output}"));
+        Self::push_observation(conversation, tool_call_id, name, output);
+        Ok(ToolOutcome::Executed)
+    }
+
+    /// Record a tool observation into the conversation: a structured `role:"tool"` message
+    /// linked to the call id on the native path (the provider recognises the tool was
+    /// answered and finalises instead of re-calling), or a plain `user` observation on the
+    /// `ACTION:` text protocol (no structured id exists).
+    fn push_observation(
+        conversation: &mut Vec<LlmMessage>,
+        tool_call_id: Option<&str>,
+        name: &str,
+        output: String,
+    ) {
         match tool_call_id {
-            // Native path: a proper tool-result message linked to the call id — the
-            // provider recognises the tool was answered and finalises instead of re-calling.
             Some(id) => conversation.push(LlmMessage {
                 role: "tool".to_owned(),
                 content: output,
@@ -359,10 +454,8 @@ impl ReActAgent {
                 tool_call_id: Some(id.to_owned()),
                 tool_name: Some(name.to_owned()),
             }),
-            // Text protocol: no structured id — feed the observation back as user text.
             None => conversation.push(LlmMessage::text("user", format!("observation:{output}"))),
         }
-        ToolOutcome::Executed
     }
 
     /// Advertise tools to the LLM: only those carrying a JSON Schema, with their

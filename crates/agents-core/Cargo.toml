@@ -10,12 +10,12 @@ adriane-graph-core = { path = "../graph-core" }
 adriane-graph-runtime = { path = "../graph-runtime" }
 adriane-llm-gateway = { path = "../llm-gateway" }
 adriane-fs-backend = { path = "../fs-backend" }
+async-trait = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-async-trait = "0.1"
 adriane-artifact-store = { path = "../artifact-store" }
 tokio = { version = "1", features = ["rt", "macros"] }
