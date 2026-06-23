@@ -18,7 +18,8 @@ import {
 import {
   type AgentApprovalBinding,
   type FsPolicyRule,
-  type RustAgentConfig
+  type RustAgentConfig,
+  type RustMapAgentConfig
 } from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
 import {
@@ -83,6 +84,11 @@ export type CompiledGraphParts = {
    * graphs with no component nodes.
    */
   componentConfigs?: Map<string, RustComponentConfig>;
+  /**
+   * Per `mapAgents` node, the dynamic-fan-out carrier (over-channel, join channel, the sub-agent
+   * config) the Rust bridge needs (ADR 0027 phase 4b). Empty for graphs with no mapAgents nodes.
+   */
+  mapAgentConfigs?: Map<string, RustMapAgentConfig>;
   /**
    * Child graphs that `subgraph`-type nodes resolve into (their node handlers /
    * conditions / agent / component configs are already merged into the maps above, by
@@ -274,6 +280,7 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
 
     const agentConfigs = parts.agentConfigs ?? new Map<string, RustAgentConfig>();
     const componentConfigs = parts.componentConfigs ?? new Map<string, RustComponentConfig>();
+    const mapAgentConfigs = parts.mapAgentConfigs ?? new Map<string, RustMapAgentConfig>();
 
     // Under `auto`, the one case that genuinely diverges on Rust is a TS-`approvalEngine`
     // agent node (the engine-backed approval flow is TS-only). Keep such graphs on TS.
@@ -310,6 +317,7 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
       conditions: this.buildConditionFns(parts.conditions),
       agents: agentConfigs,
       components: componentConfigs,
+      mapAgents: mapAgentConfigs,
       jsNodeIds: jsHandlerNodeIds,
       jsToolNames: new Set(toolFns.keys()),
       fsPolicy: parts.fsPolicy ?? []

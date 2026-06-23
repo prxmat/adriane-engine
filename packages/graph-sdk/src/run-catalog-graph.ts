@@ -246,6 +246,9 @@ const assembleParts = (
     conditions: new Map(),
     agents,
     components,
+    // mapAgents carrier on the catalog path is a follow-up (ADR 0027 phase 4b); the live
+    // builder path is the supported surface today.
+    mapAgents: new Map(),
     jsNodeIds,
     jsToolNames: new Set(),
     providerKeys,

@@ -153,4 +153,26 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
     expect(predicateState?.ready).toBe(true);
     expect(resumed.currentNodeId).toBe("second");
   });
+
+  it("mapAgents runs a sub-agent per item and merges results in input order (ADR 0027 4b)", async () => {
+    const app = createGraph({ name: "rust-map" })
+      .channel("items", { type: "json", default: [] as string[] })
+      .mapAgents("fanout", {
+        overChannel: "items",
+        subAgent: { llm: new DefaultLLMGateway(), prompt: { system: "Summarise the item." } },
+        joinAt: "summaries"
+      })
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+
+    const done = await app.run({ items: ["alpha", "beta", "gamma"] }, { runId: "run_rust_map" as never });
+    expect(done.status).toBe("completed");
+    const summaries = done.channels.summaries as AgentResult[];
+    expect(Array.isArray(summaries)).toBe(true);
+    expect(summaries).toHaveLength(3); // one result per item, deterministic order
+    for (const summary of summaries) {
+      expect(typeof summary.reasoning).toBe("string");
+    }
+  });
 });

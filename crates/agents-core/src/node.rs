@@ -89,6 +89,68 @@ pub fn agent_node_handler(
     })
 }
 
+/// Build a [`NodeHandler`] that runs `agent` **once per item** in the `over_channel` array,
+/// **concurrently**, and writes the per-item results — in INPUT order — into `join_at` as a JSON
+/// array (ADR 0027 phase 4b, the `mapAgents` dynamic fan-out).
+///
+/// - Each spawn gets `item[i]` as its `input` and shares the run's channels as `State`, so a
+///   sub-agent sees one item plus the common context.
+/// - Spawns run concurrently (`join_all`), but the merge is by **input index** — `join_all`
+///   preserves input order regardless of which spawn settles first — so the result is
+///   deterministic and the run stays resumable.
+/// - If any spawn flags `requires_human_review` and `suspend_for_approval` is set, the whole map
+///   node suspends; on resume the node re-runs (the granted tools then execute). Granular
+///   per-spawn resume is a follow-up.
+/// - A per-spawn gateway error is surfaced as `{ "error": "<msg>" }` at that index, never failing
+///   the whole node (parity with [`agent_node_handler`]).
+pub fn map_node_handler(
+    agent: Arc<ReActAgent>,
+    over_channel: String,
+    join_at: String,
+    suspend_for_approval: bool,
+) -> NodeHandler {
+    Box::new(move |state: GraphState| {
+        let agent = Arc::clone(&agent);
+        let over_channel = over_channel.clone();
+        let join_at = join_at.clone();
+        Box::pin(async move {
+            let approved = approved_tool_names(&state.channels);
+            let items: Vec<Value> = match state.channels.get(&over_channel) {
+                Some(Value::Array(items)) => items.clone(),
+                // Absent / non-array → no spawns; write an empty array (deterministic no-op).
+                _ => Vec::new(),
+            };
+            // One sub-agent per item, run concurrently. `join_all` keeps INPUT order.
+            let futures = items
+                .iter()
+                .map(|item| agent.run(item, &state.channels, &approved));
+            let results = futures_util::future::join_all(futures).await;
+
+            let mut outputs = Vec::with_capacity(results.len());
+            let mut needs_review = false;
+            for result in results {
+                match result {
+                    Ok(res) => {
+                        needs_review |= res.requires_human_review;
+                        outputs.push(serde_json::to_value(&res).unwrap_or(Value::Null));
+                    }
+                    Err(error) => {
+                        outputs.push(serde_json::json!({ "error": error.to_string() }));
+                    }
+                }
+            }
+
+            let mut patch = BTreeMap::new();
+            patch.insert(join_at, Value::Array(outputs));
+            if suspend_for_approval && needs_review {
+                NodeOutput::interrupt(AGENT_APPROVAL_INTERRUPT, patch)
+            } else {
+                NodeOutput::update(patch)
+            }
+        })
+    })
+}
+
 /// Read the granted tool names from the channels — tolerant of an absent, `null`,
 /// or non-string-array channel (all mean "nothing granted").
 fn approved_tool_names(channels: &BTreeMap<String, Value>) -> HashSet<String> {
@@ -292,6 +354,108 @@ mod tests {
             .and_then(Value::as_str)
             .expect("error message");
         assert!(!message.is_empty());
+    }
+
+    fn map_graph() -> GraphDefinition {
+        GraphDefinition {
+            id: GraphId::from("g-map"),
+            version: "0.0.0".to_owned(),
+            name: "map graph".to_owned(),
+            recursion_limit: None,
+            channels: [
+                ("items".to_owned(), replace_channel()),
+                ("report".to_owned(), replace_channel()),
+                (APPROVED_TOOLS_CHANNEL.to_owned(), replace_channel()),
+            ]
+            .into_iter()
+            .collect(),
+            nodes: vec![NodeDefinition {
+                id: NodeId::from("fanner"),
+                node_type: NodeType::Agent,
+                label: "fanner".to_owned(),
+                subgraph_id: None,
+                input_mapping: None,
+                output_mapping: None,
+                fan_out: None,
+                retry_policy: None,
+                metadata: None,
+            }],
+            edges: vec![],
+            entry_node_id: NodeId::from("fanner"),
+            metadata: None,
+        }
+    }
+
+    /// ADR 0027 phase 4b: `map_node_handler` runs one sub-agent per item and merges the
+    /// per-item results into `join_at` as an array, in input order (deterministic).
+    #[tokio::test]
+    async fn map_node_runs_a_subagent_per_item_and_merges_into_an_array() {
+        let mut gateway = DefaultLlmGateway::new();
+        gateway.register_adapter(Box::new(MockAdapter::new(
+            LlmProvider::Anthropic,
+            vec![text("FINAL: a"), text("FINAL: b")],
+        )));
+        let agent = ReActAgent::new("worker", "sub-agent", Arc::new(gateway));
+
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("fanner"),
+            map_node_handler(
+                Arc::new(agent),
+                "items".to_owned(),
+                "report".to_owned(),
+                false,
+            ),
+        );
+
+        let runtime = GraphRuntime::new(map_graph(), nodes, InMemoryConditionRegistry::new());
+        let done = runtime
+            .start(
+                RunId::from("run-map"),
+                [("items".to_owned(), json!(["x", "y"]))]
+                    .into_iter()
+                    .collect(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(done.status, GraphStatus::Completed);
+        let report = done
+            .channels
+            .get("report")
+            .and_then(Value::as_array)
+            .expect("report array written");
+        assert_eq!(report.len(), 2);
+        // Each element is a valid AgentResult (has the reasoning field).
+        assert!(report[0].get("reasoning").is_some());
+        assert!(report[1].get("reasoning").is_some());
+    }
+
+    /// An absent / empty `over_channel` → an empty array, no spawns (deterministic no-op).
+    #[tokio::test]
+    async fn map_node_with_no_items_writes_an_empty_array() {
+        let gateway = DefaultLlmGateway::new(); // never called
+        let agent = ReActAgent::new("worker", "sub-agent", Arc::new(gateway));
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("fanner"),
+            map_node_handler(
+                Arc::new(agent),
+                "items".to_owned(),
+                "report".to_owned(),
+                false,
+            ),
+        );
+        let runtime = GraphRuntime::new(map_graph(), nodes, InMemoryConditionRegistry::new());
+        let done = runtime
+            .start(RunId::from("run-map-empty"), BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(done.status, GraphStatus::Completed);
+        assert_eq!(
+            done.channels.get("report").and_then(Value::as_array),
+            Some(&vec![])
+        );
     }
 
     /// `writeTodos` persists into the durable todos channel in the SAME checkpointed
