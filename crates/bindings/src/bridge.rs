@@ -30,7 +30,10 @@ use adriane_agents_core::{
 use adriane_approval_engine::ApprovalError;
 use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
 use adriane_components::ComponentRegistry;
-use adriane_fs_backend::{ArtifactFsBackend, FsWriteCtx, PathRule, StaticPathPolicy};
+use adriane_fs_backend::{
+    ArtifactFsBackend, FilesystemBackend, FsWriteCtx, HttpFilesystemBackend, PathRule,
+    StaticPathPolicy,
+};
 use adriane_graph_core::{EdgeType, GraphState, NodeId, NodeType, RunId};
 use adriane_graph_runtime::{
     Checkpoint, CheckpointId, Checkpointer, ConditionRegistry, GraphRuntime,
@@ -289,6 +292,20 @@ fn resolve_run_id(spec: &EngineSpec) -> RunId {
         .unwrap_or_else(|| RunId::from("run"))
 }
 
+/// Build the run-scoped fs backend: the external durable HTTP backend (ADR 0024 phase
+/// 2e) when `ADRIANE_FS_BACKEND_URL` is configured — fs content then survives a
+/// suspend/resume across the napi boundary — else the lean in-memory `ArtifactFsBackend`
+/// over the per-build shared store (intra-run).
+fn build_fs_backend(
+    fs_store: &Arc<dyn ArtifactStore>,
+    run_id: &RunId,
+) -> Arc<dyn FilesystemBackend> {
+    match HttpFilesystemBackend::from_env(run_id.clone()) {
+        Some(http) => Arc::new(http),
+        None => Arc::new(ArtifactFsBackend::new(fs_store.clone(), run_id.clone())),
+    }
+}
+
 /// Compile the wire policy rules into the engine's [`StaticPathPolicy`] (fail-closed:
 /// empty → read-only everywhere).
 fn build_fs_policy(rules: &[FsPolicyRule]) -> StaticPathPolicy {
@@ -492,8 +509,7 @@ fn build_agent_handler(
     // the run's path policy (fail-closed). The agent itself is the `principal` recorded
     // on writes; the gate verb is rejected here until phase 2c.
     if agent_spec.enable_fs {
-        let backend: Arc<dyn adriane_fs_backend::FilesystemBackend> =
-            Arc::new(ArtifactFsBackend::new(fs_store.clone(), fs_run_id.clone()));
+        let backend = build_fs_backend(fs_store, fs_run_id);
         let policy: Arc<dyn adriane_fs_backend::PathPolicy> = fs_policy.clone();
         register_fs_tools(
             &mut registry,
