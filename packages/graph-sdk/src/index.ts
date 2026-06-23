@@ -139,6 +139,22 @@ export type {
 
 export { rustValidatorActive } from "./rust-validator.js";
 export { rustEngineAvailable } from "./rust-engine.js";
+
+// Observability (ADR 0028 phase 7): export a run's lifecycle events as OTLP traces (to
+// LangSmith / Langfuse / Phoenix / any OTel endpoint) + a token-usage → cost mapping.
+export {
+  exportTracesToOtlp,
+  buildOtlpPayload,
+  computeCost,
+  DEFAULT_PRICE_BOOK
+} from "./observability.js";
+export type {
+  OtelExporterOptions,
+  OtlpFetch,
+  PriceBook,
+  ModelPrice,
+  TokenUsage
+} from "./observability.js";
 // The approve/resume provenance wire shape `{ name, requestedBy, resolvedBy }` the Rust
 // guard-rail validates — the control plane builds it from ApprovalEngine decisions.
 export type { ApprovedToolWire } from "./rust-engine.js";

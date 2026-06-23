@@ -19,6 +19,17 @@ export type AgentResult = {
   confidence: number;
   reasoning: string;
   requiresHumanReview: boolean;
+  /**
+   * Token usage summed across the run's LLM calls (ADR 0028 phase 7a — observability / cost).
+   * Present on results produced by the Rust engine; the control plane maps it to cost and to
+   * span/trace attributes. Omitted when no LLM call was made.
+   */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
 };
 
 export type AgentRunFn<TInput = unknown> = (

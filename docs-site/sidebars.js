@@ -161,7 +161,7 @@ const sidebars = {
     {
       type: "category",
       label: "Monitor",
-      items: ["governance/observable-runs"]
+      items: ["governance/observable-runs", "governance/observability-otel"]
     },
     {
       type: "category",

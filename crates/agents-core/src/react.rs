@@ -15,7 +15,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use adriane_llm_gateway::{LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequest, LlmToolDef};
+use adriane_llm_gateway::{
+    LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequest, LlmToolDef, LlmUsage,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -68,6 +70,11 @@ pub struct AgentResult {
     /// compatible. The node handler persists it into the durable todos channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todos: Option<Vec<TodoItem>>,
+    /// Token usage summed across this run's LLM calls (ADR 0028 phase 7a — observability /
+    /// cost). Additive + optional (`skip_serializing_if`), so existing consumers stay
+    /// compatible; the control plane maps it to cost and to span/trace attributes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<LlmUsage>,
 }
 
 /// Outcome of the shared tool-execution path (native and `ACTION:` calls).
@@ -168,6 +175,8 @@ impl ReActAgent {
         // The latest `writeTodos` result this run (ADR 0022/0023). The node handler
         // sinks it into the durable todos channel.
         let mut last_todos: Option<Vec<TodoItem>> = None;
+        // ADR 0028 phase 7a: token usage summed across this run's LLM calls.
+        let mut usage = LlmUsage::default();
         let tool_defs = self.build_tool_defs();
 
         // `Value`'s Display is compact JSON — same output as `serde_json::to_string`. The
@@ -205,6 +214,7 @@ impl ReActAgent {
                 requires_human_review: !approval_requests.is_empty(),
                 approval_requests,
                 todos: last_todos,
+                usage: Some(usage),
             });
         }
 
@@ -236,6 +246,16 @@ impl ReActAgent {
                 .middleware
                 .after_model(response, &request, &ctx)
                 .await?;
+
+            // ADR 0028 phase 7a: accumulate token usage across the loop's LLM calls.
+            usage.prompt_tokens += response.usage.prompt_tokens;
+            usage.completion_tokens += response.usage.completion_tokens;
+            if let Some(read) = response.usage.cache_read_tokens {
+                usage.cache_read_tokens = Some(usage.cache_read_tokens.unwrap_or(0) + read);
+            }
+            if let Some(write) = response.usage.cache_write_tokens {
+                usage.cache_write_tokens = Some(usage.cache_write_tokens.unwrap_or(0) + write);
+            }
 
             let content = response.content.trim().to_owned();
             trace.push(format!("thought:{content}"));
@@ -320,6 +340,7 @@ impl ReActAgent {
             requires_human_review: !approval_requests.is_empty(),
             approval_requests,
             todos: last_todos,
+            usage: Some(usage),
         };
         // ADR 0025: `after_run` — finalize / reflection / metadata (empty stack = no-op).
         self.middleware
@@ -564,6 +585,41 @@ mod tests {
         assert!(result.approval_requests.is_empty());
     }
 
+    /// ADR 0028 phase 7a: `AgentResult.usage` sums token usage across the loop's LLM calls.
+    #[tokio::test]
+    async fn usage_is_summed_across_the_loop() {
+        let usage = |p: u32, c: u32| LlmUsage {
+            prompt_tokens: p,
+            completion_tokens: c,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+        };
+        // Turn 1: a tool call (usage 10/5). Turn 2: the final answer (usage 8/3) → summed 18/8.
+        let tool_turn = LlmResponse {
+            usage: usage(10, 5),
+            ..tool_use("noop")
+        };
+        let final_turn = LlmResponse {
+            usage: usage(8, 3),
+            ..text("FINAL: done")
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut registry = InMemoryToolRegistry::new();
+        let noop = counting_tool("noop", false, &calls);
+        registry.register(noop.0, noop.1);
+
+        let agent = ReActAgent::new("a", "test agent", gateway_with(vec![tool_turn, final_turn]))
+            .with_tools(Arc::new(registry));
+        let result = agent
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .await
+            .unwrap();
+
+        let summed = result.usage.expect("usage present");
+        assert_eq!(summed.prompt_tokens, 18);
+        assert_eq!(summed.completion_tokens, 8);
+    }
+
     #[tokio::test]
     async fn native_tool_use_executes_then_finalizes() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -766,6 +822,7 @@ mod tests {
             }],
             requires_human_review: true,
             todos: None,
+            usage: None,
         };
         let wire = serde_json::to_string(&result).expect("serializes");
         assert!(wire.contains("\"approvalRequests\""));
