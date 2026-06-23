@@ -43,12 +43,24 @@ pub enum ChannelReducer {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChannelDefinition {
     #[serde(rename = "type")]
     pub channel_type: String,
     pub reducer: ChannelReducer,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
+    /// ADR 0032 phase 10: never emit this channel's value in run events / logs. Masked with a
+    /// sentinel at every event-emission site, but still CHECKPOINTED IN FULL (durable/resumable)
+    /// — durability ≠ observability. Additive + serde-default, so existing graphs deserialize
+    /// unchanged (and a `false` value stays off the wire).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_log: bool,
+}
+
+/// `skip_serializing_if` helper: keep a `false` bool off the wire (serde passes `&bool`).
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

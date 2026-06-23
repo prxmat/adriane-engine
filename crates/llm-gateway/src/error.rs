@@ -19,4 +19,9 @@ pub enum LlmError {
     /// artifact), or inline media exceeded the size cap.
     #[error("media resolution failed: {0}")]
     MediaResolution(String),
+    /// ADR 0032: a secret/credential was detected in an outbound request under the opt-in
+    /// `block` policy (`ADRIANE_SECRETS_POLICY=block`). Surfaced at the node sink as channel
+    /// data, never a panic. (The default policy masks-and-continues instead.)
+    #[error("blocked by secrets policy: {0}")]
+    SecretsBlocked(String),
 }

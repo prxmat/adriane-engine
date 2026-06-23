@@ -45,7 +45,7 @@ use adriane_llm_gateway::{
     AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort, HttpGeminiPort,
     HttpPiiRedactor, HttpPromptCompressor, LlmError, LlmProvider, LlmResponse, LlmToolCall,
     LlmUsage, MediaResolver, MediaSource, MockAdapter, ModelChoice, ModelPolicy,
-    OpenAiCompatibleAdapter,
+    OpenAiCompatibleAdapter, RegexSecretsRedactor,
 };
 use async_trait::async_trait;
 use napi::bindgen_prelude::Promise;
@@ -334,7 +334,29 @@ fn build_agent_middleware(
     model: &str,
 ) -> MiddlewareStack {
     let mut stack = MiddlewareStack::new();
-    // GOVERNED — env-injected, sealed; never fed from spec/user data.
+    // GOVERNED — sealed; never fed from spec/user data. Ordering on the request path is the
+    // push order (governed runs outermost, before efficiency).
+    // ADR 0032: the SECRETS floor is the in-engine deterministic regex redactor — ALWAYS-ON
+    // (no env gate) + pushed FIRST so it scrubs keys/tokens even when PII is unset and before
+    // any text reaches the external PII service. Default masks; `ADRIANE_SECRETS_POLICY=block`
+    // fails closed.
+    stack.push_governed(Arc::new(RedactMiddleware::new(Arc::new(
+        RegexSecretsRedactor::from_env(),
+    ))));
+    // ADR 0032: optional external secrets augmentation (defense-in-depth) reusing the remote
+    // redactor shape against `ADRIANE_SECRETS_REDACTOR_URL`.
+    if let Some(url) = std::env::var("ADRIANE_SECRETS_REDACTOR_URL")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        let token = std::env::var("ADRIANE_SECRETS_REDACTOR_TOKEN")
+            .ok()
+            .filter(|value| !value.is_empty());
+        stack.push_governed(Arc::new(RedactMiddleware::new(Arc::new(
+            HttpPiiRedactor::new(url, token),
+        ))));
+    }
+    // PII (ADR 0008): env-gated external Presidio/GLiNER redactor, after the secrets floor.
     if let Some(redactor) = HttpPiiRedactor::from_env() {
         stack.push_governed(Arc::new(RedactMiddleware::new(Arc::new(redactor))));
     }
@@ -1274,6 +1296,7 @@ mod tests {
             channel_type: "json".to_owned(),
             reducer: ChannelReducer::Replace,
             default: None,
+            no_log: false,
         }
     }
 
@@ -1419,54 +1442,94 @@ mod tests {
             build_agent_middleware(spec, &gateway, LlmProvider::Anthropic, "m")
         };
 
+        // NB: the stack is never fully empty now — the ADR 0032 secrets floor is an always-on
+        // GOVERNED middleware. So these assert on the EFFICIENCY layer specifically.
+
         // terse + contextBudget → real efficiency middleware (no external service needed).
-        assert!(!build(&from(json!({
-            "provider": "anthropic",
-            "resolvedMiddleware": [
-                { "kind": "terse" },
-                { "kind": "contextBudget", "params": { "chars": 100 } }
-            ]
-        })))
-        .is_empty());
+        assert!(
+            build(&from(json!({
+                "provider": "anthropic",
+                "resolvedMiddleware": [
+                    { "kind": "terse" },
+                    { "kind": "contextBudget", "params": { "chars": 100 } }
+                ]
+            })))
+            .efficiency_len()
+                > 0
+        );
 
         // Legacy fallback: an empty resolved list + the old `outputStyle` knob still applies
         // terse, so pre-3d persisted graphs keep their behaviour.
-        assert!(!build(&from(json!({
-            "provider": "anthropic",
-            "outputStyle": "terse"
-        })))
-        .is_empty());
+        assert!(
+            build(&from(json!({
+                "provider": "anthropic",
+                "outputStyle": "terse"
+            })))
+            .efficiency_len()
+                > 0
+        );
 
         // A fractional `chars` (float on the wire) is truncated, not silently dropped.
-        assert!(!build(&from(json!({
-            "provider": "anthropic",
-            "resolvedMiddleware": [{ "kind": "contextBudget", "params": { "chars": 4000.5 } }]
-        })))
-        .is_empty());
+        assert!(
+            build(&from(json!({
+                "provider": "anthropic",
+                "resolvedMiddleware": [{ "kind": "contextBudget", "params": { "chars": 4000.5 } }]
+            })))
+            .efficiency_len()
+                > 0
+        );
 
         // reflection (phase 3e) → an after_run middleware is installed (no external service).
-        assert!(!build(&from(json!({
-            "provider": "anthropic",
-            "resolvedMiddleware": [{ "kind": "reflection" }]
-        })))
-        .is_empty());
+        assert!(
+            build(&from(json!({
+                "provider": "anthropic",
+                "resolvedMiddleware": [{ "kind": "reflection" }]
+            })))
+            .efficiency_len()
+                > 0
+        );
 
         // structuredOutput (ADR 0029 phase 8) WITH a schema → an efficiency middleware lands.
-        assert!(!build(&from(json!({
-            "provider": "anthropic",
-            "resolvedMiddleware": [{
-                "kind": "structuredOutput",
-                "params": { "name": "Verdict", "schema": { "type": "object" }, "mode": "lenient" }
-            }]
-        })))
-        .is_empty());
+        assert!(
+            build(&from(json!({
+                "provider": "anthropic",
+                "resolvedMiddleware": [{
+                    "kind": "structuredOutput",
+                    "params": { "name": "Verdict", "schema": { "type": "object" }, "mode": "lenient" }
+                }]
+            })))
+            .efficiency_len()
+                > 0
+        );
 
-        // structuredOutput WITHOUT a schema → no-op (nothing to validate against).
-        assert!(build(&from(json!({
-            "provider": "anthropic",
-            "resolvedMiddleware": [{ "kind": "structuredOutput", "params": {} }]
-        })))
-        .is_empty());
+        // structuredOutput WITHOUT a schema → no efficiency middleware (nothing to validate).
+        assert_eq!(
+            build(&from(json!({
+                "provider": "anthropic",
+                "resolvedMiddleware": [{ "kind": "structuredOutput", "params": {} }]
+            })))
+            .efficiency_len(),
+            0
+        );
+    }
+
+    /// ADR 0032: the in-engine secrets floor is an always-on GOVERNED middleware — present even
+    /// with no PII service and no resolved efficiency middleware (so a stack is never ungoverned).
+    #[test]
+    fn secrets_floor_is_always_governed() {
+        let gateway = Arc::new(DefaultLlmGateway::new());
+        let spec: crate::spec::AgentSpec =
+            serde_json::from_value(json!({ "provider": "anthropic" })).expect("spec parses");
+        let stack = build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m");
+        assert!(
+            !stack.is_empty(),
+            "the secrets floor is always governed-present"
+        );
+        assert_eq!(
+            stack.efficiency_len(),
+            0,
+            "no efficiency middleware was requested"
+        );
     }
 
     /// A gated agent suspends with a pending approval recorded in its output

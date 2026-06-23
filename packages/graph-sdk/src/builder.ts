@@ -60,6 +60,8 @@ export type ChannelInput<TValue = unknown> = {
   type: string;
   reducer?: ChannelReducer;
   default?: TValue;
+  /** ADR 0032: never emit this channel's value in run events/logs (masked; still checkpointed). */
+  noLog?: boolean;
 };
 
 /** Config form for non-trivial nodes. A bare handler is the common case. */
@@ -126,7 +128,8 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
     this.channels[name] = {
       type: definition.type,
       reducer: definition.reducer ?? "replace",
-      default: definition.default
+      default: definition.default,
+      ...(definition.noLog === true ? { noLog: true } : {})
     };
     return this.widen<TState & { [K in TName]: TValue }>();
   }

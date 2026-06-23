@@ -28,6 +28,7 @@ pub fn transform_graph(ast: &GraphAst) -> GraphDefinition {
                     channel_type: channel.channel_type.clone(),
                     reducer: channel.reducer,
                     default: channel.default.clone(),
+                    no_log: false,
                 },
             )
         })
