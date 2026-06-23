@@ -192,20 +192,25 @@ describe("@adriane-ai/graph-sdk agent node — profiles + middleware (ADR 0025 p
     expect(budget(config.resolvedMiddleware)).toBe(4000);
   });
 
-  it("expands `frontier-careful` (frontier tier, suspend, NO compression)", () => {
+  it("expands `frontier-careful` (frontier tier, suspend, NO compression, reflection)", () => {
     const config = resolved({ profile: "frontier-careful" });
     expect(config.tier).toBe("frontier");
     expect(config.suspendForApproval).toBe(true);
-    expect(kinds(config.resolvedMiddleware)).toEqual(["contextBudget"]);
+    expect(kinds(config.resolvedMiddleware).sort()).toEqual(["contextBudget", "reflection"]);
     expect(budget(config.resolvedMiddleware)).toBe(16000);
   });
 
-  it("expands `governed-deep` (balanced tier, suspend, fs enabled, full efficiency)", () => {
+  it("expands `governed-deep` (balanced tier, suspend, fs enabled, full efficiency + reflection)", () => {
     const config = resolved({ profile: "governed-deep" });
     expect(config.tier).toBe("balanced");
     expect(config.suspendForApproval).toBe(true);
     expect(config.enableFs).toBe(true);
-    expect(kinds(config.resolvedMiddleware).sort()).toEqual(["compress", "contextBudget", "terse"]);
+    expect(kinds(config.resolvedMiddleware).sort()).toEqual([
+      "compress",
+      "contextBudget",
+      "reflection",
+      "terse"
+    ]);
     expect(budget(config.resolvedMiddleware)).toBe(12000);
   });
 
@@ -252,7 +257,12 @@ describe("@adriane-ai/graph-sdk agent node — profiles + middleware (ADR 0025 p
     const node = compiled.definition.nodes.find((candidate) => String(candidate.id) === "planner");
     const agent = (node?.metadata as { agent?: { resolvedMiddleware?: EfficiencyMiddlewareSpec[] } } | undefined)
       ?.agent;
-    expect(kinds(agent?.resolvedMiddleware).sort()).toEqual(["compress", "contextBudget", "terse"]);
+    expect(kinds(agent?.resolvedMiddleware).sort()).toEqual([
+      "compress",
+      "contextBudget",
+      "reflection",
+      "terse"
+    ]);
   });
 });
 

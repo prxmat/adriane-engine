@@ -71,4 +71,21 @@ describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
       AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind: "contextBudget" }] }).success
     ).toBe(false);
   });
+
+  // ADR 0025 phase 3e — reflection variant.
+  it("accepts a reflection entry (bare and with a threshold), rejects an out-of-range threshold", () => {
+    expect(AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind: "reflection" }] }).success).toBe(
+      true
+    );
+    expect(
+      AgentNodeMetadataSchema.safeParse({
+        resolvedMiddleware: [{ kind: "reflection", params: { threshold: 0.9 } }]
+      }).success
+    ).toBe(true);
+    expect(
+      AgentNodeMetadataSchema.safeParse({
+        resolvedMiddleware: [{ kind: "reflection", params: { threshold: 1.5 } }]
+      }).success
+    ).toBe(false);
+  });
 });

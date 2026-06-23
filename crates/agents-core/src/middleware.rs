@@ -16,11 +16,13 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use adriane_llm_gateway::{
-    LlmError, LlmMessage, LlmRequest, LlmResponse, PiiRedactor, PromptCompressor,
+    LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequest, LlmResponse, PiiRedactor,
+    PromptCompressor,
 };
 use serde_json::Value;
 
 use crate::react::{AgentResult, ApprovalRequestItem};
+use crate::reflection::reflect_once;
 use crate::tools::approval_key;
 
 /// Control-flow signal a hook returns: continue the run, or stop it with a reason.
@@ -432,6 +434,72 @@ impl AgentMiddleware for ContextBudgetMiddleware {
     }
 }
 
+/// EFFICIENCY (opt-in quality signal) — reflection as an after-run hook (ADR 0025 phase 3e).
+/// Runs ONE self-critique over the agent's reasoning ([`reflect_once`]); when the critique
+/// rejects the output it ANNOTATES the reasoning with `reflection:needs_review:<issues>`.
+///
+/// It deliberately does **NOT** set `requires_human_review`: that field drives the
+/// approval-suspend gate (`node.rs`), and since a suspended agent node re-runs the whole agent
+/// (and so re-critiques) on resume, a quality escalation through that flag would re-suspend
+/// forever with no approval to grant. Quality escalation is therefore a graph-level concern — a
+/// conditional edge can route on the `reflection:needs_review` marker into a human-gate node —
+/// not an agent-internal flag. **Additive**: the full critique→revise loop stays the standalone
+/// [`crate::reflection::ReflectionAgent`] / reflection node (ADR 0025: add the middleware form
+/// WITHOUT removing the node). **Fail-open**: a critique-call error never fails the run.
+pub struct ReflectionMiddleware {
+    gateway: Arc<dyn LlmGateway>,
+    provider: LlmProvider,
+    model: String,
+    score_threshold: f64,
+}
+
+impl ReflectionMiddleware {
+    pub fn new(
+        gateway: Arc<dyn LlmGateway>,
+        provider: LlmProvider,
+        model: impl Into<String>,
+        score_threshold: f64,
+    ) -> Self {
+        Self {
+            gateway,
+            provider,
+            model: model.into(),
+            score_threshold,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentMiddleware for ReflectionMiddleware {
+    fn name(&self) -> &str {
+        "reflection"
+    }
+    async fn after_run(&self, result: &mut AgentResult, _ctx: &RunCtx<'_>) -> Result<(), LlmError> {
+        // Fail-open: a critique-call failure must not sink an otherwise-good run. On a rejecting
+        // critique, annotate the reasoning (a graph may route on the marker) — but never touch
+        // `requires_human_review` (see the type doc: it would re-suspend forever on resume).
+        if let Ok((revise_needed, issues)) = reflect_once(
+            &self.gateway,
+            self.provider,
+            &self.model,
+            &result.reasoning,
+            self.score_threshold,
+        )
+        .await
+        {
+            if revise_needed {
+                let note = if issues.is_empty() {
+                    "reflection:needs_review".to_owned()
+                } else {
+                    format!("reflection:needs_review:{}", issues.join("; "))
+                };
+                result.reasoning = format!("{}\n{note}", result.reasoning);
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,5 +816,83 @@ mod tests {
         let mut empty: Vec<LlmMessage> = vec![];
         mw.before_run(&mut empty, &ctx).await.unwrap();
         assert!(empty.is_empty());
+    }
+
+    fn result_with(reasoning: &str) -> AgentResult {
+        AgentResult {
+            reasoning: reasoning.to_owned(),
+            approval_requests: vec![],
+            requires_human_review: false,
+            todos: None,
+        }
+    }
+
+    fn gateway_returning(content: &str) -> Arc<adriane_llm_gateway::DefaultLlmGateway> {
+        use adriane_llm_gateway::{DefaultLlmGateway, LlmResponse, LlmUsage, MockAdapter};
+        let mut gateway = DefaultLlmGateway::new();
+        gateway.register_adapter(Box::new(MockAdapter::new(
+            LlmProvider::Anthropic,
+            vec![LlmResponse {
+                content: content.to_owned(),
+                tool_calls: None,
+                stop_reason: Some("end_turn".to_owned()),
+                usage: LlmUsage::default(),
+                model: "m".to_owned(),
+                provider: LlmProvider::Anthropic,
+            }],
+        )));
+        Arc::new(gateway)
+    }
+
+    #[tokio::test]
+    async fn reflection_middleware_annotates_a_weak_result_without_forcing_suspend() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        // A rejecting structured critique (score 0.2 < 0.8) → annotate the reasoning with the
+        // issue, but DO NOT set requires_human_review (that would re-suspend forever on resume).
+        let mw = ReflectionMiddleware::new(
+            gateway_returning(r#"{"ok": false, "score": 0.2, "issues": ["weak intro"]}"#),
+            LlmProvider::Anthropic,
+            "m",
+            0.8,
+        );
+        let mut result = result_with("the agent's answer");
+        mw.after_run(&mut result, &ctx).await.unwrap();
+        assert!(!result.requires_human_review);
+        assert!(result.reasoning.contains("reflection:needs_review"));
+        assert!(result.reasoning.contains("weak intro"));
+    }
+
+    #[tokio::test]
+    async fn reflection_middleware_leaves_an_accepted_result_untouched() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        let mw = ReflectionMiddleware::new(
+            gateway_returning(r#"{"ok": true, "score": 0.95, "issues": []}"#),
+            LlmProvider::Anthropic,
+            "m",
+            0.8,
+        );
+        let mut result = result_with("a solid answer");
+        mw.after_run(&mut result, &ctx).await.unwrap();
+        assert!(!result.requires_human_review);
+        assert_eq!(result.reasoning, "a solid answer");
+    }
+
+    #[tokio::test]
+    async fn reflection_middleware_is_fail_open_on_a_critique_error() {
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = empty_ctx(&approved, &channels);
+        // A gateway with no adapter registered → the critique call errors → fail-open: the
+        // result is returned unchanged rather than failing the run.
+        let gateway = Arc::new(adriane_llm_gateway::DefaultLlmGateway::new());
+        let mw = ReflectionMiddleware::new(gateway, LlmProvider::Anthropic, "m", 0.8);
+        let mut result = result_with("an answer");
+        mw.after_run(&mut result, &ctx).await.unwrap();
+        assert!(!result.requires_human_review);
+        assert_eq!(result.reasoning, "an answer");
     }
 }

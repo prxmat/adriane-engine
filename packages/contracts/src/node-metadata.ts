@@ -60,7 +60,11 @@ export const AgentNodeMetadataSchema = z.object({
       z.discriminatedUnion("kind", [
         z.object({ kind: z.literal("compress") }),
         z.object({ kind: z.literal("terse") }),
-        z.object({ kind: z.literal("contextBudget"), params: z.object({ chars: z.number().int().min(1) }) })
+        z.object({ kind: z.literal("contextBudget"), params: z.object({ chars: z.number().int().min(1) }) }),
+        z.object({
+          kind: z.literal("reflection"),
+          params: z.object({ threshold: z.number().min(0).max(1).optional() }).optional()
+        })
       ])
     )
     .optional()

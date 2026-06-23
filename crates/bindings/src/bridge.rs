@@ -26,7 +26,8 @@ use std::sync::Arc;
 use adriane_agents_core::{
     agent_node_handler, register_fs_tools, ApprovalRequestItem, CompressMiddleware,
     ContextBudgetMiddleware, InMemoryToolRegistry, MiddlewareStack, ReActAgent, RedactMiddleware,
-    TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
+    ReflectionMiddleware, TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL,
+    DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
 use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
@@ -321,7 +322,15 @@ fn build_fs_backend(
 /// type-level + editor guarantee — it is not executed on the persisted catalog run path, so
 /// this match arm is the sole runtime defence there.) The approval gate is intrinsic to the
 /// stack itself (`MiddlewareStack::before_tool`) and applies regardless.
-fn build_agent_middleware(agent_spec: &AgentSpec) -> MiddlewareStack {
+///
+/// `gateway` + `provider`/`model` are threaded in for `ReflectionMiddleware` (phase 3e), which
+/// critiques the result with the agent's own provider + model.
+fn build_agent_middleware(
+    agent_spec: &AgentSpec,
+    gateway: &Arc<DefaultLlmGateway>,
+    provider: LlmProvider,
+    model: &str,
+) -> MiddlewareStack {
     let mut stack = MiddlewareStack::new();
     // GOVERNED — env-injected, sealed; never fed from spec/user data.
     if let Some(redactor) = HttpPiiRedactor::from_env() {
@@ -370,6 +379,22 @@ fn build_agent_middleware(agent_spec: &AgentSpec) -> MiddlewareStack {
                             compressor,
                         ))));
                     }
+                }
+                "reflection" => {
+                    // Opt-in self-critique (after_run): flags a weak result in the reasoning
+                    // (no requires_human_review — see ReflectionMiddleware). Critiques with the
+                    // agent's own provider + model; fail-open.
+                    let threshold = spec
+                        .params
+                        .get("threshold")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.8);
+                    stack.push_efficiency(Arc::new(ReflectionMiddleware::new(
+                        gateway.clone(),
+                        provider,
+                        model,
+                        threshold,
+                    )));
                 }
                 // Governance kinds (redact / approvalGate / fsPolicy) + unknown kinds are
                 // never applied: never push_governed from data (the type invariant), and
@@ -599,7 +624,7 @@ fn build_agent_handler(
     // Drive the agent with the RESOLVED provider/model so the request's provider
     // slot matches the adapter the gateway registered (otherwise a tier-resolved
     // mistral request could be issued against an anthropic slot with no adapter).
-    let mut agent = ReActAgent::new(node_id.to_owned(), "bridged agent", gateway)
+    let mut agent = ReActAgent::new(node_id.to_owned(), "bridged agent", gateway.clone())
         .with_provider(resolved.provider)
         .with_model(resolved.model.clone())
         .with_tools(Arc::new(registry));
@@ -613,9 +638,15 @@ fn build_agent_handler(
         agent = agent.with_max_iterations(max as usize);
     }
     // ADR 0025: install the middleware stack — governed (env-injected redaction) + the
-    // SDK-resolved efficiency list (compress / terse / context-budget). The approval gate is
-    // intrinsic to the stack and applies regardless.
-    agent = agent.with_middleware(build_agent_middleware(agent_spec));
+    // SDK-resolved efficiency list (compress / terse / context-budget / reflection). The
+    // approval gate is intrinsic to the stack and applies regardless. The gateway is threaded
+    // in for the reflection critique call (it uses the agent's own provider + model).
+    agent = agent.with_middleware(build_agent_middleware(
+        agent_spec,
+        &gateway,
+        resolved.provider,
+        &resolved.model,
+    ));
 
     let output_channel = agent_spec
         .output_channel
@@ -1154,9 +1185,13 @@ mod tests {
         let from = |value: serde_json::Value| -> crate::spec::AgentSpec {
             serde_json::from_value(value).expect("agent spec parses")
         };
+        let gateway = Arc::new(DefaultLlmGateway::new());
+        let build = |spec: &crate::spec::AgentSpec| {
+            build_agent_middleware(spec, &gateway, LlmProvider::Anthropic, "m")
+        };
 
         // terse + contextBudget → real efficiency middleware (no external service needed).
-        assert!(!build_agent_middleware(&from(json!({
+        assert!(!build(&from(json!({
             "provider": "anthropic",
             "resolvedMiddleware": [
                 { "kind": "terse" },
@@ -1167,16 +1202,23 @@ mod tests {
 
         // Legacy fallback: an empty resolved list + the old `outputStyle` knob still applies
         // terse, so pre-3d persisted graphs keep their behaviour.
-        assert!(!build_agent_middleware(&from(json!({
+        assert!(!build(&from(json!({
             "provider": "anthropic",
             "outputStyle": "terse"
         })))
         .is_empty());
 
         // A fractional `chars` (float on the wire) is truncated, not silently dropped.
-        assert!(!build_agent_middleware(&from(json!({
+        assert!(!build(&from(json!({
             "provider": "anthropic",
             "resolvedMiddleware": [{ "kind": "contextBudget", "params": { "chars": 4000.5 } }]
+        })))
+        .is_empty());
+
+        // reflection (phase 3e) → an after_run middleware is installed (no external service).
+        assert!(!build(&from(json!({
+            "provider": "anthropic",
+            "resolvedMiddleware": [{ "kind": "reflection" }]
         })))
         .is_empty());
     }

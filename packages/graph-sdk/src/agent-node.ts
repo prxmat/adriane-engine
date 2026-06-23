@@ -133,26 +133,34 @@ export type AgentNodeConfig = {
  * - `fast` — `fast` tier, full efficiency (compress + terse + tight 4k context budget), no
  *   suspend. For high-throughput, low-stakes prose work.
  * - `frontier-careful` — `frontier` tier, NO compression (preserve fidelity), a roomy 16k
- *   budget, suspend-on-approval. For high-stakes reasoning where lossy compression is unsafe.
+ *   budget, reflection, suspend-on-approval. For high-stakes reasoning where lossy compression
+ *   is unsafe.
  * - `governed-deep` — the deep-agent one-liner: `balanced` tier, full efficiency (12k budget),
- *   suspend-on-approval, and the governed virtual filesystem enabled.
+ *   reflection, suspend-on-approval, and the governed virtual filesystem enabled.
  */
 export type AgentProfile = "fast" | "frontier-careful" | "governed-deep";
 
 /**
- * An EFFICIENCY-only middleware a user may append to an agent (ADR 0025 phase 3d). The
+ * An EFFICIENCY / quality middleware a user may append to an agent (ADR 0025 phase 3d/3e). The
  * governance kinds (`redact` / `approvalGate` / `fsPolicy`) are deliberately NOT part of this
  * union — they are engine-injected and sealed, so a user cannot express an ungoverned stack
- * (the governed-by-construction invariant). `retry` / `rateLimit` are ADR phase 3e.
+ * (the governed-by-construction invariant). `retry` / `rateLimit` stay deferred (retry belongs
+ * at the gateway; a rate-limit delay would conflict with the engine's determinism).
  *
  * - `compress` — route messages through the prompt-compression service (no-op if unconfigured).
  * - `terse` — append a compact-output directive to the system prompt (lossy; prose only).
  * - `contextBudget` — cap the agent's seed message (the injected `Input`/`State` dump) to `chars` characters.
+ * - `reflection` — one self-critique after the run (ADR 0025 phase 3e): a weak result is flagged in
+ *   the reasoning (`reflection:needs_review:<issues>`) for observability / downstream routing (a
+ *   conditional edge can gate on it). It does NOT set `requiresHumanReview` — that would re-suspend
+ *   forever on resume. Additive — the full critique→revise loop stays the standalone reflection
+ *   node. `threshold` (0..1, default 0.8) is the acceptance bar.
  */
 export type EfficiencyMiddlewareSpec =
   | { kind: "compress" }
   | { kind: "terse" }
-  | { kind: "contextBudget"; params: { chars: number } };
+  | { kind: "contextBudget"; params: { chars: number } }
+  | { kind: "reflection"; params?: { threshold?: number } };
 
 /**
  * Governance middleware kinds the SDK rejects in {@link AgentNodeConfig.middleware}: they are
@@ -350,14 +358,20 @@ const PROFILES: Record<
     tier: "frontier",
     suspendForApproval: true,
     enableFs: false,
-    // No compression — lossy compression is unsafe for high-stakes reasoning.
-    middleware: [{ kind: "contextBudget", params: { chars: 16000 } }]
+    // No compression — lossy compression is unsafe for high-stakes reasoning. Reflection
+    // escalates a weak answer to human review (ADR 0025 phase 3e).
+    middleware: [{ kind: "contextBudget", params: { chars: 16000 } }, { kind: "reflection" }]
   },
   "governed-deep": {
     tier: "balanced",
     suspendForApproval: true,
     enableFs: true,
-    middleware: [{ kind: "compress" }, { kind: "terse" }, { kind: "contextBudget", params: { chars: 12000 } }]
+    middleware: [
+      { kind: "compress" },
+      { kind: "terse" },
+      { kind: "contextBudget", params: { chars: 12000 } },
+      { kind: "reflection" }
+    ]
   }
 };
 
