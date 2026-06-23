@@ -24,8 +24,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use adriane_agents_core::{
-    agent_node_handler, register_fs_tools, ApprovalRequestItem, InMemoryToolRegistry, ReActAgent,
-    ToolDefinition, APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
+    agent_node_handler, register_fs_tools, ApprovalRequestItem, CompressMiddleware,
+    InMemoryToolRegistry, MiddlewareStack, ReActAgent, RedactMiddleware, ToolDefinition,
+    APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
 use adriane_artifact_store::{ArtifactStore, InMemoryArtifactStore};
@@ -40,10 +41,9 @@ use adriane_graph_runtime::{
     InMemoryConditionRegistry, InMemoryNodeRegistry, NodeOutput, NodeRegistry, RunEvent,
 };
 use adriane_llm_gateway::{
-    AnthropicAdapter, CompressingGateway, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort,
-    HttpGeminiPort, HttpPiiRedactor, HttpPromptCompressor, LlmGateway, LlmProvider, LlmResponse,
-    LlmToolCall, LlmUsage, MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter,
-    RedactingGateway,
+    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort, HttpGeminiPort,
+    HttpPiiRedactor, HttpPromptCompressor, LlmProvider, LlmResponse, LlmToolCall, LlmUsage,
+    MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter,
 };
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -306,6 +306,21 @@ fn build_fs_backend(
     }
 }
 
+/// Build the agent middleware stack (ADR 0025 phase 3b): PII redaction (GOVERNED,
+/// outermost — the redactor sees the full text) + prompt compression (EFFICIENCY, inner),
+/// each env-gated. Replaces the former `wrap_with_redactor`/`wrap_with_compressor` gateway
+/// wrappers; redaction is now governance-first (was accidentally compress-first).
+fn build_agent_middleware() -> MiddlewareStack {
+    let mut stack = MiddlewareStack::new();
+    if let Some(redactor) = HttpPiiRedactor::from_env() {
+        stack.push_governed(Arc::new(RedactMiddleware::new(Arc::new(redactor))));
+    }
+    if let Some(compressor) = HttpPromptCompressor::from_env() {
+        stack.push_efficiency(Arc::new(CompressMiddleware::new(Arc::new(compressor))));
+    }
+    stack
+}
+
 /// Compile the wire policy rules into the engine's [`StaticPathPolicy`] (fail-closed:
 /// empty → read-only everywhere).
 fn build_fs_policy(rules: &[FsPolicyRule]) -> StaticPathPolicy {
@@ -463,11 +478,10 @@ fn build_agent_handler(
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
     // mistral-only env -> mistral-small-latest through the Mistral adapter).
     let resolved = resolve_agent_model(agent_spec);
-    let gateway = wrap_with_compressor(wrap_with_redactor(build_gateway(
-        agent_spec,
-        &resolved,
-        &spec.provider_keys,
-    )));
+    // ADR 0025 phase 3b: the gateway is now the BARE provider router; PII redaction +
+    // prompt compression are agent middleware on the stack (built below), not gateway
+    // wrappers. The RedactingGateway/CompressingGateway structs remain for non-agent callers.
+    let gateway = build_gateway(agent_spec, &resolved, &spec.provider_keys);
 
     let approval_tools: HashSet<&str> = agent_spec
         .approval_tool_names
@@ -550,6 +564,9 @@ fn build_agent_handler(
     if let Some(budget) = agent_spec.context_budget {
         agent = agent.with_context_budget(budget as usize);
     }
+    // ADR 0025 phase 3b: install the redaction (governed) + compression (efficiency)
+    // middleware stack. Terse + trim stay flat knobs above (folded in phase 3c).
+    agent = agent.with_middleware(build_agent_middleware());
 
     let output_channel = agent_spec
         .output_channel
@@ -733,26 +750,6 @@ fn build_gateway(
     }
 
     Arc::new(gateway)
-}
-
-/// Wrap the gateway with PII redaction when `ADRIANE_PII_REDACTOR_URL` is configured, so
-/// every intermediate LLM call is scrubbed before it reaches a provider (ADR 0008 phase 2).
-/// Unset → the bare gateway, so the OSS default stays inert (no redaction, no extra hop).
-fn wrap_with_redactor(inner: Arc<DefaultLlmGateway>) -> Arc<dyn LlmGateway> {
-    match HttpPiiRedactor::from_env() {
-        Some(redactor) => Arc::new(RedactingGateway::new(inner, Arc::new(redactor))),
-        None => inner,
-    }
-}
-
-/// Wrap the gateway with LLMLingua input compression when `ADRIANE_LLMLINGUA_URL` is set
-/// (ADR 0014): user-message content is shrunk before the provider call. Unset → the bare
-/// gateway (OSS default inert). Lossy — opt-in.
-fn wrap_with_compressor(inner: Arc<dyn LlmGateway>) -> Arc<dyn LlmGateway> {
-    match HttpPromptCompressor::from_env() {
-        Some(compressor) => Arc::new(CompressingGateway::new(inner, Arc::new(compressor))),
-        None => inner,
-    }
 }
 
 /// A deterministic mock: emit a `tool_use` for each declared tool (so a gated tool

@@ -15,7 +15,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use adriane_llm_gateway::{LlmError, LlmMessage, LlmRequest, LlmResponse};
+use adriane_llm_gateway::{
+    LlmError, LlmMessage, LlmRequest, LlmResponse, PiiRedactor, PromptCompressor,
+};
 use serde_json::Value;
 
 use crate::react::{AgentResult, ApprovalRequestItem};
@@ -267,6 +269,77 @@ impl MiddlewareStack {
     }
 }
 
+// ── Built-in middleware (folded from the gateway seams, ADR 0025 phase 3b) ──────────────
+
+/// GOVERNED — PII redaction (ADR 0008) as before/after-model hooks. `before_model` scrubs
+/// the request (**fail-closed**: an `Err`, e.g. `PiiBlocked`, short-circuits the run);
+/// `after_model` hydrates the response. Reuses the existing [`PiiRedactor`] (and its HTTP
+/// impl) verbatim — only the composition moves from a gateway wrapper to the stack.
+pub struct RedactMiddleware {
+    redactor: Arc<dyn PiiRedactor>,
+}
+
+impl RedactMiddleware {
+    pub fn new(redactor: Arc<dyn PiiRedactor>) -> Self {
+        Self { redactor }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentMiddleware for RedactMiddleware {
+    fn name(&self) -> &str {
+        "redact"
+    }
+    async fn before_model(
+        &self,
+        request: LlmRequest,
+        _ctx: &RunCtx<'_>,
+    ) -> Result<LlmRequest, LlmError> {
+        self.redactor.redact_request(request).await
+    }
+    async fn after_model(
+        &self,
+        response: LlmResponse,
+        _request: &LlmRequest,
+        _ctx: &RunCtx<'_>,
+    ) -> Result<LlmResponse, LlmError> {
+        Ok(self.redactor.hydrate_response(response).await)
+    }
+}
+
+/// EFFICIENCY — prompt compression (ADR 0014) as a before-model hook: shrinks `user`-role
+/// message content. **Fail-open** (the compressor returns the text unchanged on any
+/// error; this hook never `Err`s). Reuses the existing [`PromptCompressor`] verbatim.
+pub struct CompressMiddleware {
+    compressor: Arc<dyn PromptCompressor>,
+}
+
+impl CompressMiddleware {
+    pub fn new(compressor: Arc<dyn PromptCompressor>) -> Self {
+        Self { compressor }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentMiddleware for CompressMiddleware {
+    fn name(&self) -> &str {
+        "compress"
+    }
+    async fn before_model(
+        &self,
+        mut request: LlmRequest,
+        _ctx: &RunCtx<'_>,
+    ) -> Result<LlmRequest, LlmError> {
+        for message in request.messages.iter_mut() {
+            if message.role == "user" {
+                let text = std::mem::take(&mut message.content);
+                message.content = self.compressor.compress(text).await;
+            }
+        }
+        Ok(request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +376,94 @@ mod tests {
             }
         ));
         assert_eq!(stack.on_iteration(0, "x", &ctx), Flow::Continue);
+    }
+
+    /// A recorder asserting the onion order: request-path governed→efficiency,
+    /// response-path reversed. This locks the redact→compress order (ADR 0025 3b).
+    struct Recorder {
+        label: String,
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentMiddleware for Recorder {
+        async fn before_model(
+            &self,
+            request: LlmRequest,
+            _ctx: &RunCtx<'_>,
+        ) -> Result<LlmRequest, LlmError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("before:{}", self.label));
+            Ok(request)
+        }
+        async fn after_model(
+            &self,
+            response: LlmResponse,
+            _request: &LlmRequest,
+            _ctx: &RunCtx<'_>,
+        ) -> Result<LlmResponse, LlmError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("after:{}", self.label));
+            Ok(response)
+        }
+    }
+
+    #[tokio::test]
+    async fn onion_order_governed_outermost_then_reversed_on_response() {
+        use adriane_llm_gateway::{LlmProvider, LlmUsage};
+
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut stack = MiddlewareStack::new();
+        // governed = redact (outermost); efficiency = compress (inner).
+        stack.push_governed(Arc::new(Recorder {
+            label: "redact".to_owned(),
+            log: log.clone(),
+        }));
+        stack.push_efficiency(Arc::new(Recorder {
+            label: "compress".to_owned(),
+            log: log.clone(),
+        }));
+
+        let approved = HashSet::new();
+        let channels = BTreeMap::new();
+        let ctx = RunCtx {
+            iteration: 0,
+            approved_tool_names: &approved,
+            channels: &channels,
+        };
+        let request = LlmRequest {
+            provider: LlmProvider::Anthropic,
+            model: "m".to_owned(),
+            messages: vec![],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+        };
+        let request = stack.before_model(request, &ctx).await.unwrap();
+        let response = LlmResponse {
+            content: String::new(),
+            tool_calls: None,
+            stop_reason: None,
+            usage: LlmUsage::default(),
+            model: "m".to_owned(),
+            provider: LlmProvider::Anthropic,
+        };
+        let _ = stack.after_model(response, &request, &ctx).await.unwrap();
+
+        // Request: governed (redact) before efficiency (compress). Response: reversed.
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                "before:redact",
+                "before:compress",
+                "after:compress",
+                "after:redact"
+            ]
+        );
     }
 }
