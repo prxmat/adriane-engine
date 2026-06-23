@@ -134,7 +134,6 @@ pub async fn reflect_once(
             tools: None,
             max_tokens: None,
             temperature: None,
-            response_format: None,
         })
         .await?;
     Ok(requests_revision(&response.content, score_threshold))
@@ -211,7 +210,6 @@ impl ReflectionAgent {
                 tools: None,
                 max_tokens: None,
                 temperature: None,
-                response_format: None,
             })
             .await?;
         Ok(response.content)

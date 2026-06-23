@@ -13,17 +13,16 @@
 //! efficiency** layer, so an ungoverned stack is unrepresentable.
 
 use std::collections::{BTreeMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use adriane_llm_gateway::{
     LlmError, LlmGateway, LlmMessage, LlmProvider, LlmRequest, LlmResponse, PiiRedactor,
-    PromptCompressor, ResponseFormat,
+    PromptCompressor,
 };
 use serde_json::Value;
 
 use crate::react::{AgentResult, ApprovalRequestItem};
 use crate::reflection::reflect_once;
-use crate::structured_output::{extract_first_json, validate_json};
 use crate::tools::approval_key;
 
 /// Control-flow signal a hook returns: continue the run, or stop it with a reason.
@@ -501,164 +500,6 @@ impl AgentMiddleware for ReflectionMiddleware {
     }
 }
 
-/// Constrain an agent's output to a JSON schema (ADR 0029 phase 8 — efficiency layer,
-/// user-installable). `before_model` sets the request's `response_format` (each adapter
-/// fans it out to its provider's native route — OpenAI `response_format`, Anthropic
-/// forced tool, Gemini `responseSchema`); `after_model` extracts + validates the JSON
-/// against the schema (the in-engine validation floor), with a bounded deterministic
-/// retry, then normalizes the response into a final answer; `after_run` attaches the
-/// validated value to `AgentResult.structured_output`.
-///
-/// Gate-safety: this lives in the efficiency layer and the approval gate is intrinsic to
-/// `MiddlewareStack::before_tool` (phase 3c) — so it cannot route around governance.
-pub struct StructuredOutputMiddleware {
-    gateway: Arc<dyn LlmGateway>,
-    schema_name: String,
-    schema: Value,
-    strict: bool,
-    /// `false` (required): invalid output after the retry budget fails closed with a typed
-    /// error. `true` (lenient): fall back to the raw response (no structured value attached).
-    lenient: bool,
-    /// Extra deterministic re-prompts on invalid output (no temperature drift). `0` = none.
-    retry_cap: usize,
-    /// Interior-mutable stash so `after_run` can attach the value validated in `after_model`.
-    last_valid: Mutex<Option<Value>>,
-}
-
-impl StructuredOutputMiddleware {
-    pub fn new(
-        gateway: Arc<dyn LlmGateway>,
-        schema_name: impl Into<String>,
-        schema: Value,
-        strict: bool,
-        lenient: bool,
-        retry_cap: usize,
-    ) -> Self {
-        Self {
-            gateway,
-            schema_name: schema_name.into(),
-            schema,
-            strict,
-            lenient,
-            retry_cap,
-            last_valid: Mutex::new(None),
-        }
-    }
-
-    /// The candidate JSON: the Anthropic forced-tool call's input if present, else the
-    /// first JSON value embedded in the content (OpenAI / Gemini native path).
-    fn extract_candidate(&self, response: &LlmResponse) -> Option<Value> {
-        if let Some(calls) = &response.tool_calls {
-            if let Some(call) = calls.iter().find(|c| c.name == self.schema_name) {
-                return Some(call.input.clone());
-            }
-        }
-        extract_first_json(&response.content)
-    }
-
-    /// A deterministic corrective re-prompt: the same request (schema still attached) plus a
-    /// user message naming the problem. Temperature is untouched, so replay stays stable.
-    fn corrective_request(&self, base: &LlmRequest, problem: &str) -> LlmRequest {
-        let mut req = base.clone();
-        req.messages.push(LlmMessage::text(
-            "user",
-            format!(
-                "Your previous response was rejected: {problem}. Respond with ONLY a JSON value \
-                 matching the required schema — no prose, no code fences."
-            ),
-        ));
-        req
-    }
-}
-
-/// Rewrite a validated response into a clean final answer so the loop terminates on it:
-/// the JSON becomes the content and any (synthetic) tool call is dropped.
-fn finalize_structured(mut response: LlmResponse, value: &Value) -> LlmResponse {
-    response.content = serde_json::to_string(value).unwrap_or_default();
-    response.tool_calls = None;
-    response
-}
-
-#[async_trait::async_trait]
-impl AgentMiddleware for StructuredOutputMiddleware {
-    fn name(&self) -> &str {
-        "structuredOutput"
-    }
-
-    async fn before_model(
-        &self,
-        mut request: LlmRequest,
-        _ctx: &RunCtx<'_>,
-    ) -> Result<LlmRequest, LlmError> {
-        request.response_format = Some(ResponseFormat::JsonSchema {
-            name: self.schema_name.clone(),
-            schema: self.schema.clone(),
-            strict: self.strict,
-        });
-        // A light reminder helps providers without native schema decoding comply.
-        let reminder = format!(
-            "You must respond with a single JSON value matching the '{}' schema. \
-             No prose, no code fences.",
-            self.schema_name
-        );
-        request.system = Some(match request.system.take() {
-            Some(s) if !s.is_empty() => format!("{s}\n\n{reminder}"),
-            _ => reminder,
-        });
-        Ok(request)
-    }
-
-    async fn after_model(
-        &self,
-        response: LlmResponse,
-        request: &LlmRequest,
-        _ctx: &RunCtx<'_>,
-    ) -> Result<LlmResponse, LlmError> {
-        let mut current = response;
-        let mut attempt = 0usize;
-        loop {
-            let candidate = self.extract_candidate(&current);
-            let problem: Option<String> = match &candidate {
-                Some(value) => match validate_json(&self.schema, value) {
-                    Ok(()) => {
-                        *self.last_valid.lock().expect("structured output mutex") =
-                            Some(value.clone());
-                        return Ok(finalize_structured(current, value));
-                    }
-                    Err(msg) => Some(format!("the JSON did not match the schema: {msg}")),
-                },
-                None => Some("no JSON value was found in the response".to_owned()),
-            };
-
-            if attempt >= self.retry_cap {
-                // Budget exhausted. Lenient → fail-open (raw response, no value attached);
-                // required → fail-closed with a typed error (surfaced as channel data).
-                if self.lenient {
-                    return Ok(current);
-                }
-                return Err(LlmError::StructuredOutputInvalid(
-                    problem.unwrap_or_else(|| "invalid output".to_owned()),
-                ));
-            }
-            attempt += 1;
-            let retry = self.corrective_request(request, problem.as_deref().unwrap_or(""));
-            current = self.gateway.complete(retry).await?;
-        }
-    }
-
-    async fn after_run(&self, result: &mut AgentResult, _ctx: &RunCtx<'_>) -> Result<(), LlmError> {
-        if let Some(value) = self
-            .last_valid
-            .lock()
-            .expect("structured output mutex")
-            .take()
-        {
-            result.structured_output = Some(value);
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,7 +603,6 @@ mod tests {
             tools: None,
             max_tokens: None,
             temperature: None,
-            response_format: None,
         };
         let request = stack.before_model(request, &ctx).await.unwrap();
         let response = LlmResponse {
@@ -919,7 +759,6 @@ mod tests {
             tools: None,
             max_tokens: None,
             temperature: None,
-            response_format: None,
         }
     }
 
@@ -986,7 +825,6 @@ mod tests {
             requires_human_review: false,
             todos: None,
             usage: None,
-            structured_output: None,
         }
     }
 
@@ -1025,205 +863,6 @@ mod tests {
         assert!(!result.requires_human_review);
         assert!(result.reasoning.contains("reflection:needs_review"));
         assert!(result.reasoning.contains("weak intro"));
-    }
-
-    // --- StructuredOutputMiddleware (ADR 0029 phase 8) ---
-
-    fn verdict_schema() -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": { "ok": { "type": "boolean" } },
-            "required": ["ok"]
-        })
-    }
-
-    fn resp(content: &str) -> LlmResponse {
-        use adriane_llm_gateway::LlmUsage;
-        LlmResponse {
-            content: content.to_owned(),
-            tool_calls: None,
-            stop_reason: None,
-            usage: LlmUsage::default(),
-            model: "m".to_owned(),
-            provider: LlmProvider::Anthropic,
-        }
-    }
-
-    #[tokio::test]
-    async fn structured_output_validates_normalizes_and_attaches() {
-        let approved = HashSet::new();
-        let channels = BTreeMap::new();
-        let ctx = empty_ctx(&approved, &channels);
-        let mw = StructuredOutputMiddleware::new(
-            gateway_returning("unused"),
-            "Verdict",
-            verdict_schema(),
-            true,
-            false,
-            0,
-        );
-
-        // Valid JSON embedded in prose → extracted, validated, normalized to clean JSON.
-        let out = mw
-            .after_model(
-                resp(r#"Here: {"ok": true} done"#),
-                &bare_request(None),
-                &ctx,
-            )
-            .await
-            .unwrap();
-        assert_eq!(out.content, r#"{"ok":true}"#);
-        assert!(out.tool_calls.is_none(), "loop must see a final answer");
-
-        // after_run attaches the validated value.
-        let mut result = result_with("x");
-        mw.after_run(&mut result, &ctx).await.unwrap();
-        assert_eq!(
-            result.structured_output,
-            Some(serde_json::json!({ "ok": true }))
-        );
-    }
-
-    #[tokio::test]
-    async fn structured_output_required_fails_closed_on_invalid() {
-        let approved = HashSet::new();
-        let channels = BTreeMap::new();
-        let ctx = empty_ctx(&approved, &channels);
-        let mw = StructuredOutputMiddleware::new(
-            gateway_returning("unused"),
-            "Verdict",
-            verdict_schema(),
-            true,
-            false, // required
-            0,     // no retry
-        );
-        // Wrong type for `ok` → schema violation, no retry budget → typed error.
-        let err = mw
-            .after_model(resp(r#"{"ok": "nope"}"#), &bare_request(None), &ctx)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, LlmError::StructuredOutputInvalid(_)));
-    }
-
-    #[tokio::test]
-    async fn structured_output_lenient_fails_open_to_raw_text() {
-        let approved = HashSet::new();
-        let channels = BTreeMap::new();
-        let ctx = empty_ctx(&approved, &channels);
-        let mw = StructuredOutputMiddleware::new(
-            gateway_returning("unused"),
-            "Verdict",
-            verdict_schema(),
-            false,
-            true, // lenient
-            0,
-        );
-        let out = mw
-            .after_model(resp("not json at all"), &bare_request(None), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(
-            out.content, "not json at all",
-            "raw response passes through"
-        );
-        let mut result = result_with("x");
-        mw.after_run(&mut result, &ctx).await.unwrap();
-        assert_eq!(
-            result.structured_output, None,
-            "nothing attached when lenient-open"
-        );
-    }
-
-    #[tokio::test]
-    async fn structured_output_recovers_within_the_retry_budget() {
-        let approved = HashSet::new();
-        let channels = BTreeMap::new();
-        let ctx = empty_ctx(&approved, &channels);
-        // The corrective re-prompt's gateway returns valid JSON.
-        let mw = StructuredOutputMiddleware::new(
-            gateway_returning(r#"{"ok": true}"#),
-            "Verdict",
-            verdict_schema(),
-            true,
-            false,
-            1, // one retry allowed
-        );
-        // First model response is invalid → one corrective call → valid.
-        let out = mw
-            .after_model(resp("garbage"), &bare_request(None), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(out.content, r#"{"ok":true}"#);
-        let mut result = result_with("x");
-        mw.after_run(&mut result, &ctx).await.unwrap();
-        assert_eq!(
-            result.structured_output,
-            Some(serde_json::json!({ "ok": true }))
-        );
-    }
-
-    #[tokio::test]
-    async fn structured_output_extracts_anthropic_forced_tool_call() {
-        use adriane_llm_gateway::{LlmToolCall, LlmUsage};
-        let approved = HashSet::new();
-        let channels = BTreeMap::new();
-        let ctx = empty_ctx(&approved, &channels);
-        let mw = StructuredOutputMiddleware::new(
-            gateway_returning("unused"),
-            "Verdict",
-            verdict_schema(),
-            true,
-            false,
-            0,
-        );
-        // Anthropic forced-tool: the JSON arrives as the synthetic tool call's input.
-        let response = LlmResponse {
-            content: String::new(),
-            tool_calls: Some(vec![LlmToolCall {
-                id: "1".to_owned(),
-                name: "Verdict".to_owned(),
-                input: serde_json::json!({ "ok": false }),
-            }]),
-            stop_reason: Some("tool_use".to_owned()),
-            usage: LlmUsage::default(),
-            model: "m".to_owned(),
-            provider: LlmProvider::Anthropic,
-        };
-        let out = mw
-            .after_model(response, &bare_request(None), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(out.content, r#"{"ok":false}"#);
-        assert!(out.tool_calls.is_none());
-    }
-
-    #[tokio::test]
-    async fn structured_output_before_model_sets_response_format_and_reminder() {
-        let approved = HashSet::new();
-        let channels = BTreeMap::new();
-        let ctx = empty_ctx(&approved, &channels);
-        let mw = StructuredOutputMiddleware::new(
-            gateway_returning("unused"),
-            "Verdict",
-            verdict_schema(),
-            true,
-            false,
-            0,
-        );
-        let out = mw
-            .before_model(bare_request(Some("Be helpful.")), &ctx)
-            .await
-            .unwrap();
-        match out.response_format {
-            Some(ResponseFormat::JsonSchema { name, strict, .. }) => {
-                assert_eq!(name, "Verdict");
-                assert!(strict);
-            }
-            None => panic!("response_format not set"),
-        }
-        let system = out.system.expect("system set");
-        assert!(system.starts_with("Be helpful."));
-        assert!(system.contains("Verdict"));
     }
 
     #[tokio::test]

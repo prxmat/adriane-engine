@@ -64,17 +64,6 @@ export const AgentNodeMetadataSchema = z.object({
         z.object({
           kind: z.literal("reflection"),
           params: z.object({ threshold: z.number().min(0).max(1).optional() }).optional()
-        }),
-        // ADR 0029 phase 8 — structured output (efficiency kind; the schema rides in params).
-        z.object({
-          kind: z.literal("structuredOutput"),
-          params: z.object({
-            schema: z.record(z.unknown()),
-            name: z.string().optional(),
-            strict: z.boolean().optional(),
-            mode: z.enum(["required", "lenient"]).optional(),
-            retryCap: z.number().int().min(0).optional()
-          })
         })
       ])
     )
