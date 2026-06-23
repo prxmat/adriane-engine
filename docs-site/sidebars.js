@@ -137,7 +137,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Tutorials",
+      label: "Cookbook",
       items: [
         "recipes/governed-refund-agent",
         "recipes/idea-to-ship-pipeline",
@@ -174,7 +174,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Reference",
+      label: "API Reference",
       items: [
         "reference/builder-api",
         "reference/component-catalog",
