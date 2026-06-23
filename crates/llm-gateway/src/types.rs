@@ -67,6 +67,24 @@ pub struct LlmToolDef {
     pub input_schema: Value,
 }
 
+/// Provider-neutral request to constrain generation to a JSON shape (ADR 0029, phase 8).
+/// One field on `LlmRequest`; each adapter fans it out to its own wire form
+/// (OpenAI `response_format`, Anthropic forced tool, Gemini `responseSchema`). The
+/// `schema` is a free-form JSON Schema `Value`, reusing the `LlmToolDef::input_schema`
+/// convention rather than inventing a typed schema model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum ResponseFormat {
+    /// Constrain the response to JSON matching `schema`. `strict` requests the provider's
+    /// strict-decoding mode where it exists (OpenAI `strict:true`); providers that lack it
+    /// ignore the flag and rely on the in-engine validation floor (ADR 0029 D2/D3).
+    JsonSchema {
+        name: String,
+        schema: Value,
+        strict: bool,
+    },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmUsage {
@@ -92,6 +110,11 @@ pub struct LlmRequest {
     pub max_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
+    /// Constrain generation to a JSON shape (ADR 0029). Additive + optional: omitted
+    /// requests behave exactly as before. Set by `StructuredOutputMiddleware`; each
+    /// adapter translates it to its provider wire form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
