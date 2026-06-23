@@ -69,8 +69,36 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Providers",
-          items: ["building/llm-gateway", "building/providers"]
+          label: "Integrations",
+          items: [
+            "building/llm-gateway",
+            "building/providers",
+            {
+              type: "category",
+              label: "Models",
+              items: [
+                "integrations/models/overview",
+                "integrations/models/anthropic",
+                "integrations/models/google",
+                "integrations/models/openai",
+                "integrations/models/azure",
+                "integrations/models/mistral",
+                "integrations/models/openrouter",
+                "integrations/models/groq",
+                "integrations/models/huggingface",
+                "integrations/models/ollama",
+                "integrations/models/nvidia",
+                "integrations/models/aws-bedrock"
+              ]
+            },
+            { type: "category", label: "Middleware", items: ["integrations/middleware/overview"] },
+            { type: "category", label: "Backends", items: ["integrations/backends/overview"] },
+            { type: "category", label: "Checkpointers", items: ["integrations/checkpointers/overview"] },
+            { type: "category", label: "Retrievers", items: ["integrations/retrievers/overview"] },
+            { type: "category", label: "Text splitters", items: ["integrations/text-splitters/overview"] },
+            { type: "category", label: "Vector stores", items: ["integrations/vector-stores/overview"] },
+            { type: "category", label: "Sandboxes", items: ["integrations/sandboxes/overview"] }
+          ]
         },
         {
           type: "category",
@@ -109,7 +137,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Tutorials",
+      label: "Cookbook",
       items: [
         "recipes/governed-refund-agent",
         "recipes/idea-to-ship-pipeline",
@@ -146,7 +174,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Reference",
+      label: "API Reference",
       items: [
         "reference/builder-api",
         "reference/component-catalog",

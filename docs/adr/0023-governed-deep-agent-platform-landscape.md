@@ -81,17 +81,16 @@ so "governed deep agent" = a default middleware stack rather than bespoke wiring
    persisted/catalog paths. Adversarially reviewed (5 lenses); the only real finding — a
    pre-existing carrier gap also affecting the ADR 0014 knobs — was fixed in the same
    change.
-2. **Phase 2 (the real build)** — the governed `fs` seam + pluggable backends, with the
-   per-path permission DSL → approval-gate integration. **Own detailed ADR + sign-off** (touches
-   artifact-store + approval gates = security-relevant).
-3. **Phase 3 (composition)** — the unified **middleware API**; fold existing seams into it; add
-   summarization + permissions middleware. Profiles ride on this.
-4. **Phase 4 (async + streaming)** — async sub-agents (concurrent spawn, human-gate preserved) +
-   wired event streaming (tool-transcript → SSE). Pairs with the separately-scoped streaming
-   follow-up.
+2. **Phase 2 (the real build) — ✅ IMPLEMENTED ([ADR 0024](0024-governed-virtual-filesystem-seam.md), Accepted).** The governed `fs` seam (8 tools) + pluggable backends (artifact + durable HTTP, fail-closed) + the per-path permission DSL (`deny`<`read`<`gate`<`write`) → approval-gate integration with content-scoped grants. Phases 2a–2e shipped.
+3. **Phase 3 (composition) — ✅ IMPLEMENTED ([ADR 0025](0025-unified-agent-middleware-api.md), Accepted).** The unified **middleware API**: one `AgentMiddleware` trait (7 hooks) + `MiddlewareStack` (governed/efficiency, onion); folded the scattered seams in (redaction, compression, terse, context-budget); the **approval gate is intrinsic** to `before_tool`; **profiles** (`fast`/`frontier-careful`/`governed-deep`) + user `middleware[]` ride on it (3d); **reflection** middleware (3e). Governed-by-construction: a governance kind in user data is unrepresentable.
+4. **Phase 4 (async + streaming) — ⏳ NEXT.** async sub-agents (concurrent spawn, human-gate preserved per spawn) + wired event streaming (tool-transcript → SSE; `LlmStreamChunk` is typed but unwired). Touches the runtime + napi bridge → **own detailed ADR + sign-off** (structural).
 5. **Phase 5 (interop + UI)** — ACP/ADK protocol adapter (control-plane) + Studio sub-agent
    streaming UI.
-6. **Skills/memory** — incremental over KB + `memory-store` alongside the above.
+6. **Phase 6 — skills/memory** — long-term cross-thread agent memory over `memory-store` (the four memory planes M1–M4, [ADR 0026](0026-memory-architecture-engine-studio.md), Proposed) + the progressive-skill (`SKILL.md`) convention over the KB. Best surfaced as a `MemoryMiddleware` (`before_run`/`after_run`) now that the middleware API exists.
+
+### Integrations taxonomy (the doc-site surface)
+
+Every seam above is documented as a splittable **integration** (LangChain-style), so a reader picks a concrete piece: **models** (native Anthropic + Google Gemini; OpenAI-compatible for OpenAI / Azure / Mistral / OpenRouter / Groq / Hugging Face / Ollama / NVIDIA; AWS Bedrock via proxy/planned), **middleware**, **backends** (fs), **checkpointers**, **retrievers**, **text splitters**, **vector stores**, and **sandboxes** (external gated seam, planned). Adding a provider/seam of an existing family is a constructor + an enum slot, not a new integration (ADR 0005).
 
 ## Consequences
 

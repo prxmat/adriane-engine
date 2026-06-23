@@ -79,9 +79,24 @@ const config = {
             label: "Docs"
           },
           {
-            to: "/docs/introduction/why-adriane",
-            label: "Why Adriane",
+            to: "/docs/reference/builder-api",
+            label: "API Reference",
             position: "left"
+          },
+          {
+            to: "/docs/recipes/governed-refund-agent",
+            label: "Cookbook",
+            position: "left"
+          },
+          {
+            href: "https://github.com/prxmat/adriane-engine/blob/main/CONTRIBUTING.md",
+            label: "Contribute",
+            position: "right"
+          },
+          {
+            href: "https://github.com/prxmat/adriane-engine/releases",
+            label: "v1.2.0",
+            position: "right"
           },
           {
             href: "https://github.com/prxmat/adriane-engine",
