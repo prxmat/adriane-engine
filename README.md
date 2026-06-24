@@ -34,6 +34,11 @@ The framework is, and stays, open. Studio is the paid product built on top of it
 npm install @adriane-ai/graph-sdk      # or: pnpm add / yarn add
 ```
 
+> **Platforms.** Prebuilt engines ship for macOS (x64/arm64), Linux **glibc** (x64/arm64) and
+> Windows (x64) — installed automatically, nothing to compile. On **musl** (e.g. `node:*-alpine`
+> Docker images) there is no prebuilt yet: use a glibc base image such as `node:20-slim`, or
+> install the Rust toolchain so the addon builds from source. (A musl prebuild is on the roadmap.)
+
 Adriane's core is **governance**: a run pauses at a human-approval gate and **resumes from
 its checkpoint** — deterministically, even across process restarts. Here it is, end to end:
 
