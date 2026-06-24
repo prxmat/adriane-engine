@@ -228,6 +228,13 @@ type EngineSpecWire = {
   /** Dynamic-message inbox to pre-queue (`send`): per node id, FIFO inputs. */
   inbox?: Record<string, unknown[]>;
   runId?: string;
+  /**
+   * Opt-in per-token streaming (ADR 0033 phase 13). When `true`, agent nodes drive the
+   * gateway's streaming path and emit observational `token_delta` events; when absent —
+   * the default — agents `complete()` and the run is byte-identical. The SDK sets it only
+   * for a `messages`-mode stream, the one consumer that renders token-granular output.
+   */
+  streamTokens?: boolean;
   initialData?: Record<string, unknown>;
   state?: GraphState;
   approvedTools?: ApprovedToolWire[];
@@ -441,13 +448,14 @@ export class RustGraphRunner<TState extends ChannelValues> {
     };
   }
 
-  /** Start a fresh run on the Rust engine. */
+  /** Start a fresh run on the Rust engine. `streamTokens` opts into per-token streaming (ADR 0033). */
   public async run(
     runId: RunId,
     initialData: Record<string, unknown>,
-    inbox: Record<string, unknown[]> = {}
+    inbox: Record<string, unknown[]> = {},
+    streamTokens = false
   ): Promise<TypedGraphState<TState>> {
-    const spec: EngineSpecWire = { ...this.baseSpec(), runId, initialData, inbox };
+    const spec: EngineSpecWire = { ...this.baseSpec(), runId, initialData, inbox, streamTokens };
     const outcomeJson = await this.native.engineRun(
       JSON.stringify(spec),
       this.onNode,

@@ -121,9 +121,12 @@ pub fn map_node_handler(
                 _ => Vec::new(),
             };
             // One sub-agent per item, run concurrently. `join_all` keeps INPUT order.
-            let futures = items
-                .iter()
-                .map(|item| agent.run(item, &state.channels, &approved));
+            // The `enumerate` index is the spawn id (ADR 0033 phase 13b): it equals the
+            // deterministic merge order at `join_at`, so any token deltas a spawn streams
+            // are demultiplexable by `spawnId` even though they arrive interleaved.
+            let futures = items.iter().enumerate().map(|(index, item)| {
+                agent.run_scoped(item, &state.channels, &approved, Some(index as u32))
+            });
             let results = futures_util::future::join_all(futures).await;
 
             let mut outputs = Vec::with_capacity(results.len());

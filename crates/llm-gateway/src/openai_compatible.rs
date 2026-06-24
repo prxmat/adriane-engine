@@ -24,11 +24,13 @@
 //! the pure [`build_request_body`] carries the wire-shape logic and is unit-tested.
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
-use crate::gateway::LlmProviderAdapter;
+use crate::gateway::{LlmProviderAdapter, TokenSink};
+use crate::sse::SseDecoder;
 use crate::types::{
     ContentBlock, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, ResponseFormat,
 };
@@ -127,6 +129,108 @@ pub struct OpenAiChatResponse {
     pub usage: Option<RawUsage>,
 }
 
+/// Reassembles a streaming chat-completion from its SSE chunks (ADR 0033, phase 13).
+/// Pure + offline-testable: feed each chunk's `data:` JSON to [`Self::push_event`] (which
+/// returns a text delta when the chunk carried `delta.content`), then [`Self::finish`]
+/// yields a [`OpenAiChatResponse`]-shaped `Value` the adapter maps via `to_response` — so
+/// the assembled response is identical to the non-streaming path.
+#[derive(Default)]
+pub struct OpenAiStreamAccumulator {
+    content: String,
+    tool_calls: Vec<StreamingToolCall>,
+    finish_reason: Option<String>,
+    usage: Option<Value>,
+}
+
+#[derive(Default)]
+struct StreamingToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl OpenAiStreamAccumulator {
+    fn ensure_tool(&mut self, index: usize) {
+        while self.tool_calls.len() <= index {
+            self.tool_calls.push(StreamingToolCall::default());
+        }
+    }
+
+    /// Process one SSE `data:` payload (`[DONE]` is a no-op). Returns the text delta when
+    /// the chunk carried `choices[0].delta.content`.
+    pub fn push_event(&mut self, data: &str) -> Option<String> {
+        if data.trim() == "[DONE]" {
+            return None;
+        }
+        let value: Value = serde_json::from_str(data).ok()?;
+        // Usage rides a trailing chunk (with `stream_options.include_usage`) whose
+        // `choices` is empty — read it before bailing on the missing choice.
+        if let Some(usage) = value.get("usage") {
+            if !usage.is_null() {
+                self.usage = Some(usage.clone());
+            }
+        }
+        let choice = value.get("choices")?.get(0)?;
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            self.finish_reason = Some(reason.to_owned());
+        }
+        let delta = choice.get("delta")?;
+        if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                self.ensure_tool(index);
+                let entry = &mut self.tool_calls[index];
+                if let Some(id) = call.get("id").and_then(Value::as_str) {
+                    if !id.is_empty() {
+                        entry.id = id.to_owned();
+                    }
+                }
+                if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
+                    if !name.is_empty() {
+                        entry.name = name.to_owned();
+                    }
+                }
+                if let Some(args) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                    entry.arguments.push_str(args);
+                }
+            }
+        }
+        let text = delta.get("content").and_then(Value::as_str)?;
+        if text.is_empty() {
+            return None;
+        }
+        self.content.push_str(text);
+        Some(text.to_owned())
+    }
+
+    /// Emit the assembled response as a chat-completion `Value`.
+    pub fn finish(self) -> Value {
+        let tool_calls: Vec<Value> = self
+            .tool_calls
+            .into_iter()
+            .filter(|call| !call.id.is_empty() || !call.name.is_empty())
+            .map(|call| {
+                json!({
+                    "id": call.id,
+                    "type": "function",
+                    "function": { "name": call.name, "arguments": call.arguments }
+                })
+            })
+            .collect();
+        let mut message = json!({ "content": self.content });
+        if !tool_calls.is_empty() {
+            message["tool_calls"] = Value::Array(tool_calls);
+        }
+        let mut response = json!({
+            "choices": [{ "message": message, "finish_reason": self.finish_reason }]
+        });
+        if let Some(usage) = self.usage {
+            response["usage"] = usage;
+        }
+        response
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Port seam
 // ---------------------------------------------------------------------------
@@ -137,6 +241,22 @@ pub struct OpenAiChatResponse {
 #[async_trait]
 pub trait OpenAiCompatiblePort: Send + Sync {
     async fn send(&self, body: Value) -> Result<Value, LlmError>;
+
+    /// Stream the chat-completion, calling `on_delta` per text delta, returning the
+    /// fully-assembled response `Value` (ADR 0033, phase 13). Default impl is chunk-once:
+    /// it `send()`s and emits the assembled content as one delta — so a test port streams
+    /// without real SSE. Only [`HttpPort`] overrides this with the provider's event stream.
+    async fn send_stream(&self, body: Value, on_delta: &TokenSink<'_>) -> Result<Value, LlmError> {
+        let raw = self.send(body).await?;
+        let text = raw
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !text.is_empty() {
+            on_delta(text);
+        }
+        Ok(raw)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +442,30 @@ impl LlmProviderAdapter for OpenAiCompatibleAdapter {
             .unwrap_or(&self.default_model)
             .to_owned();
         let raw = self.port.send(body).await?;
+        Ok(self.to_response(&request, model, raw))
+    }
+
+    async fn stream(
+        &self,
+        request: LlmRequest,
+        on_delta: &TokenSink<'_>,
+    ) -> Result<LlmResponse, LlmError> {
+        let mut body = build_request_body(&request, &self.default_model);
+        // Ask the server to stream and to include usage on the final chunk.
+        if let Value::Object(map) = &mut body {
+            map.insert("stream".to_owned(), json!(true));
+            map.insert(
+                "stream_options".to_owned(),
+                json!({ "include_usage": true }),
+            );
+        }
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.default_model)
+            .to_owned();
+        // The assembled response is authoritative — same `to_response` mapping as `complete()`.
+        let raw = self.port.send_stream(body, on_delta).await?;
         Ok(self.to_response(&request, model, raw))
     }
 }
@@ -557,6 +701,56 @@ impl OpenAiCompatiblePort for HttpPort {
         response.json::<Value>().await.map_err(|err| {
             LlmError::Provider(format!("openai-compatible response decode failed: {err}"))
         })
+    }
+
+    /// Real SSE over `POST {base_url}/chat/completions` with `"stream": true`. Frames the
+    /// byte stream and folds the chunks through [`OpenAiStreamAccumulator`], emitting each
+    /// text delta live. Transport verified on a live key (probe), not in CI — like `send()`;
+    /// the chunk reassembly is unit-tested offline through the accumulator.
+    async fn send_stream(&self, body: Value, on_delta: &TokenSink<'_>) -> Result<Value, LlmError> {
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let mut builder = self
+            .client
+            .post(url)
+            .header("content-type", "application/json");
+        if let Some(api_key) = &self.api_key {
+            if !api_key.is_empty() {
+                builder = builder.header("authorization", format!("Bearer {api_key}"));
+            }
+        }
+
+        let response = builder.json(&body).send().await.map_err(|err| {
+            LlmError::Provider(format!("openai-compatible stream request failed: {err}"))
+        })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider(format!(
+                "openai-compatible returned {status}: {text}"
+            )));
+        }
+
+        let mut decoder = SseDecoder::default();
+        let mut accumulator = OpenAiStreamAccumulator::default();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|err| {
+                LlmError::Provider(format!("openai-compatible stream read failed: {err}"))
+            })?;
+            let text = String::from_utf8_lossy(&bytes);
+            for payload in decoder.push(&text) {
+                if let Some(delta) = accumulator.push_event(&payload) {
+                    on_delta(&delta);
+                }
+            }
+        }
+        if let Some(payload) = decoder.finish() {
+            if let Some(delta) = accumulator.push_event(&payload) {
+                on_delta(&delta);
+            }
+        }
+        Ok(accumulator.finish())
     }
 }
 
@@ -1064,5 +1258,80 @@ mod tests {
         let tool_calls = choice.message.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls[0].function.name, "search");
         assert_eq!(raw.usage.as_ref().unwrap().prompt_tokens, Some(10));
+    }
+
+    /// ADR 0033 phase 13: the SSE accumulator reassembles a streamed chat-completion —
+    /// content deltas in order, usage from the trailing chunk, mapped to the same response.
+    #[test]
+    fn stream_accumulator_reassembles_a_text_completion() {
+        let mut acc = OpenAiStreamAccumulator::default();
+        let deltas: Vec<String> = [
+            r#"{"choices":[{"delta":{"role":"assistant","content":""},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"lo"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":2}}"#,
+            "[DONE]",
+        ]
+        .iter()
+        .filter_map(|e| acc.push_event(e))
+        .collect();
+        assert_eq!(deltas, vec!["Hel".to_owned(), "lo".to_owned()]);
+
+        let raw = acc.finish();
+        let request = LlmRequest {
+            provider: LlmProvider::Openai,
+            model: "gpt-x".to_owned(),
+            messages: vec![],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            response_format: None,
+        };
+        let response = to_response(
+            &request,
+            "gpt-x".to_owned(),
+            serde_json::from_value(raw).unwrap(),
+        );
+        assert_eq!(response.content, "Hello");
+        assert_eq!(response.stop_reason.as_deref(), Some("stop"));
+        assert_eq!(response.usage.prompt_tokens, 9);
+        assert_eq!(response.usage.completion_tokens, 2);
+    }
+
+    /// Streamed `tool_calls` arrive as fragments (id+name on the first, `arguments` split
+    /// across chunks); the accumulator concatenates them into one structured call.
+    #[test]
+    fn stream_accumulator_reassembles_streamed_tool_calls() {
+        let mut acc = OpenAiStreamAccumulator::default();
+        for event in [
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":""}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"rust\"}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ] {
+            assert_eq!(acc.push_event(event), None);
+        }
+        let raw = acc.finish();
+        let request = LlmRequest {
+            provider: LlmProvider::Openai,
+            model: "gpt-x".to_owned(),
+            messages: vec![],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            response_format: None,
+        };
+        let response = to_response(
+            &request,
+            "gpt-x".to_owned(),
+            serde_json::from_value(raw).unwrap(),
+        );
+        let calls = response.tool_calls.expect("tool calls assembled");
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "search");
+        assert_eq!(calls[0].input, json!({ "q": "rust" }));
     }
 }

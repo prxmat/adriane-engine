@@ -40,4 +40,19 @@ export type RunEvent =
       finalState: GraphState<ChannelsSchema>;
       timestamp: string;
     }
-  | { type: "run_failed"; runId: RunId; error: string; timestamp: string };
+  | { type: "run_failed"; runId: RunId; error: string; timestamp: string }
+  // ADR 0033 phase 13: one observational per-token delta during agent generation.
+  // Observational-only — never persisted (it bypasses the EventBus on the Rust path),
+  // so it is absent from checkpoints and the journal. `messageId` groups all deltas of
+  // one agent turn; `spawnId`/`parentRunId` tag a `mapAgents` sub-agent's stream so a
+  // consumer can demultiplex concurrent spawns (both absent for a top-level agent node).
+  | {
+      type: "token_delta";
+      runId: RunId;
+      nodeId: NodeId;
+      messageId: string;
+      delta: string;
+      parentRunId?: RunId;
+      spawnId?: number;
+      timestamp: string;
+    };

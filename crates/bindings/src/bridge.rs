@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use adriane_agents_core::{
     agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem,
-    CompressMiddleware, ContextBudgetMiddleware, InMemoryToolRegistry, MemoryMiddleware,
+    CompressMiddleware, ContextBudgetMiddleware, EventSink, InMemoryToolRegistry, MemoryMiddleware,
     MiddlewareStack, ReActAgent, RedactMiddleware, ReflectionMiddleware,
     StructuredOutputMiddleware, TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL,
     DEFAULT_AGENT_OUTPUT_CHANNEL,
@@ -646,6 +646,57 @@ fn js_condition(name: String, callbacks: &JsCallbacks) -> adriane_graph_runtime:
     })
 }
 
+/// Wall-clock millis-since-epoch as a string, for the observational `TokenDelta`
+/// timestamp. Mirrors the runtime's private `now_string()`. Safe to use here (unlike
+/// inside deterministic run state) because `TokenDelta` is observational-only: it never
+/// enters a checkpoint or the journal, so a wall-clock value never affects replay.
+fn now_string() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().to_string())
+        .unwrap_or_else(|_| "0".to_owned())
+}
+
+/// The `agents-core` [`EventSink`] impl (ADR 0033, phase 13): forwards each observational
+/// token delta to JS as a [`RunEvent::TokenDelta`] over the SAME `on_event` TSFN the
+/// runtime uses for lifecycle events — but **bypassing the `EventBus`**, so a delta never
+/// enters the in-memory events vector, a checkpoint, or the durable journal. Built only when
+/// the run opted into streaming (`EngineSpec::stream_tokens`).
+struct TokenStreamSink {
+    on_event: StringTsfn,
+    run_id: RunId,
+    node_id: NodeId,
+}
+
+impl EventSink for TokenStreamSink {
+    fn token_delta(&self, spawn_id: Option<u32>, message_id: &str, delta: &str) {
+        // Namespace the per-turn message id with the run (and spawn, if any) so concurrent
+        // `mapAgents` spawns' turns never collide on the wire.
+        let scoped_message_id = match spawn_id {
+            Some(spawn) => format!("{}:spawn{}:{}", self.run_id.0, spawn, message_id),
+            None => format!("{}:{}", self.run_id.0, message_id),
+        };
+        let event = RunEvent::TokenDelta {
+            run_id: self.run_id.clone(),
+            node_id: self.node_id.clone(),
+            message_id: scoped_message_id,
+            delta: delta.to_owned(),
+            // A `mapAgents` spawn is a sub-agent of this run; a top-level node is the run
+            // itself (`None`). Additive to the `<parentRunId>:<nodeId>` RunId convention.
+            parent_run_id: spawn_id.map(|_| self.run_id.clone()),
+            spawn_id,
+            timestamp: now_string(),
+        };
+        if let Ok(payload) = serde_json::to_string(&event) {
+            // Fire-and-forget, exactly like the lifecycle-event forwarder. Never blocks the
+            // agent loop; a JS-side throw is the consumer's problem, not the run's.
+            let _ = self
+                .on_event
+                .call(payload, ThreadsafeFunctionCallMode::NonBlocking);
+        }
+    }
+}
+
 /// Build the agent-node handler for an agent spec: a [`ReActAgent`] over a gateway
 /// chosen from env, with a tool registry where JS tools call back into JS.
 #[allow(clippy::too_many_arguments)]
@@ -751,6 +802,19 @@ fn build_react_agent(
         &resolved.model,
         node_id,
     ));
+
+    // ADR 0033 phase 13: opt-in token streaming. When the run requested it, install an
+    // observational sink that forwards each delta to JS over the `on_event` TSFN, bypassing
+    // the durable EventBus. Absent the flag, no sink is attached and the loop calls
+    // `gateway.complete()` — byte-identical to before. A `mapAgents` sub-agent built through
+    // this same function inherits the sink and tags its deltas with the spawn index.
+    if spec.stream_tokens {
+        agent = agent.with_event_sink(Arc::new(TokenStreamSink {
+            on_event: callbacks.on_event.clone(),
+            run_id: fs_run_id.clone(),
+            node_id: NodeId::from(node_id),
+        }));
+    }
 
     Ok(Arc::new(agent))
 }
@@ -1667,6 +1731,7 @@ mod tests {
             subgraphs: vec![],
             inbox: BTreeMap::new(),
             run_id: Some("run-gated".to_owned()),
+            stream_tokens: false,
             initial_data: BTreeMap::new(),
             state: None,
             approved_tools: vec![],
@@ -2168,6 +2233,7 @@ mod tests {
             subgraphs: vec![],
             inbox: BTreeMap::new(),
             run_id: Some("run-guard".to_owned()),
+            stream_tokens: false,
             initial_data: BTreeMap::new(),
             state: Some(suspended),
             approved_tools: vec![ApprovedTool {
@@ -2234,6 +2300,7 @@ mod tests {
             subgraphs: vec![],
             inbox: BTreeMap::new(),
             run_id: Some("run-guard-resume".to_owned()),
+            stream_tokens: false,
             initial_data: BTreeMap::new(),
             state: Some(suspended),
             approved_tools: vec![ApprovedTool {

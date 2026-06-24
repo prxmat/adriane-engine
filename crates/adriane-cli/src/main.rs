@@ -320,6 +320,14 @@ fn format_event(event: &RunEvent) -> String {
         RunEvent::RunResumed { node_id, .. } => format!("run_resumed    {node_id}"),
         RunEvent::RunCompleted { .. } => "run_completed".to_owned(),
         RunEvent::RunFailed { error, .. } => format!("run_failed     {error}"),
+        // ADR 0033 phase 13: observational per-token delta. Rendered compactly (and
+        // only ever reachable here if a caller opts into streaming); never durable.
+        RunEvent::TokenDelta {
+            node_id, spawn_id, ..
+        } => match spawn_id {
+            Some(spawn) => format!("token_delta    {node_id} (spawn {spawn})"),
+            None => format!("token_delta    {node_id}"),
+        },
     }
 }
 

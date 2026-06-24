@@ -196,6 +196,13 @@ pub struct EngineSpec {
     pub inbox: BTreeMap<String, Vec<Value>>,
     #[serde(default)]
     pub run_id: Option<String>,
+    /// Opt-in per-token streaming (ADR 0033, phase 13). When `true`, agent nodes drive
+    /// `gateway.stream()` and emit observational `RunEvent::TokenDelta` events over the
+    /// `on_event` sink (bypassing the durable EventBus). When `false`/absent — the default —
+    /// agents call `gateway.complete()` and the run is byte-identical to before. A consumer
+    /// only sets this when it actually renders a live token view.
+    #[serde(default)]
+    pub stream_tokens: bool,
     #[serde(default)]
     pub initial_data: BTreeMap<String, Value>,
     /// Serialized [`GraphState`] of a suspended run — required by resume/approve,
