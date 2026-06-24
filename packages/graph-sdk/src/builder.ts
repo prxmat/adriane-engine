@@ -233,6 +233,7 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
           todosChannel: rustConfig.todosChannel,
           inputBlocksChannel: rustConfig.inputBlocksChannel,
           memory: rustConfig.memory,
+          skills: rustConfig.skills,
           enableFs: rustConfig.enableFs,
           // ADR 0025 phase 3d — the resolved efficiency middleware list (profile + explicit
           // middleware + flat knobs, already desugared) so the catalog/Studio path reaches

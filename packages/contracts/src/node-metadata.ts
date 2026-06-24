@@ -53,6 +53,16 @@ export const AgentNodeMetadataSchema = z.object({
       recall: z.enum(["vector", "graph", "both"]).optional()
     })
     .optional(),
+  /** ADR 0035 phase 12 — governed skills overlay (progressive disclosure; namespace tenant-scoped). */
+  skills: z
+    .object({
+      namespace: z.string().min(1),
+      /** Explicit `name@version` pins — the must-apply playbooks. */
+      required: z.array(z.string().min(1)).optional(),
+      /** Cap on advisory (vector-selected) skills. */
+      advisoryK: z.number().int().min(0).optional()
+    })
+    .optional(),
   /** ADR 0024 phase 2c/2d — opt this agent into the governed virtual filesystem tools. */
   enableFs: z.boolean().optional(),
   /**

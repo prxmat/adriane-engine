@@ -70,6 +70,8 @@ export type AgentCarrier = {
   inputBlocksChannel?: string;
   /** ADR 0026 phase 11 — governed long-term memory overlay. */
   memory?: { namespace: string; topK?: number; recall?: "vector" | "graph" | "both" };
+  /** ADR 0035 phase 12 — governed skills (progressive disclosure) overlay. */
+  skills?: { namespace: string; required?: string[]; advisoryK?: number };
   /** ADR 0024 — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /**
@@ -189,6 +191,7 @@ const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean
   todosChannel: carrier.todosChannel,
   inputBlocksChannel: carrier.inputBlocksChannel,
   memory: carrier.memory,
+  skills: carrier.skills,
   // ADR 0024 — fs enablement carried on the persisted node; the run's fs policy is
   // supplied separately by the control plane (RunCatalogGraphOptions.fsPolicy).
   enableFs: carrier.enableFs,

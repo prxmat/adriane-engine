@@ -26,7 +26,7 @@ use std::sync::Arc;
 use adriane_agents_core::{
     agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem,
     CompressMiddleware, ContextBudgetMiddleware, EventSink, InMemoryToolRegistry, MemoryMiddleware,
-    MiddlewareStack, ReActAgent, RedactMiddleware, ReflectionMiddleware,
+    MiddlewareStack, ReActAgent, RedactMiddleware, ReflectionMiddleware, SkillMiddleware,
     StructuredOutputMiddleware, TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL,
     DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
@@ -49,6 +49,7 @@ use adriane_llm_gateway::{
     OpenAiCompatibleAdapter, RegexSecretsRedactor,
 };
 use adriane_memory::{InMemoryMemoryStore, MemoryStore, MockEmbedder, RecallMode, RetrievalPolicy};
+use adriane_skills::{InMemorySkillStore, SkillStore};
 use async_trait::async_trait;
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -335,6 +336,12 @@ fn build_fs_backend(
 static MEMORY_STORE: std::sync::LazyLock<Arc<InMemoryMemoryStore>> =
     std::sync::LazyLock::new(|| Arc::new(InMemoryMemoryStore::new()));
 
+/// ADR 0035 phase 12: the process-global in-memory skills registry, shared across agents/runs so
+/// selection works across runs in OSS dev (intra-process). The control plane swaps a Postgres-
+/// backed `SkillStore` behind the same seam for durable, governed, versioned skills.
+static SKILL_STORE: std::sync::LazyLock<Arc<InMemorySkillStore>> =
+    std::sync::LazyLock::new(|| Arc::new(InMemorySkillStore::new()));
+
 fn build_agent_middleware(
     agent_spec: &AgentSpec,
     gateway: &Arc<DefaultLlmGateway>,
@@ -389,6 +396,24 @@ fn build_agent_middleware(
             mem.namespace.clone(),
             Some(format!("agent:{node_id}")),
             policy,
+        )));
+    }
+    // ADR 0035 phase 12: governed skills (progressive disclosure). Installed in the EFFICIENCY
+    // layer (so the governed layer — redaction/approval/fs — sees the pre-skill world) but
+    // bridge-injected FIRST (before any SDK-resolved efficiency middleware), so it precedes a
+    // ContextBudget cap and a user can neither add nor remove it. The namespace is sealed here;
+    // capability-granting (`requires`) skills stay withheld until their grant is in the approval
+    // set. Applies to sub-agents too (same build path → deepagents parity). OSS default = the
+    // shared in-memory registry + MockEmbedder (the control plane injects a Postgres store).
+    if let Some(sk) = &agent_spec.skills {
+        let store: Arc<dyn SkillStore> = SKILL_STORE.clone();
+        stack.push_efficiency(Arc::new(SkillMiddleware::new(
+            store,
+            Arc::new(MockEmbedder),
+            sk.namespace.clone(),
+            sk.required.clone(),
+            sk.advisory_k.map(|k| k as usize).unwrap_or(3),
+            None,
         )));
     }
     // EFFICIENCY — built from the SDK-resolved data list, in order.
@@ -1465,6 +1490,7 @@ mod tests {
             resolved_middleware: vec![],
             input_blocks_channel: None,
             memory: None,
+            skills: None,
         };
 
         let gateway = build_gateway(
@@ -1647,6 +1673,23 @@ mod tests {
         assert_eq!(stack.efficiency_len(), 0);
     }
 
+    /// ADR 0035 phase 12: a `skills` overlay installs exactly one sealed `SkillMiddleware` in the
+    /// efficiency layer (bridge-injected, namespace-sealed), proving the `SkillSpec` maps through
+    /// the bridge to a real middleware — the TS↔Rust parity contract for skill loading.
+    #[test]
+    fn skills_overlay_installs_a_sealed_middleware() {
+        let gateway = Arc::new(DefaultLlmGateway::new());
+        let spec: crate::spec::AgentSpec = serde_json::from_value(json!({
+            "provider": "anthropic",
+            "skills": { "namespace": "skill:t1:org", "required": ["house-style@1.0.0"], "advisoryK": 2 }
+        }))
+        .expect("spec parses");
+        let stack =
+            build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m", "assistant");
+        // One efficiency middleware (the skills loader); no resolved_middleware was requested.
+        assert_eq!(stack.efficiency_len(), 1);
+    }
+
     /// A gated agent suspends with a pending approval recorded in its output
     /// channel — exactly the shape `collect_pending_approvals` reads.
     #[tokio::test]
@@ -1671,6 +1714,7 @@ mod tests {
             resolved_middleware: vec![],
             input_blocks_channel: None,
             memory: None,
+            skills: None,
         };
         let gateway = build_gateway(
             &agent_spec,
@@ -1834,6 +1878,7 @@ mod tests {
             resolved_middleware: vec![],
             input_blocks_channel: None,
             memory: None,
+            skills: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1887,6 +1932,7 @@ mod tests {
             resolved_middleware: vec![],
             input_blocks_channel: None,
             memory: None,
+            skills: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1947,6 +1993,7 @@ mod tests {
             resolved_middleware: vec![],
             input_blocks_channel: None,
             memory: None,
+            skills: None,
         };
 
         let resolved = resolve_agent_model(&agent_spec);

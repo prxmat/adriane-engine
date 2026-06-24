@@ -149,6 +149,42 @@ describe("@adriane-ai/graph-sdk agent node — writeTodos durable channel (ADR 0
     expect(off.enableFs).toBeUndefined();
   });
 
+  it("threads skills through toRustAgentConfig to the Rust agent spec (ADR 0035 phase 12)", () => {
+    const config = toRustAgentConfig("worker", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "Draft a reply." },
+      skills: { namespace: "skill:t1:org", required: ["house-style@1.0.0"], advisoryK: 2 }
+    });
+    expect(config.skills).toEqual({
+      namespace: "skill:t1:org",
+      required: ["house-style@1.0.0"],
+      advisoryK: 2
+    });
+    const off = toRustAgentConfig("plain", {
+      llm: new DefaultLLMGateway(),
+      prompt: { system: "No skills." }
+    });
+    expect(off.skills).toBeUndefined();
+  });
+
+  it("carries skills on the persisted metadata.agent carrier (ADR 0035 phase 12)", () => {
+    // Without this the catalog/Studio path drops the overlay and skills never load.
+    const compiled = createGraph({ name: "skill-carrier" })
+      .agentNode("worker", {
+        llm: new DefaultLLMGateway(),
+        prompt: { system: "Draft a reply." },
+        skills: { namespace: "skill:t1:org", required: ["house-style@1.0.0"], advisoryK: 2 }
+      })
+      .compile();
+    const node = compiled.definition.nodes.find((candidate) => String(candidate.id) === "worker");
+    const agent = (node?.metadata as { agent?: Record<string, unknown> } | undefined)?.agent;
+    expect(agent?.skills).toEqual({
+      namespace: "skill:t1:org",
+      required: ["house-style@1.0.0"],
+      advisoryK: 2
+    });
+  });
+
   it("carries todosChannel + ADR 0014 knobs on the persisted metadata.agent carrier", () => {
     // The persisted GraphDefinition must run identically on the catalog/Studio path,
     // so the metadata.agent carrier has to include these (otherwise they are dropped).

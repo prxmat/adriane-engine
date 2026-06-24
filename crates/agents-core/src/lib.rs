@@ -16,6 +16,7 @@ pub mod node;
 pub mod plan_execute;
 pub mod react;
 pub mod reflection;
+pub mod skill_middleware;
 pub mod structured_output;
 pub mod supervisor;
 pub mod todos;
@@ -40,6 +41,7 @@ pub use react::{
 pub use reflection::{
     ReflectionAgent, ReflectionResult, DEFAULT_MAX_REFLECTIONS, REFLECTION_MODEL, REVISE_MARKERS,
 };
+pub use skill_middleware::{SelectedSkill, SkillMiddleware, SkillResourceResolver};
 pub use structured_output::{extract_first_json, validate_json};
 pub use supervisor::{
     Routing, SupervisorAgent, SupervisorResult, Worker, NO_DESCRIPTION, SUPERVISOR_MODEL,
