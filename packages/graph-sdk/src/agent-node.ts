@@ -43,6 +43,18 @@ export type AgentPromptSource =
   /** Inline convenience: the SDK registers this string and references it by id. */
   | { system: string };
 
+/**
+ * Governed long-term memory overlay for an agent node (ADR 0026 phase 11). `namespace` is the
+ * tenant-scoped memory partition; `topK`/`recall` tune retrieval. The principal is sealed by the
+ * engine. The OSS engine recalls/persists in-memory; the control plane swaps a Neo4j-backed store
+ * (native vector index + entity graph) behind the same seam.
+ */
+export type MemoryConfig = {
+  namespace: string;
+  topK?: number;
+  recall?: "vector" | "graph" | "both";
+};
+
 /** Config for {@link GraphBuilder.agentNode}. */
 export type AgentNodeConfig = {
   /**
@@ -122,6 +134,13 @@ export type AgentNodeConfig = {
    * text-only seed.
    */
   inputBlocksChannel?: string;
+  /**
+   * Governed long-term memory (ADR 0026 phase 11). When set, the engine recalls from this
+   * namespace before the run (vector) and persists the run's reasoning after, attributed. The
+   * `namespace` is tenant-scoped (the control plane validates access) and the principal is
+   * sealed by the engine — never user-routable. `topK`/`recall` tune retrieval quality.
+   */
+  memory?: MemoryConfig;
   /**
    * Opt this agent into the governed virtual filesystem tools (ADR 0024 phase 2b):
    * `read_file`/`ls`/`glob`/`grep`/`write_file`/`edit_file`/`delete_file`/`move_file`,
@@ -328,6 +347,8 @@ export type RustAgentConfig = {
   todosChannel?: string;
   /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks. */
   inputBlocksChannel?: string;
+  /** ADR 0026 phase 11 — governed long-term memory overlay. */
+  memory?: MemoryConfig;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /**
@@ -520,6 +541,7 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
     contextBudget: config.contextBudget,
     todosChannel: config.todosChannel,
     inputBlocksChannel: config.inputBlocksChannel,
+    memory: config.memory,
     enableFs: config.enableFs ?? profile?.enableFs,
     resolvedMiddleware: resolveMiddleware(config),
     toolBindings: toolBindingsOf(config.tools),

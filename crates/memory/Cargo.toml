@@ -1,0 +1,16 @@
+[package]
+name = "adriane-memory"
+description = "Unified governed long-term memory (ADR 0026 phase 11): vector + entity-graph recall + provenance, DB-free seam + in-memory default."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adriane-rag-pipeline = { path = "../rag-pipeline" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
