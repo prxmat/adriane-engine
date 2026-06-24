@@ -147,6 +147,8 @@ importers:
         specifier: ^3.2.6
         version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
 
+  packages/create-adriane: {}
+
   packages/graph-adriane:
     dependencies:
       '@adriane-ai/graph-core':

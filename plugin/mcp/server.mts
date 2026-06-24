@@ -96,7 +96,9 @@ loadRepoEnv();
 
 import {
   createGraph,
+  componentSchemas,
   DefaultLLMGateway,
+  generateLlmsTxt,
   MockLLMProviderAdapter,
   AnthropicProviderAdapter,
   OpenAICompatibleProviderAdapter,
@@ -924,9 +926,63 @@ async function compileGraphYaml(args: Record<string, unknown>): Promise<ToolResu
   }
 }
 
+// --- Machine-API tools (ADR DX batch 5): discover + introspect the framework -------------
+
+/** Discovery: every component node kind with its JSON Schema (params), category + description —
+ * so an AI agent can enumerate the building blocks before authoring a graph. */
+async function listComponents(): Promise<ToolResult> {
+  return jsonResult(componentSchemas());
+}
+
+/** Ground truth: the generated llms.txt (install, the API surface, catalogs, error codes,
+ * invariants) — what an agent reads to use Adriane without hallucinating. */
+async function getLlmsTxt(): Promise<ToolResult> {
+  return textResult(generateLlmsTxt());
+}
+
+/** Introspection: explain where a suspended run stands (why, what unblocks it, what failed) —
+ * the run must be one this server is currently tracking (suspended) by runId. */
+async function explainRunTool(args: Record<string, unknown>): Promise<ToolResult> {
+  const runId = typeof args?.runId === "string" ? args.runId : undefined;
+  if (runId === undefined) return textResult("explain_run requires a string `runId`.", true);
+  const pending = pendingRuns.get(runId);
+  if (pending === undefined) {
+    return textResult(
+      `No tracked run for runId '${runId}'. A run is tracked while suspended — run run_agent/run_graph first.`,
+      true
+    );
+  }
+  return jsonResult(pending.app.explain(runId as RunId));
+}
+
 // --- Tool definitions ----------------------------------------------------------
 
 export const TOOLS = [
+  {
+    name: "list_components",
+    description:
+      "Discover every Adriane component node kind with its JSON Schema (params), category and description. " +
+      "Use this to enumerate the building blocks before authoring a graph — the catalog is the engine's source of truth.",
+    inputSchema: { type: "object", properties: {} }
+  },
+  {
+    name: "get_llms_txt",
+    description:
+      "Return Adriane's llms.txt — the single ground-truth doc (install, the createGraph/agentNode/model API, " +
+      "the component/prebuilt/tier catalogs, error codes, invariants). Read it first to use the framework accurately.",
+    inputSchema: { type: "object", properties: {} }
+  },
+  {
+    name: "explain_run",
+    description:
+      "Explain where a suspended run stands: its status, WHY it suspended (human gate / approval / signal / timer), " +
+      "the exact next action to resume, and any failure. The run must be tracked by this server (suspended) — pass the runId from run_agent/run_graph.",
+    inputSchema: {
+      type: "object",
+      properties: { runId: { type: "string", description: "A suspended run's id (from run_agent/run_graph)." } },
+      required: ["runId"]
+    }
+  },
   {
     name: "list_agents",
     description:
@@ -1027,6 +1083,9 @@ export const TOOLS = [
 ];
 
 const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolResult>> = {
+  list_components: listComponents,
+  get_llms_txt: getLlmsTxt,
+  explain_run: explainRunTool,
   list_agents: listAgents,
   run_agent: runAgent,
   approve_and_resume: approveAndResume,

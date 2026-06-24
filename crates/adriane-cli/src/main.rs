@@ -69,8 +69,11 @@ COMMANDS:
     compile <file.yaml>             Compile a graph and print its GraphDefinition as JSON
     validate <file.yaml>            Validate a graph; prints `valid` or the errors
     run <file.yaml> [--input <json>]
-                                    Execute the graph topology; streams an event journal
-                                    to stderr and prints the final GraphState as JSON
+                                    Walk the graph topology: routing and human-gate
+                                    suspension are REAL; agent/tool/action node handlers
+                                    are no-ops (use the @adriane-ai/graph-sdk to run real
+                                    agents). Streams an event journal to stderr and prints
+                                    the final GraphState as JSON.
     inspect <file.yaml>             Print a human-readable summary of the graph
     --help, -h                      Show this help
 

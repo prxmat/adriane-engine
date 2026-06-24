@@ -7,8 +7,9 @@ description: How the Rust engine is exposed to TypeScript — the napi addon, th
 # The native bridge
 
 The Rust engine is exposed to TypeScript through a **native addon** (napi-rs). The SDK loads it
-in a `try/catch`; if it is absent, the SDK **falls back** to the TypeScript engine. In Python the
-equivalent bridge is a pyo3 extension shipped inside the wheel.
+in a `try/catch`; if it genuinely cannot run a graph, the SDK **throws `RustEngineRequiredError`** —
+there is **no TypeScript execution fallback** (ADR 0016), so a run never silently degrades. In
+Python the equivalent bridge is a pyo3 extension shipped inside the wheel.
 
 ## Loading the addon
 
@@ -19,9 +20,9 @@ Resolution order (first found wins), in `engine/crates/bindings/index.js`:
 3. `@adriane-ai/napi-<triple>` — prebuilt per-platform package.
 
 Targets covered: **darwin** (arm64/x64), **linux glibc** (x64/arm64), **win32 x64**. On
-uncovered targets (linux musl/Alpine, win32 arm64, others) the module throws and the SDK falls
-back to the TS engine. Without the addon, `usesRustEngine` is `false` and the SDK silently uses
-the TS engine.
+uncovered targets (linux musl/Alpine, win32 arm64, others) the prebuilt addon is absent — use a
+glibc base image (`node:20-slim`) or build it from source with a Rust toolchain. With no addon,
+`usesRustEngine` is `false` and running a graph throws `RustEngineRequiredError` (no silent TS path).
 
 ## The napi surface
 

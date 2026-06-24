@@ -15,6 +15,8 @@ import {
   type StreamMode
 } from "@adriane-ai/graph-runtime";
 
+import { AdrianeSdkError, ResumeStateNotFoundError } from "./errors.js";
+import { explainRun, type RunExplanation } from "./run-explainer.js";
 import {
   type AgentApprovalBinding,
   type FsPolicyRule,
@@ -137,7 +139,7 @@ const enginePreference = (): EnginePreference => {
  * Thrown at compile time when the graph cannot run on the **Rust engine**. The SDK is a thin
  * surface over the native engine and has **no TypeScript fallback** — it never silently degrades.
  */
-export class RustEngineRequiredError extends Error {
+export class RustEngineRequiredError extends AdrianeSdkError {
   public constructor(preference: EnginePreference) {
     const reason =
       preference === "ts"
@@ -148,7 +150,11 @@ export class RustEngineRequiredError extends Error {
     super(
       `Adriane requires the Rust engine; there is no TypeScript fallback. Cannot run this graph: ${reason} ` +
         "Build the native addon (scripts/build-napi.sh) / install @adriane-ai/napi, and use channel-based " +
-        "routing/approvals."
+        "routing/approvals.",
+      {
+        code: "ADR_RUST_ENGINE_REQUIRED",
+        hint: "Install @adriane-ai/napi (it ships prebuilt for common platforms) — or, if the graph uses a removed TS-only feature, switch to channel-based routing/approvals."
+      }
     );
     this.name = "RustEngineRequiredError";
   }
@@ -678,6 +684,27 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   }
 
   /** Record a run's state if it suspended, so resume/approve can feed it back to Rust. */
+  /**
+   * Explain where a run stands (ADR AI-DX): its status, why it suspended, what unblocks it, and
+   * what failed — a structured account a human or an AI agent reads to pick the next move. Reads
+   * the suspended state this instance retains; an unknown run id (it completed, failed, or runs on
+   * another instance) returns a `status: "unknown"` explanation. For an arbitrary run, pass its
+   * `GraphState` to {@link explainRun} directly.
+   */
+  public explain(runId: RunId): RunExplanation {
+    const state = this.suspendedStates.get(String(runId));
+    if (state === undefined) {
+      return {
+        runId: String(runId),
+        status: "unknown",
+        currentNode: "",
+        summary: `No suspended run '${String(runId)}' on this CompiledGraph instance — it has completed, failed, or runs elsewhere. Pass a live GraphState to explainRun(state) to explain any run.`,
+        channels: []
+      };
+    }
+    return explainRun(state);
+  }
+
   private captureSuspension(state: TypedGraphState<ChannelValues>): void {
     if (state.status === "suspended") {
       this.suspendedStates.set(String(state.runId), state as unknown as GraphState);
@@ -689,10 +716,7 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   private requireSuspendedState(runId: RunId): GraphState {
     const state = this.suspendedStates.get(String(runId));
     if (state === undefined) {
-      throw new Error(
-        `No suspended state for run '${String(runId)}'. On the Rust engine, resume/approve must ` +
-          "follow a suspended run on the same CompiledGraph instance."
-      );
+      throw new ResumeStateNotFoundError(String(runId));
     }
     return state;
   }

@@ -55,8 +55,11 @@ export type ModelSpec = {
   apiKeyEnv?: string;
 };
 
-/** An unknown provider slug reached the SDK (ADR 0034 — fail loud, never silent-Anthropic). */
+/** An unknown provider slug reached the SDK (ADR 0034 — fail loud, never silent-Anthropic).
+ * Carries a stable `code` + actionable `hint` (errors-that-teach). */
 export class UnknownProviderError extends Error {
+  readonly code = "ADR_UNKNOWN_PROVIDER";
+  readonly hint: string;
   constructor(
     readonly provider: string,
     readonly knownProviders: readonly string[]
@@ -66,28 +69,35 @@ export class UnknownProviderError extends Error {
         `For a custom OpenAI-compatible endpoint use model.openaiCompatible({ baseURL }).`
     );
     this.name = "UnknownProviderError";
+    this.hint = `Use one of: ${knownProviders.join(", ")} — or model.openaiCompatible({ baseURL }) for a custom endpoint.`;
   }
 }
 
 /** A named provider has no API key in the environment (ADR 0034). Names the exact env var. */
 export class MissingProviderKeyError extends Error {
+  readonly code = "ADR_MISSING_PROVIDER_KEY";
+  readonly hint: string;
   constructor(
     readonly provider: ProviderSlug,
     readonly envVar: string
   ) {
     super(`No API key for provider "${provider}": set ${envVar} in the environment.`);
     this.name = "MissingProviderKeyError";
+    this.hint = `Set ${envVar} in the environment (or pass apiKeyEnv to name a different variable).`;
   }
 }
 
 /** A provider-less (tier-only / zero-config) model found no provider key in the env (ADR 0034). */
 export class NoProviderInEnvError extends Error {
+  readonly code = "ADR_NO_PROVIDER_IN_ENV";
+  readonly hint: string;
   constructor(readonly checkedVars: readonly string[]) {
     super(
       `No provider API key found in the environment. Set one of: ${checkedVars.join(", ")} — ` +
         `or name a provider explicitly, e.g. model.openai("gpt-4o").`
     );
     this.name = "NoProviderInEnvError";
+    this.hint = `Set one of: ${checkedVars.join(", ")} — or name a provider explicitly, e.g. model.openai("gpt-4o").`;
   }
 }
 
