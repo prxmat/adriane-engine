@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Runtime and engine
-description: The Rust engine — the required runtime — and the internal TypeScript engine for development and tests.
+description: The Rust engine — the required, Rust-only runtime — and why there is no TypeScript execution fallback.
 ---
 
 # Runtime and engine
@@ -36,13 +36,14 @@ import { rustEngineAvailable } from "@adriane-ai/graph-sdk";
 console.log(rustEngineAvailable()); // true — the Rust engine is running
 ```
 
-## The internal TypeScript engine (development & tests)
+## No TypeScript execution fallback
 
-An in-process TypeScript engine backs **development, the test suite, and the platforms the
-native addon doesn't cover yet**. It produces **identical observable behaviour** — the same
-final status, the same suspend/resume points, the same lifecycle events — so tests exercise the
-same contract. It is not a runtime you target: production is Rust. Your code, and any observer
-of a run, cannot tell which implementation executed.
+Execution is **Rust-only**. The TypeScript engine packages still exist (and a few legacy tests
+exercise them), but they are **not an execution fallback**: if the native addon genuinely can't
+run a graph, the SDK throws `RustEngineRequiredError` rather than silently degrading (ADR 0016).
+The prebuilt addon ships with the SDK and covers the common platforms; on an uncovered target
+(e.g. musl/Alpine) you build it from source or use a glibc base image — you never get a quiet
+TS-engine run with different guarantees.
 
 ## The bridge
 

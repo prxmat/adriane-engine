@@ -44,6 +44,13 @@ console.log(result.status); // "completed"
 `@adriane-ai/graph-sdk` is a **self-contained bundle**, and it depends on the Rust engine
 (`@adriane-ai/napi`) — so `npm i @adriane-ai/graph-sdk` pulls the engine for you. No extra step.
 
+:::tip Fastest start — scaffold a governed app
+```bash
+npm create adriane@latest my-app   # a runnable governed graph + the dev inspector
+cd my-app && npm install && npm start
+```
+:::
+
 ### The Rust engine is required
 
 Adriane runs on the **Rust engine**. `@adriane-ai/napi` is a regular **dependency** of the SDK,
@@ -56,10 +63,13 @@ import { rustEngineAvailable } from "@adriane-ai/graph-sdk";
 console.log(rustEngineAvailable()); // true — the Rust engine is running
 ```
 
-:::note Development / tests
-An in-process TypeScript engine backs **development, the test suite, and platforms the native
-addon doesn't cover yet**. It mirrors the Rust engine's observable behaviour (same status,
-suspend/resume, and lifecycle events), but it is not a runtime you target — production is Rust.
+:::note No TypeScript execution fallback
+Execution is **Rust-only**: if the native addon genuinely can't run a graph, the SDK throws
+`RustEngineRequiredError` rather than silently degrading (ADR 0016). Prebuilt addons cover
+macOS, Linux **glibc**, and Windows (x64/arm64); on an uncovered target (e.g. **musl/Alpine**)
+either use a glibc base image (`node:20-slim`) or install the Rust toolchain so the addon builds
+from source. The TypeScript engine packages remain only as an internal dev/test aid, never a
+runtime you target.
 :::
 
 ## Python
