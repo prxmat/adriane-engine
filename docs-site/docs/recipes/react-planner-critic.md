@@ -2,6 +2,8 @@
 sidebar_position: 7
 title: ReAct agent with planner & critic
 description: A togglable planner → agent ⇄ tools → critic → finalize graph, and how it compares to the same thing in LangGraph.
+tags: ["agents"]
+difficulty: intermediate
 ---
 
 # ReAct agent with planner & critic

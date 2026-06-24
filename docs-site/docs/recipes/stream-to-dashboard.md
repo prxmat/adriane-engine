@@ -2,6 +2,8 @@
 sidebar_position: 4
 title: Stream to a governance dashboard
 description: Subscribe to a run's lifecycle events with onEvent and relay them over SSE to a live governance view.
+tags: ["streaming", "ops", "governance"]
+difficulty: intermediate
 ---
 
 # Stream to a governance dashboard

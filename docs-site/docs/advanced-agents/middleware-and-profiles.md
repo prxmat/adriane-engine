@@ -104,6 +104,30 @@ approval gate", and you cannot smuggle a governance middleware into the user lay
 
 ## The lifecycle hooks
 
+```mermaid
+graph TD
+    A["Request Path"] --> B["before_run<br/>context-budget trim"]
+    B --> C["before_model<br/>GOVERNED: redaction"]
+    C --> D["before_model<br/>EFFICIENCY: compress, terse"]
+    D --> E["before_tool<br/>GOVERNED: approval gate, fs policy"]
+    E --> F["ReAct Loop<br/>gateway.complete"]
+    
+    F --> G["after_tool<br/>EFFICIENCY: observation transforms"]
+    G --> H["after_model<br/>GOVERNED: redaction hydrate"]
+    H --> I["after_run<br/>EFFICIENCY: reflection"]
+    I --> J["Response Path"]
+    
+    style C fill:#e8b4d4
+    style E fill:#e8b4d4
+    style H fill:#e8b4d4
+    style D fill:#b4d9e8
+    style G fill:#b4d9e8
+    style I fill:#b4d9e8
+    style F fill:#f0f0f0
+```
+
+*Middleware stack onion: request path governs first (sealed), then efficiency; response path reverses*
+
 Under the hood the stack drives seven pass-through hooks around the ReAct loop. You rarely touch
 them directly from the SDK (you compose with profiles and `middleware`), but they explain *where*
 each behaviour runs:

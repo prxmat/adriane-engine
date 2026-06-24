@@ -2,6 +2,8 @@
 sidebar_position: 14
 title: Watch a run in the inspector (adriane dev)
 description: Run a graph and watch it execute in the browser — node-by-node timeline, the event stream, and a governance lens that shows exactly where it suspended, with one-click resume.
+tags: ["ops", "governance"]
+difficulty: intermediate
 ---
 
 # Watch a run in the inspector

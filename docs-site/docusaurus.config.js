@@ -84,8 +84,13 @@ const config = {
             position: "left"
           },
           {
-            to: "/docs/recipes/governed-refund-agent",
+            to: "/docs/recipes/overview",
             label: "Cookbook",
+            position: "left"
+          },
+          {
+            to: "/docs/reference/built-for-ai-agents",
+            label: "For AI agents",
             position: "left"
           },
           {
@@ -95,7 +100,7 @@ const config = {
           },
           {
             href: "https://github.com/prxmat/adriane-engine/releases",
-            label: "v1.2.0",
+            label: "v1.3.0",
             position: "right"
           },
           {

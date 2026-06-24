@@ -2,6 +2,8 @@
 sidebar_position: 15
 title: Governed skills for a deep agent (progressive disclosure)
 description: Give a deep agent and its sub-agents SKILL.md playbooks — pinned or vector-selected, withheld until granted when they grant capability.
+tags: ["agents", "governance"]
+difficulty: advanced
 ---
 
 # Governed skills for a deep agent

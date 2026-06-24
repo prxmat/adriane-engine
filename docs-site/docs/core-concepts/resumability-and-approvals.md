@@ -12,6 +12,31 @@ that suspends the run for a human decision.
 
 ## Suspend and resume
 
+```mermaid
+sequenceDiagram
+  participant Agent
+  participant Runtime
+  participant Checkpoint
+  participant Human
+  
+  Agent->>Runtime: run()
+  Note over Runtime: execute write node
+  Runtime->>Runtime: reach humanGate
+  Runtime->>Checkpoint: persist state at review
+  Runtime->>Agent: emit run_suspended
+  Agent->>Agent: process exits
+  
+  Human->>Runtime: resume(runId)
+  Runtime->>Checkpoint: load latest checkpoint
+  Checkpoint->>Runtime: state restored at review
+  Runtime->>Agent: emit run_resumed
+  Note over Runtime: continue from review
+  Runtime->>Runtime: execute publish node
+  Runtime->>Agent: emit run_completed
+```
+
+*Suspend → Approve → Resume lifecycle: a run checkpoints at humanGate, suspends cleanly, and resumes from the latest checkpoint after human decision.*
+
 A `humanGate` node suspends the run cleanly. The run's `status` becomes `"suspended"` and
 `currentNodeId` points at the gate. The process can exit entirely — the state is checkpointed.
 

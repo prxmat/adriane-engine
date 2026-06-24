@@ -2,6 +2,8 @@
 sidebar_position: 10
 title: Secrets redaction & no-log channels
 description: API keys/tokens are scrubbed from outbound requests automatically; mark a channel so its value never hits events/logs.
+tags: ["governance", "ops"]
+difficulty: intermediate
 ---
 
 # Secrets redaction & no-log channels

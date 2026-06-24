@@ -2,6 +2,8 @@
 sidebar_position: 1
 title: Governed refund agent
 description: A billing agent reaches for a gated refund tool, the run suspends, a human approves, and it executes — the flagship governance loop.
+tags: ["governance"]
+difficulty: beginner
 ---
 
 # Governed refund agent
