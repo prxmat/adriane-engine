@@ -145,7 +145,12 @@ const sidebars = {
         "recipes/rag-question-answerer",
         "recipes/resume-across-processes",
         "recipes/stream-to-dashboard",
-        "recipes/yaml-and-builder"
+        "recipes/yaml-and-builder",
+        "recipes/structured-output",
+        "recipes/multimodal-input",
+        "recipes/secrets-and-no-log",
+        "recipes/agent-memory",
+        "recipes/model-packages"
       ]
     },
     {
