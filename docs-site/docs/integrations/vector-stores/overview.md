@@ -114,7 +114,8 @@ await new PgStore().get(["ns"], "k"); // Error: PgStore.get is not implemented y
 ## Durable, vector-indexed storage — Planned
 
 Durable semantic storage is **designed but not yet built**. The memory architecture ADR
-(ADR 0026 — *Proposed*, awaiting owner GO) supersedes the original pgvector plan: it resolves the
+(ADR 0026 — *Accepted*; the OSS in-memory seam shipped, durable persistence is the control-plane
+piece below) supersedes the original pgvector plan: it resolves the
 backend to **Neo4j 5** ("everything in Neo4j" — documents, entities, edges, and agent memory, with a
 **native vector index** for semantic search). Postgres stays the relational control plane only
 (tenancy, namespace ownership, runs, approvals, events); **pgvector is explicitly not used**.
