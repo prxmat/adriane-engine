@@ -38,7 +38,9 @@ const ChannelReducerDtoSchema = z.enum(["replace", "append", "merge"]);
 const ChannelDefinitionDtoSchema = z.object({
   type: z.string().min(1),
   reducer: ChannelReducerDtoSchema,
-  default: z.unknown().optional()
+  default: z.unknown().optional(),
+  /** ADR 0032: never emit this channel's value in run events/logs (masked; still checkpointed). */
+  noLog: z.boolean().optional()
 });
 
 const ChannelsDtoSchema = z.record(z.string(), ChannelDefinitionDtoSchema);

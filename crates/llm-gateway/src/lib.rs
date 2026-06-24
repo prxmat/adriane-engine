@@ -17,6 +17,7 @@ pub mod mock;
 pub mod model_policy;
 pub mod openai_compatible;
 pub mod redactor;
+pub mod secrets_redactor;
 pub mod types;
 
 pub use anthropic::{
@@ -46,6 +47,7 @@ pub use openai_compatible::{
     OPENAI_DEFAULT_MODEL, OPENROUTER_BASE_URL, OPENROUTER_DEFAULT_MODEL,
 };
 pub use redactor::{HttpPiiRedactor, NoopPiiRedactor, PiiRedactor, RedactingGateway};
+pub use secrets_redactor::{scrub_secrets, RegexSecretsRedactor, SecretPolicy};
 pub use types::{
     ContentBlock, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk, LlmToolCall,
     LlmToolDef, LlmUsage, MediaSource, ResponseFormat,

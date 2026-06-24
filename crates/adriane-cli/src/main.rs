@@ -591,6 +591,7 @@ mod tests {
                 channel_type: s("messages"),
                 reducer: ChannelReducer::Append,
                 default: None,
+                no_log: false,
             },
         );
         GraphDefinition {

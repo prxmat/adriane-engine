@@ -57,10 +57,33 @@ const INJECTED_KEY: &str = "__injected";
 const SUBGRAPH_STATES_KEY: &str = "__subgraphStates";
 
 use adriane_graph_core::{
-    ChannelReducer, EdgeType, GraphDefinition, GraphState, GraphStatus, NodeDefinition, NodeId,
-    NodeType, RunId,
+    ChannelDefinition, ChannelReducer, EdgeType, GraphDefinition, GraphState, GraphStatus,
+    NodeDefinition, NodeId, NodeType, RunId,
 };
 use serde_json::Value;
+
+/// ADR 0032: sentinel a `no_log` channel's value is masked to in emitted run events / logs.
+const NO_LOG_SENTINEL: &str = "[REDACTED_NO_LOG]";
+
+/// Mask `no_log` channels for the EVENT view only (ADR 0032 phase 10). Replaces (not omits) a
+/// no-log channel's value with [`NO_LOG_SENTINEL`] so streaming UIs still see the channel
+/// changed. Operates on a clone destined for the event — `apply_update`/checkpoint keep the
+/// unmasked values, so determinism + resume are unaffected (durability ≠ observability).
+fn mask_no_log(
+    output: BTreeMap<String, Value>,
+    channels: &BTreeMap<String, ChannelDefinition>,
+) -> BTreeMap<String, Value> {
+    output
+        .into_iter()
+        .map(|(key, value)| {
+            if channels.get(&key).map(|c| c.no_log).unwrap_or(false) {
+                (key, Value::String(NO_LOG_SENTINEL.to_owned()))
+            } else {
+                (key, value)
+            }
+        })
+        .collect()
+}
 
 use crate::interfaces::{
     Checkpointer, ConditionRegistry, EventBus, EventObserver, InMemoryCheckpointer,
@@ -743,7 +766,7 @@ impl GraphRuntime {
             self.events.emit(RunEvent::NodeCompleted {
                 run_id: state.run_id.clone(),
                 node_id: node_id.clone(),
-                output: output.update,
+                output: mask_no_log(output.update, &ctx.graph.channels),
                 timestamp: now_string(),
             });
             state.version += 1;
@@ -757,7 +780,7 @@ impl GraphRuntime {
         self.events.emit(RunEvent::NodeCompleted {
             run_id: state.run_id.clone(),
             node_id: node_id.clone(),
-            output: output.update,
+            output: mask_no_log(output.update, &ctx.graph.channels),
             timestamp: now_string(),
         });
 
@@ -804,7 +827,7 @@ impl GraphRuntime {
                 self.events.emit(RunEvent::NodeCompleted {
                     run_id: state.run_id.clone(),
                     node_id: parallel_id,
-                    output: branch.update,
+                    output: mask_no_log(branch.update, &ctx.graph.channels),
                     timestamp: now_string(),
                 });
             }
@@ -922,7 +945,7 @@ impl GraphRuntime {
         self.events.emit(RunEvent::NodeCompleted {
             run_id: state.run_id.clone(),
             node_id: node_id.clone(),
-            output: child_state.channels.clone(),
+            output: mask_no_log(child_state.channels.clone(), &entry.graph.channels),
             timestamp: now_string(),
         });
 
@@ -1129,6 +1152,7 @@ mod tests {
                 channel_type: "json".to_owned(),
                 reducer,
                 default: None,
+                no_log: false,
             },
         )
     }
@@ -1157,6 +1181,65 @@ mod tests {
             entry_node_id: NodeId::from(entry),
             metadata: None,
         }
+    }
+
+    fn no_log_channel(name: &str) -> (String, ChannelDefinition) {
+        (
+            name.to_owned(),
+            ChannelDefinition {
+                channel_type: "json".to_owned(),
+                reducer: ChannelReducer::Replace,
+                default: None,
+                no_log: true,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn no_log_channel_is_masked_in_events_but_checkpointed_in_full() {
+        // ADR 0032: a no_log channel's value is masked in the emitted event but stored in full
+        // in the run state (checkpointed) — durability ≠ observability.
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("emit"),
+            sync_handler(|_s| {
+                NodeOutput::update(upd(&[
+                    ("secret", json!("hunter2")),
+                    ("public", json!("ok")),
+                ]))
+            }),
+        );
+        let def = graph(
+            vec![node("emit", NodeType::Action)],
+            vec![],
+            "emit",
+            vec![
+                no_log_channel("secret"),
+                channel("public", ChannelReducer::Replace),
+            ],
+        );
+        let runtime = GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new());
+        let final_state = runtime
+            .start(RunId::from("run-nolog"), BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(final_state.status, GraphStatus::Completed);
+        // State (checkpointed) keeps the REAL value.
+        assert_eq!(final_state.channels.get("secret"), Some(&json!("hunter2")));
+        assert_eq!(final_state.channels.get("public"), Some(&json!("ok")));
+        // The emitted NodeCompleted event MASKS the no-log channel, not the public one.
+        let events = runtime.events().events();
+        let output = events
+            .iter()
+            .find_map(|e| match e {
+                RunEvent::NodeCompleted {
+                    output, node_id, ..
+                } if node_id.as_str() == "emit" => Some(output.clone()),
+                _ => None,
+            })
+            .expect("a NodeCompleted event for emit");
+        assert_eq!(output.get("secret"), Some(&json!("[REDACTED_NO_LOG]")));
+        assert_eq!(output.get("public"), Some(&json!("ok")));
     }
 
     #[tokio::test]

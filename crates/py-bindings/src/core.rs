@@ -459,6 +459,7 @@ fn replace_channel() -> ChannelDefinition {
         channel_type: "json".to_owned(),
         reducer: ChannelReducer::Replace,
         default: None,
+        no_log: false,
     }
 }
 

@@ -169,6 +169,12 @@ impl MiddlewareStack {
         self.governed.is_empty() && self.efficiency.is_empty()
     }
 
+    /// Number of installed EFFICIENCY middleware (the user-tunable layer). Lets callers assert
+    /// what the SDK-resolved list produced independently of the always-present governed layer.
+    pub fn efficiency_len(&self) -> usize {
+        self.efficiency.len()
+    }
+
     /// Append a GOVERNED middleware (builder-only; sealed/un-removable by users).
     pub fn push_governed(&mut self, middleware: Arc<dyn AgentMiddleware>) -> &mut Self {
         self.governed.push(middleware);

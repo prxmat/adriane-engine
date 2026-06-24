@@ -165,6 +165,7 @@ name = "adriane-llm-gateway"
 version = "1.2.0"
 dependencies = [
  "async-trait",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

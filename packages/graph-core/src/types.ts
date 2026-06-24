@@ -12,6 +12,8 @@ export type ChannelDefinition<T> = {
   type: string;
   reducer: ChannelReducer;
   default?: T;
+  /** ADR 0032: never emit this channel's value in run events/logs (masked; still checkpointed). */
+  noLog?: boolean;
 };
 
 export type MessagesChannelDefinition = {

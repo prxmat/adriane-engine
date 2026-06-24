@@ -134,6 +134,7 @@ mod tests {
                 channel_type: "number".to_owned(),
                 reducer: ChannelReducer::Replace,
                 default: None,
+                no_log: false,
             },
         );
         GraphDefinition {
