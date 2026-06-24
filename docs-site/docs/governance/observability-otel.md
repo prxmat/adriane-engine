@@ -36,7 +36,7 @@ const usdCustom = computeCost(agent.usage!, "my-model", { "my-model": { inPerMto
 
 An unknown model costs `0` — never a guess.
 
-## Export traces (OTLP → LangSmith / Langfuse / Phoenix / …)
+## Export traces (OTLP → Langfuse / Phoenix / …)
 
 `exportTracesToOtlp` subscribes to a graph's events and ships each run as an OTLP/HTTP-JSON trace:
 a root `run` span plus one span per node, with `gen_ai.usage.*` + `adriane.cost.usd` on agent
@@ -52,7 +52,7 @@ const app = createGraph({ name: "support" }).agentNode("triage", { llm, prompt: 
 // never fails the run; no endpoint = no-op.
 const stop = exportTracesToOtlp(app, {
   endpoint: "https://api.langsmith.com/otel/v1/traces",
-  headers: { "x-api-key": process.env.LANGSMITH_API_KEY ?? "" }
+  headers: { "Authorization": Basic process.env.LANGFUSE_API_KEY ?? "" }
 });
 
 await app.run({ ... });
