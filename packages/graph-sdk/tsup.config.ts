@@ -14,7 +14,10 @@ const workspaceAlias: Record<string, string> = {
   "@adriane-ai/agents-core": src("agents-core"),
   "@adriane-ai/llm-gateway": src("llm-gateway"),
   "@adriane-ai/artifact-store": src("artifact-store"),
-  "@adriane-ai/approval-engine": src("approval-engine")
+  "@adriane-ai/approval-engine": src("approval-engine"),
+  // ADR 0037: inlined so the product reaches them through the graph-sdk door (zero @adriane-ai deps).
+  "@adriane-ai/search": src("search"),
+  "@adriane-ai/memory-store": src("memory-store")
 };
 
 export default defineConfig({
