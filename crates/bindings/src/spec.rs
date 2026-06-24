@@ -85,6 +85,27 @@ pub struct AgentSpec {
     /// namespace + principal are bridge-sealed (never user-routable). `None` = no memory.
     #[serde(default)]
     pub memory: Option<MemorySpec>,
+    /// Governed skills — progressive disclosure (ADR 0035 phase 12). When set, a sealed
+    /// `SkillMiddleware` selects skills (explicit `required` pins + advisory vector top-k) from
+    /// this namespace before the run and prepends their bodies to the seed. The namespace is
+    /// bridge-sealed; capability-granting (`requires`) skills are withheld until granted. Applies
+    /// to this agent AND its `mapAgents`/`taskNode` sub-agents (same build path → deepagents
+    /// parity). `None` = no skills.
+    #[serde(default)]
+    pub skills: Option<SkillSpec>,
+}
+
+/// The agentNode `skills` overlay (ADR 0035 phase 12). `required` is the explicit `name@version`
+/// pin list (the must-apply playbooks); `advisory_k` caps the vector-selected advisory set. The
+/// namespace is tenant-scoped (the control plane validates access).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSpec {
+    pub namespace: String,
+    #[serde(default)]
+    pub required: Vec<String>,
+    #[serde(default)]
+    pub advisory_k: Option<u32>,
 }
 
 /// The agentNode `memory` overlay (ADR 0026 phase 11). Quality knobs (`top_k`, `recall`) are

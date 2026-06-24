@@ -55,6 +55,23 @@ export type MemoryConfig = {
   recall?: "vector" | "graph" | "both";
 };
 
+/**
+ * Governed skills overlay for an agent node (ADR 0035 phase 12) — progressive disclosure for deep
+ * agents. The engine selects skills (explicit `required` pins by `name@version` + advisory vector
+ * top-k over descriptions, capped by `advisoryK`) from this `namespace` before the run and prepends
+ * their bodies to the seed. The `namespace` is tenant-scoped (sealed by the engine); a skill that
+ * grants capability (`requires`) stays withheld until granted. Applies to this agent AND its
+ * `mapAgents`/`taskNode` sub-agents (same build path → deepagents parity). The OSS engine selects
+ * from an in-memory registry; the control plane swaps a Postgres-backed store behind the same seam.
+ */
+export type SkillConfig = {
+  namespace: string;
+  /** Explicit `name@version` pins — the must-apply playbooks, always loaded (when granted). */
+  required?: string[];
+  /** Cap on advisory (vector-selected) skills. Default 3; 0 = pins only. */
+  advisoryK?: number;
+};
+
 /** Config for {@link GraphBuilder.agentNode}. */
 export type AgentNodeConfig = {
   /**
@@ -141,6 +158,13 @@ export type AgentNodeConfig = {
    * sealed by the engine — never user-routable. `topK`/`recall` tune retrieval quality.
    */
   memory?: MemoryConfig;
+  /**
+   * Governed skills — progressive disclosure (ADR 0035 phase 12). When set, the engine selects
+   * skills (explicit `required` pins + advisory vector top-k) from this `namespace` before the run
+   * and prepends their bodies to the seed. Capability-granting (`requires`) skills are withheld
+   * until granted. Applies to `mapAgents`/`taskNode` sub-agents too (deepagents parity).
+   */
+  skills?: SkillConfig;
   /**
    * Opt this agent into the governed virtual filesystem tools (ADR 0024 phase 2b):
    * `read_file`/`ls`/`glob`/`grep`/`write_file`/`edit_file`/`delete_file`/`move_file`,
@@ -349,6 +373,8 @@ export type RustAgentConfig = {
   inputBlocksChannel?: string;
   /** ADR 0026 phase 11 — governed long-term memory overlay. */
   memory?: MemoryConfig;
+  /** ADR 0035 phase 12 — governed skills (progressive disclosure) overlay. */
+  skills?: SkillConfig;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /**
@@ -542,6 +568,7 @@ export const toRustAgentConfig = (nodeId: string, config: AgentNodeConfig): Rust
     todosChannel: config.todosChannel,
     inputBlocksChannel: config.inputBlocksChannel,
     memory: config.memory,
+    skills: config.skills,
     enableFs: config.enableFs ?? profile?.enableFs,
     resolvedMiddleware: resolveMiddleware(config),
     toolBindings: toolBindingsOf(config.tools),

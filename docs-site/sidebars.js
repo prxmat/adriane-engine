@@ -64,7 +64,8 @@ const sidebars = {
           items: [
             "advanced-agents/middleware-and-profiles",
             "advanced-agents/governed-filesystem",
-            "advanced-agents/deep-agents"
+            "advanced-agents/deep-agents",
+            "advanced-agents/skills"
           ]
         },
         {
@@ -150,7 +151,10 @@ const sidebars = {
         "recipes/multimodal-input",
         "recipes/secrets-and-no-log",
         "recipes/agent-memory",
-        "recipes/model-packages"
+        "recipes/model-packages",
+        "recipes/token-streaming",
+        "recipes/dev-inspector",
+        "recipes/governed-skills"
       ]
     },
     {
@@ -186,6 +190,7 @@ const sidebars = {
         "reference/component-catalog",
         "reference/events-and-streams",
         "reference/errors",
+        "reference/built-for-ai-agents",
         "glossary",
         "roadmap"
       ]

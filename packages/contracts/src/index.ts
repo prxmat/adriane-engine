@@ -14,6 +14,7 @@ export * from "./tenant.js";
 export * from "./catalog.js";
 export * from "./compliance.js";
 export * from "./knowledge.js";
+export * from "./skills.js";
 export * from "./fs-policy.js";
 export * from "./fs.js";
 export * from "./node-metadata.js";

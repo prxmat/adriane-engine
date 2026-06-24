@@ -10,7 +10,8 @@ import type {
   FsPolicyRule,
   MemoryConfig,
   RustAgentConfig,
-  RustMapAgentConfig
+  RustMapAgentConfig,
+  SkillConfig
 } from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
 import type { ChannelValues, TypedGraphState } from "./typed.js";
@@ -178,6 +179,8 @@ type AgentSpecWire = {
   inputBlocksChannel?: string;
   /** ADR 0026 phase 11 — governed long-term memory overlay (→ Rust `memory`). */
   memory?: MemoryConfig;
+  /** ADR 0035 phase 12 — governed skills (progressive disclosure) overlay (→ Rust `skills`). */
+  skills?: SkillConfig;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /** ADR 0025 phase 3d — the SDK-resolved efficiency middleware list (→ Rust `resolvedMiddleware`). */
@@ -382,6 +385,7 @@ export class RustGraphRunner<TState extends ChannelValues> {
       todosChannel: config.todosChannel,
       inputBlocksChannel: config.inputBlocksChannel,
       memory: config.memory,
+      skills: config.skills,
       enableFs: config.enableFs,
       resolvedMiddleware: config.resolvedMiddleware
     };
