@@ -1,4 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
+// ADR 0034 (16a): `@anthropic-ai/sdk` is a TYPE-only import here (erased at build) plus a single
+// lazy runtime `require` inside `createDefaultPort` — so importing this module (e.g. the mock
+// `DefaultLLMGateway` path) never pulls the SDK, and `@adriane-ai/graph-sdk` ships without it.
+// This is the deprecated TS fallback; the Rust engine is the real provider path.
+import type Anthropic from "@anthropic-ai/sdk";
+import { createRequire } from "node:module";
 
 import type { LLMProviderAdapter } from "./interfaces.js";
 import type { LLMContentBlock, LLMRequest, LLMResponse, LLMStreamChunk } from "./types.js";
@@ -159,9 +164,35 @@ export class AnthropicProviderAdapter implements LLMProviderAdapter {
 
 const ephemeral: Anthropic.CacheControlEphemeral = { type: "ephemeral" };
 
-/** Wraps a real Anthropic client. This is the only code that touches the SDK. */
+/** Constructor shape of the SDK default export — typed from the (erased) type import. */
+type AnthropicCtor = new (opts?: { apiKey?: string }) => Anthropic;
+
+let cachedAnthropicCtor: AnthropicCtor | undefined;
+
+/** Lazily load the `@anthropic-ai/sdk` constructor (ADR 0034 16a). A static `createRequire` of a
+ * constant package name — not a dynamic import of a user string. Throws a clear error if the
+ * optional SDK is not installed (the engine is the default path; this is the TS fallback). */
+const anthropicCtor = (): AnthropicCtor => {
+  if (cachedAnthropicCtor === undefined) {
+    try {
+      const requireFn = createRequire(import.meta.url);
+      const mod = requireFn("@anthropic-ai/sdk") as { default?: AnthropicCtor } & AnthropicCtor;
+      cachedAnthropicCtor = (mod.default ?? mod) as AnthropicCtor;
+    } catch {
+      throw new Error(
+        "@anthropic-ai/sdk is not installed. It is an optional dependency: the TS Anthropic " +
+          "adapter is the deprecated fallback — install @anthropic-ai/sdk to use it, or run on " +
+          "the Rust engine (the default)."
+      );
+    }
+  }
+  return cachedAnthropicCtor;
+};
+
+/** Wraps a real Anthropic client. This is the only code that touches the SDK (lazily). */
 const createDefaultPort = (apiKey?: string): AnthropicClientPort => {
-  const client = new Anthropic(apiKey === undefined ? {} : { apiKey });
+  const Ctor = anthropicCtor();
+  const client = new Ctor(apiKey === undefined ? {} : { apiKey });
 
   const toSdkContent = (
     content: AnthropicCreateParams["messages"][number]["content"]

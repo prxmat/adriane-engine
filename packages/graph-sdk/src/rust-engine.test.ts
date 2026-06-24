@@ -4,6 +4,7 @@ import {
   createGraph,
   DefaultLLMGateway,
   InMemoryToolRegistry,
+  model,
   rustEngineAvailable,
   type AgentResult,
   type RunEvent,
@@ -80,6 +81,21 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
     // The agent's result landed in the default output channel.
     const agentResult = (result.channels as Record<string, AgentResult>).agentResult;
     expect(agentResult).toBeDefined();
+  });
+
+  it("accepts a `model` overlay (ADR 0034 phase 16d) as the agent node model — Rust engine", async () => {
+    // The unified `model` surface drops straight into agentNode: model.openai("gpt-4o") and
+    // model.anthropic.fast both normalize to a ModelSpec the Rust path consumes (mock gateway,
+    // no provider keys present in these tests). No silent provider default.
+    const app = createGraph({ name: "rust-model-surface" })
+      .agentNode("explicit", { model: model.openai("gpt-4o"), prompt: { system: "Be brief." }, maxIterations: 1 })
+      .agentNode("tiered", { model: model.anthropic.fast, prompt: { system: "Be brief." }, maxIterations: 1 })
+      .edge("explicit", "tiered")
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+    const result = await app.run({ question: "hi" }, { runId: "run_model_surface" as never });
+    expect(result.status).toBe("completed");
   });
 
   it("runs an agent with a governed memory overlay on the Rust engine (ADR 0026 phase 11)", async () => {
