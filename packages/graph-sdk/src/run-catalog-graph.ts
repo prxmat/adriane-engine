@@ -68,6 +68,8 @@ export type AgentCarrier = {
   todosChannel?: string;
   /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks. */
   inputBlocksChannel?: string;
+  /** ADR 0026 phase 11 — governed long-term memory overlay. */
+  memory?: { namespace: string; topK?: number; recall?: "vector" | "graph" | "both" };
   /** ADR 0024 — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /**
@@ -186,6 +188,7 @@ const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean
   contextBudget: carrier.contextBudget,
   todosChannel: carrier.todosChannel,
   inputBlocksChannel: carrier.inputBlocksChannel,
+  memory: carrier.memory,
   // ADR 0024 — fs enablement carried on the persisted node; the run's fs policy is
   // supplied separately by the control plane (RunCatalogGraphOptions.fsPolicy).
   enableFs: carrier.enableFs,

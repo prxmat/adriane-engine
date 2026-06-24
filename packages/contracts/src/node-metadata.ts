@@ -45,6 +45,14 @@ export const AgentNodeMetadataSchema = z.object({
   todosChannel: z.string().min(1).optional(),
   /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks. */
   inputBlocksChannel: z.string().min(1).optional(),
+  /** ADR 0026 phase 11 — governed long-term memory overlay (namespace tenant-scoped). */
+  memory: z
+    .object({
+      namespace: z.string().min(1),
+      topK: z.number().int().min(1).optional(),
+      recall: z.enum(["vector", "graph", "both"]).optional()
+    })
+    .optional(),
   /** ADR 0024 phase 2c/2d — opt this agent into the governed virtual filesystem tools. */
   enableFs: z.boolean().optional(),
   /**

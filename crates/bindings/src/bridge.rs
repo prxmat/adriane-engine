@@ -25,9 +25,10 @@ use std::sync::Arc;
 
 use adriane_agents_core::{
     agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem,
-    CompressMiddleware, ContextBudgetMiddleware, InMemoryToolRegistry, MiddlewareStack, ReActAgent,
-    RedactMiddleware, ReflectionMiddleware, StructuredOutputMiddleware, TerseMiddleware,
-    ToolDefinition, APPROVED_TOOLS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL,
+    CompressMiddleware, ContextBudgetMiddleware, InMemoryToolRegistry, MemoryMiddleware,
+    MiddlewareStack, ReActAgent, RedactMiddleware, ReflectionMiddleware,
+    StructuredOutputMiddleware, TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL,
+    DEFAULT_AGENT_OUTPUT_CHANNEL,
 };
 use adriane_approval_engine::ApprovalError;
 use adriane_artifact_store::{ArtifactId, ArtifactStore, InMemoryArtifactStore};
@@ -47,6 +48,7 @@ use adriane_llm_gateway::{
     LlmUsage, MediaResolver, MediaSource, MockAdapter, ModelChoice, ModelPolicy,
     OpenAiCompatibleAdapter, RegexSecretsRedactor,
 };
+use adriane_memory::{InMemoryMemoryStore, MemoryStore, MockEmbedder, RecallMode, RetrievalPolicy};
 use async_trait::async_trait;
 use napi::bindgen_prelude::Promise;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -327,11 +329,18 @@ fn build_fs_backend(
 ///
 /// `gateway` + `provider`/`model` are threaded in for `ReflectionMiddleware` (phase 3e), which
 /// critiques the result with the agent's own provider + model.
+/// ADR 0026 phase 11: the process-global in-memory memory store, shared across agents/runs so
+/// recall works across runs in OSS dev (intra-process). The control plane swaps a Neo4j-backed
+/// `MemoryStore` behind the same seam for cross-process durability + the native vector index.
+static MEMORY_STORE: std::sync::LazyLock<Arc<InMemoryMemoryStore>> =
+    std::sync::LazyLock::new(|| Arc::new(InMemoryMemoryStore::new()));
+
 fn build_agent_middleware(
     agent_spec: &AgentSpec,
     gateway: &Arc<DefaultLlmGateway>,
     provider: LlmProvider,
     model: &str,
+    node_id: &str,
 ) -> MiddlewareStack {
     let mut stack = MiddlewareStack::new();
     // GOVERNED — sealed; never fed from spec/user data. Ordering on the request path is the
@@ -359,6 +368,28 @@ fn build_agent_middleware(
     // PII (ADR 0008): env-gated external Presidio/GLiNER redactor, after the secrets floor.
     if let Some(redactor) = HttpPiiRedactor::from_env() {
         stack.push_governed(Arc::new(RedactMiddleware::new(Arc::new(redactor))));
+    }
+    // ADR 0026 phase 11: governed long-term memory. Sealed (push_governed) + constructed WITH its
+    // namespace + principal (node id) — never from user resolved_middleware, so recall is
+    // tenant-scoped by construction. OSS default = the shared in-memory store + MockEmbedder
+    // (the control plane injects a Neo4j-backed store behind the same seam).
+    if let Some(mem) = &agent_spec.memory {
+        let policy = RetrievalPolicy {
+            top_k: mem.top_k.map(|k| k as usize).unwrap_or(5),
+            mode: match mem.recall.as_deref() {
+                Some("vector") => RecallMode::Vector,
+                Some("graph") => RecallMode::Graph,
+                _ => RecallMode::Both,
+            },
+        };
+        let store: Arc<dyn MemoryStore> = MEMORY_STORE.clone();
+        stack.push_governed(Arc::new(MemoryMiddleware::new(
+            store,
+            Arc::new(MockEmbedder),
+            mem.namespace.clone(),
+            Some(format!("agent:{node_id}")),
+            policy,
+        )));
     }
     // EFFICIENCY — built from the SDK-resolved data list, in order.
     if agent_spec.resolved_middleware.is_empty() {
@@ -718,6 +749,7 @@ fn build_react_agent(
         &gateway,
         resolved.provider,
         &resolved.model,
+        node_id,
     ));
 
     Ok(Arc::new(agent))
@@ -1368,6 +1400,7 @@ mod tests {
             enable_fs: false,
             resolved_middleware: vec![],
             input_blocks_channel: None,
+            memory: None,
         };
 
         let gateway = build_gateway(
@@ -1439,7 +1472,7 @@ mod tests {
         };
         let gateway = Arc::new(DefaultLlmGateway::new());
         let build = |spec: &crate::spec::AgentSpec| {
-            build_agent_middleware(spec, &gateway, LlmProvider::Anthropic, "m")
+            build_agent_middleware(spec, &gateway, LlmProvider::Anthropic, "m", "test-node")
         };
 
         // NB: the stack is never fully empty now — the ADR 0032 secrets floor is an always-on
@@ -1520,7 +1553,8 @@ mod tests {
         let gateway = Arc::new(DefaultLlmGateway::new());
         let spec: crate::spec::AgentSpec =
             serde_json::from_value(json!({ "provider": "anthropic" })).expect("spec parses");
-        let stack = build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m");
+        let stack =
+            build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m", "test-node");
         assert!(
             !stack.is_empty(),
             "the secrets floor is always governed-present"
@@ -1530,6 +1564,23 @@ mod tests {
             0,
             "no efficiency middleware was requested"
         );
+    }
+
+    /// ADR 0026 phase 11: a `memory` overlay installs a GOVERNED MemoryMiddleware (sealed,
+    /// constructed with namespace + principal), not an efficiency entry — so recall is
+    /// tenant-scoped by construction and unrepresentable from user resolved_middleware.
+    #[test]
+    fn memory_overlay_installs_a_governed_middleware() {
+        let gateway = Arc::new(DefaultLlmGateway::new());
+        let spec: crate::spec::AgentSpec = serde_json::from_value(json!({
+            "provider": "anthropic",
+            "memory": { "namespace": "tenant:t1:agent:a", "topK": 3, "recall": "vector" }
+        }))
+        .expect("spec parses");
+        let stack =
+            build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m", "assistant");
+        assert!(!stack.is_empty());
+        assert_eq!(stack.efficiency_len(), 0);
     }
 
     /// A gated agent suspends with a pending approval recorded in its output
@@ -1555,6 +1606,7 @@ mod tests {
             enable_fs: false,
             resolved_middleware: vec![],
             input_blocks_channel: None,
+            memory: None,
         };
         let gateway = build_gateway(
             &agent_spec,
@@ -1716,6 +1768,7 @@ mod tests {
             enable_fs: false,
             resolved_middleware: vec![],
             input_blocks_channel: None,
+            memory: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
@@ -1768,6 +1821,7 @@ mod tests {
             enable_fs: false,
             resolved_middleware: vec![],
             input_blocks_channel: None,
+            memory: None,
         };
         let resolved = resolve_agent_model(&agent_spec);
         assert_eq!(resolved.provider, LlmProvider::Mistral);
@@ -1827,6 +1881,7 @@ mod tests {
             enable_fs: false,
             resolved_middleware: vec![],
             input_blocks_channel: None,
+            memory: None,
         };
 
         let resolved = resolve_agent_model(&agent_spec);

@@ -8,6 +8,7 @@ import type { ModelTier } from "@adriane-ai/llm-gateway";
 import type {
   EfficiencyMiddlewareSpec,
   FsPolicyRule,
+  MemoryConfig,
   RustAgentConfig,
   RustMapAgentConfig
 } from "./agent-node.js";
@@ -175,6 +176,8 @@ type AgentSpecWire = {
   todosChannel?: string;
   /** ADR 0030 phase 9e — channel carrying the run's multimodal input blocks (→ Rust `inputBlocksChannel`). */
   inputBlocksChannel?: string;
+  /** ADR 0026 phase 11 — governed long-term memory overlay (→ Rust `memory`). */
+  memory?: MemoryConfig;
   /** ADR 0024 phase 2b — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /** ADR 0025 phase 3d — the SDK-resolved efficiency middleware list (→ Rust `resolvedMiddleware`). */
@@ -371,6 +374,7 @@ export class RustGraphRunner<TState extends ChannelValues> {
       contextBudget: config.contextBudget,
       todosChannel: config.todosChannel,
       inputBlocksChannel: config.inputBlocksChannel,
+      memory: config.memory,
       enableFs: config.enableFs,
       resolvedMiddleware: config.resolvedMiddleware
     };

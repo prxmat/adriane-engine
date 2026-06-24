@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod fs_tools;
+pub mod memory;
 pub mod middleware;
 pub mod node;
 pub mod plan_execute;
@@ -22,6 +23,7 @@ pub mod tools;
 pub mod working_memory;
 
 pub use fs_tools::{fs_tools, register_fs_tools};
+pub use memory::MemoryMiddleware;
 pub use middleware::{
     AgentMiddleware, CompressMiddleware, ContextBudgetMiddleware, Flow, MiddlewareStack,
     RedactMiddleware, ReflectionMiddleware, RunCtx, StructuredOutputMiddleware, TerseMiddleware,

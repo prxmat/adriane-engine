@@ -1,6 +1,6 @@
 # ADR 0026 — Memory architecture: durable knowledge graph, agent memory, and portable export (engine ↔ control plane ↔ Studio)
 
-- Status: **Proposed** (design + plan; architecture- and security-relevant → needs Mathieu's GO before any code, per the mandatory-review rule)
+- Status: **Accepted** (GO given 2026-06-24; the OSS-engine increment phase 11a/11b is shipped — see "Engine increment shipped" below; control-plane sub-phases A,C,E,F remain)
 - Date: 2026-06-23
 - Deciders: Mathieu (owner)
 - Builds on: [ADR 0003](0003-ts-engine-deprecated-sdk-on-rust.md) (Rust engine + thin SDKs), [ADR 0005](0005-multi-provider-llm-gateway.md) (provider/embeddings gateway, BYOM), [ADR 0006](0006-sovereign-deployment-and-kb-permissions.md) (KB permissions + sovereign modes), [ADR 0007](0007-tool-connectors-oauth-mcp.md) (inbound connectors → KB), [ADR 0008](0008-pii-redaction-and-anonymization.md) (per-namespace policy DSL + redaction), [ADR 0011](0011-resource-search.md) (`SearchProvider` seam), [ADR 0013](0013-llm-council-governed-deliberation.md) + [ADR 0024](0024-governed-virtual-filesystem-seam.md) (the "governed version of a known primitive" bet; seam + approval-gate composition), [ADR 0014](0014-engine-token-efficiency.md) (working-memory compression)
@@ -135,6 +135,16 @@ Promote OKF from a *format* to **BKP v1**, a *protocol*: a versioned (`okf_versi
 ### 6. Invariants preserved
 
 No new runtime path: memory writes/reads live in tool/agent node handlers and control-plane services, so the runtime contract (checkpoint after each node, event per transition, clean suspend/resume) is inherited. Extraction approval **reuses** the existing gate (ADR 0024) — no new gate mechanism, no new interrupt kind. Engine stays DB-free behind seams. Wire shapes camelCase; `Result` discriminated unions; typed error classes; no `eval`/dynamic import of strings; secrets via env only.
+
+## Engine increment shipped — phase 11a/11b (2026-06-24, Mathieu GO; "vector + graph")
+
+The first OSS-engine slice landed (the seams + in-memory defaults + the loop wiring); Neo4j persistence, governed LLM extraction, lifecycle, BKP and Studio stay control-plane/follow-up (sub-phases A,C,E,F below). Resolved decisions for this increment:
+
+- **D1 — a new unified `adriane-memory` crate** (not extending the scattered crates): one home for both recall modalities. `MemoryItem` (vector) + `MemoryEntity`/`MemoryEdge` (the entity graph — "vector + graph") + `MemoryProvenance` + `RetrievalPolicy` + the `MemoryStore` seam + `InMemoryMemoryStore` default (cosine vector recall via `rag-pipeline` + depth-limited adjacency-BFS graph recall, deterministic insertion-order tie-break). DB-free; the control plane plugs a Neo4j impl behind the same seam.
+- **D2 — recall is GOVERNED, with tunable quality knobs**: `MemoryMiddleware` (agents-core, `before_run` recall→inject seed / `after_run` persist) installs via `push_governed`, constructed with its `namespace` + `principal` **sealed by the bridge** (never user-routable, since `RunCtx` carries no tenant) — `top_k`/`recall` are author-tunable on that sealed instance. Never a `{kind:"memory"}` efficiency entry.
+- **D4 — a `memory` overlay on the agent node** `{ namespace, topK?, recall? }` (forward-compatible), threaded SDK → wire → bridge → middleware (mirrored in contracts).
+- **D5 — provenance on every write IN-SCOPE; LLM entity extraction DEFERRED** to the control plane (sub-phase C): this increment ships entity TYPES + provenance + heuristic persist (the run's reasoning) — **no LLM claim-writing in the OSS engine**.
+- OSS default persistence is the **process-global in-memory store** (recall works across runs intra-process); cross-process durability + the native vector index = Neo4j, control-plane.
 
 ## Sub-phasing (each ships + is reviewed independently; governed parts get the closest review)
 

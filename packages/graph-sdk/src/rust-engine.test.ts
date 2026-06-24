@@ -82,6 +82,26 @@ describeIfRust("@adriane-ai/graph-sdk — Rust engine execution", () => {
     expect(agentResult).toBeDefined();
   });
 
+  it("runs an agent with a governed memory overlay on the Rust engine (ADR 0026 phase 11)", async () => {
+    // The `memory` overlay installs a governed MemoryMiddleware (recall-before / persist-after)
+    // backed by the in-memory store + MockEmbedder. We assert the run completes — proving the
+    // overlay threads SDK → wire → bridge → governed stack without breaking the loop.
+    const app = createGraph({ name: "rust-memory" })
+      .agentNode("assistant", {
+        llm: new DefaultLLMGateway(),
+        prompt: { system: "Be brief." },
+        maxIterations: 2,
+        memory: { namespace: "tenant:t1:agent:assistant", topK: 3, recall: "vector" }
+      })
+      .compile();
+
+    expect(app.usesRustEngine).toBe(true);
+    const result = await app.run({ question: "hi" }, { runId: "run_rust_memory" as never });
+    expect(result.status).toBe("completed");
+    const agentResult = (result.channels as unknown as Record<string, AgentResult>).agentResult;
+    expect(agentResult).toBeDefined();
+  });
+
   it("runs an agent declared with a model overlay (no llm) on the Rust engine (ADR 0031)", async () => {
     // ADR 0031: `model` (a ModelSpec overlay) replaces the required `llm`. The provider routes
     // on the Rust path; with no API key it falls to the deterministic mock, so the run completes

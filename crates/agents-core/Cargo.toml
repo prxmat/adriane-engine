@@ -10,6 +10,7 @@ adriane-graph-core = { path = "../graph-core" }
 adriane-graph-runtime = { path = "../graph-runtime" }
 adriane-llm-gateway = { path = "../llm-gateway" }
 adriane-fs-backend = { path = "../fs-backend" }
+adriane-memory = { path = "../memory" }
 async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 # ADR 0029: real nested/enum/format JSON-Schema conformance for structured output.

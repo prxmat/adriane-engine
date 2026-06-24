@@ -80,6 +80,24 @@ pub struct AgentSpec {
     /// stringified State. `None` = text-only seed (default).
     #[serde(default)]
     pub input_blocks_channel: Option<String>,
+    /// Governed long-term memory (ADR 0026 phase 11). When set, a sealed `MemoryMiddleware`
+    /// recalls from this namespace before the run (vector) and persists after, attributed. The
+    /// namespace + principal are bridge-sealed (never user-routable). `None` = no memory.
+    #[serde(default)]
+    pub memory: Option<MemorySpec>,
+}
+
+/// The agentNode `memory` overlay (ADR 0026 phase 11). Quality knobs (`top_k`, `recall`) are
+/// author-tunable; the namespace is tenant-scoped (the control plane validates access).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySpec {
+    pub namespace: String,
+    #[serde(default)]
+    pub top_k: Option<u32>,
+    /// `"vector" | "graph" | "both"` (default `both`).
+    #[serde(default)]
+    pub recall: Option<String>,
 }
 
 /// One entry of [`AgentSpec::resolved_middleware`]: an EFFICIENCY middleware the bridge

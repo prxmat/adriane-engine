@@ -11,6 +11,7 @@ dependencies = [
  "adriane-graph-core",
  "adriane-graph-runtime",
  "adriane-llm-gateway",
+ "adriane-memory",
  "async-trait",
  "futures-util",
  "jsonschema",
@@ -174,6 +175,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adriane-memory"
+version = "1.2.0"
+dependencies = [
+ "adriane-rag-pipeline",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "adriane-memory-store"
 version = "1.2.0"
 dependencies = [
@@ -197,6 +210,7 @@ dependencies = [
  "adriane-graph-core",
  "adriane-graph-runtime",
  "adriane-llm-gateway",
+ "adriane-memory",
  "async-trait",
  "napi",
  "napi-build",
