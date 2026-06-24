@@ -43,6 +43,38 @@ requires: [refund, lookup_order]   # optional: tools/profiles the body assumes (
 
 ## Add skills to an agent
 
+```mermaid
+flowchart TD
+    A["L1: Frontmatter Index<br/>(name, description)<br/>Always Resident"] 
+    B["Task Arrives"]
+    C{"Selection<br/>Strategy"}
+    D["Required Pins<br/>(explicit name@version)"]
+    E["Advisory Vector Top-K<br/>(description match)"]
+    F["Selected Skills Set"]
+    G["Check requires Field"]
+    H["Capability-Granting<br/>(requires present)"]
+    I["Withheld Until<br/>Grant in Approval Set"]
+    J["L2: Body Loaded<br/>to Seed"]
+    K["L3: Resources<br/>Resolved on Demand"]
+    L["Prepend to Seed"]
+    
+    A --> B
+    B --> C
+    C -->|required| D
+    C -->|advisoryK top-k| E
+    D --> F
+    E --> F
+    F --> G
+    G -->|no requires| J
+    G -->|requires present| H
+    H --> I
+    I --> J
+    J --> K
+    K --> L
+```
+
+*Skills progressive disclosure: L1 index → task match & selection (pins + advisory) → L2 body → L3 resources → prepend; capability-granting skills withheld until approved.*
+
 The `skills` overlay selects skills from a tenant-scoped namespace and prepends their bodies to the
 seed before the run. Selection is **hybrid**:
 

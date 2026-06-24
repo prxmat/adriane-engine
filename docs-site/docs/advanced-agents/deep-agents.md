@@ -129,6 +129,30 @@ dev/test fallback does not back it.
 
 ## Putting it together: a deep agent
 
+```mermaid
+graph TD
+    A["Lead Agent<br/>Plan with writeTodos"] -->|Durable todos| B["Channel<br/>TODOS_CHANNEL"]
+    A -->|Delegate| C{Node Type?}
+    C -->|Single task| D["taskNode<br/>Isolated Context"]
+    C -->|Multiple items| E["mapAgents<br/>Dynamic Fan-out"]
+    D -->|Sub-agent reads<br/>objectiveChannel| F["Sub-Agent<br/>Isolated"]
+    F -->|Compressed report| G["reportChannel<br/>One Result"]
+    E -->|Run N times<br/>Per Item| H["Sub-Agent Pool<br/>Concurrent"]
+    H -->|Governed/Checkpointed<br/>In input order| I["joinAt Channel<br/>AgentResult Array"]
+    B -->|Scratchpad| J["Governed Filesystem<br/>work/**"]
+    G -->|Back to parent| K["Parent State"]
+    I -->|Back to parent| K
+    K -->|Next action| A
+    style A fill:#4A90E2
+    style D fill:#F5A623
+    style E fill:#F5A623
+    style F fill:#7ED321
+    style H fill:#7ED321
+    style J fill:#9013FE
+```
+
+*Deep-agent loop: lead plans via writeTodos, delegates to taskNode (isolated sub-agent) or mapAgents (N concurrent sub-agents), all checkpointed via governed filesystem.*
+
 A deep agent combines all three: a plan, the filesystem to work in, sub-tasks for the heavy lifting,
 and governance throughout. The `governed-deep` [profile](./middleware-and-profiles#profiles) wires the
 posture (balanced tier, full efficiency, reflection, suspend-on-approval, filesystem enabled) in one
