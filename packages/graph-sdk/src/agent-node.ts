@@ -13,7 +13,7 @@ import { createToolNode, DynamicInterrupt, type NodeHandler } from "@adriane-ai/
 // (and a `pg` dependency) into consumers such as the Studio bundle.
 import type { ApprovalEngine, ApprovalId } from "@adriane-ai/approval-engine";
 import type { NodeId, RunId } from "@adriane-ai/graph-core";
-import { GovernanceMiddlewareRejectedError } from "./errors.js";
+import { AdrianeSdkError, GovernanceMiddlewareRejectedError } from "./errors.js";
 
 /** Default channel an agent node writes its {@link import("@adriane-ai/agents-core").AgentResult} into. */
 export const DEFAULT_AGENT_OUTPUT_CHANNEL = "agentResult";
@@ -688,9 +688,13 @@ export const createAgentNodeHandler = (nodeId: string, config: AgentNodeConfig):
     // `agentNode({ model })` (no llm) builds cleanly for the Rust path.
     const llm = config.llm;
     if (llm === undefined) {
-      throw new Error(
+      throw new AdrianeSdkError(
         "This run reached the legacy TS-fallback agent handler, which needs `llm`. On the Rust " +
-          "engine agents run natively — declare a `model` overlay (e.g. openai('gpt-4o'))."
+          "engine agents run natively — declare a `model` overlay (e.g. model.openai('gpt-4o')).",
+        {
+          code: "ADR_LEGACY_TS_AGENT_HANDLER",
+          hint: "Give the agent node a `model` (e.g. model.openai('gpt-4o')) so it runs natively on the Rust engine; the `llm` gateway was only for the removed TS fallback."
+        }
       );
     }
     const channels = state.channels as Record<string, unknown>;
