@@ -2,6 +2,8 @@
 sidebar_position: 13
 title: Per-token streaming (live "typing" output)
 description: Stream an agent's generation token by token in messages mode — observational, opt-in, byte-identical to a non-streaming run.
+tags: ["streaming", "models"]
+difficulty: intermediate
 ---
 
 # Per-token streaming

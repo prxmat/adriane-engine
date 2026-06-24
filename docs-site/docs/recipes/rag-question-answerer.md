@@ -2,6 +2,8 @@
 sidebar_position: 2
 title: RAG question answerer
 description: Retrieval QA with a citation — and the governance twist plain RAG lacks — an uncited answer routes to a human gate instead of publishing.
+tags: ["retrieval", "governance"]
+difficulty: intermediate
 ---
 
 # RAG question answerer

@@ -1,83 +1,122 @@
 import React from "react";
 import Link from "@docusaurus/Link";
+import useBaseUrl from "@docusaurus/useBaseUrl";
 import Layout from "@theme/Layout";
 import CodeBlock from "@theme/CodeBlock";
 
-const FEATURES = [
-  {
-    eyebrow: "Deterministic",
-    title: "Resumable by construction",
-    body: "Every node completion is checkpointed and every lifecycle transition emits an event. Runs suspend cleanly at human gates and resume from the latest checkpoint — replay is exact, not best-effort."
-  },
-  {
-    eyebrow: "Governed",
-    title: "Governed by construction",
-    body: "Governance — PII redaction, the human-approval gate, the filesystem policy — is sealed engine middleware you cannot turn off. An agent never approves its own output. An ungoverned agent is unrepresentable, not just discouraged."
-  },
-  {
-    eyebrow: "Composable",
-    title: "Middleware & profiles",
-    body: "Compose an agent from one ordered stack of governed + efficiency middleware. Dial its whole posture with a profile — `profile: \"governed-deep\"` is a governed deep agent in a single word; explicit overrides always win."
-  },
-  {
-    eyebrow: "Deep agents",
-    title: "Filesystem, todos, tasks",
-    body: "Give an agent a scratchpad bounded by a fail-closed path policy, a durable plan via writeTodos, and isolated sub-agents that return one compressed report — every mutation checkpointed and attributed."
-  },
-  {
-    eyebrow: "One engine",
-    title: "Two first-class SDKs",
-    body: "The graph model, validator and DSL compiler live once in Rust. The TypeScript and Python SDKs are thin shims over the same engine — a graph that validates in TS validates identically in Python."
-  },
-  {
-    eyebrow: "Fast",
-    title: "Rust at the core",
-    body: "Adriane runs on a native Rust engine — required, not optional. The TypeScript SDK pulls it in as a dependency; the Python wheel ships it. One engine answers in both languages."
-  }
+const HERO_CODE = `import { createGraph, DefaultLLMGateway } from "@adriane-ai/graph-sdk";
+
+const app = createGraph({ name: "refunder" })
+  .agentNode("decide", {
+    llm: new DefaultLLMGateway(),
+    prompt: { system: "Decide whether to refund the order." }
+  })
+  .humanGate("review")          // pause for a human before it acts
+  .compile();
+
+const run = await app.run({ request: "refund order #1024" });
+// run.status === "suspended"  → stopped at the gate
+await app.resume(run.runId);   // after a human approves
+// status === "completed"`;
+
+// Task-based entry: goals, not features. Each is one click to the right page.
+const GOALS = [
+  { k: "eval", label: "Evaluate Adriane in 5 minutes", to: "/docs/getting-started/quickstart" },
+  { k: "build", label: "Build a governed agent", to: "/docs/building/agent-nodes-and-react" },
+  { k: "deep", label: "Ship a deep agent", to: "/docs/advanced-agents/overview" },
+  { k: "gate", label: "Add an approval gate", to: "/docs/governance/approval-decision" },
+  { k: "comply", label: "Pass a compliance review", to: "/docs/governance/governance-model" },
+  { k: "model", label: "Wire a model provider", to: "/docs/integrations/models/overview" },
+  { k: "agent", label: "Let an AI agent author graphs", to: "/docs/reference/built-for-ai-agents" },
+  { k: "ship", label: "Deploy to production", to: "/docs/production/deployment" }
+];
+
+// Ordered reading paths, one per audience.
+const TRACKS = [
+  { name: "Evaluate in 5 minutes", body: "Install, run a governed agent, watch it suspend at a gate and resume.", to: "/docs/getting-started/quickstart" },
+  { name: "Build a deep agent", body: "Plan with todos, spawn sub-agents, load skills — governed throughout.", to: "/docs/advanced-agents/overview" },
+  { name: "Governance & compliance", body: "Approval gates, attestation, determinism — the moat, end to end.", to: "/docs/governance/governance-model" },
+  { name: "For AI coding agents", body: "Machine-legible surface: /llms.txt, JSON Schema, a recovery loop.", to: "/docs/reference/built-for-ai-agents" }
 ];
 
 function Hero() {
   return (
-    <header className="heroBanner">
-      <div className="container">
-        <h1 className="heroTitle">Adriane</h1>
-        <p className="heroTagline">
-          The governed agentic graph framework. Build stateful, resumable agent graphs —
-          deterministic by default, checkpointed after every step, observable end to end, and
-          governed with human-approval gates.
-        </p>
-        <div className="heroButtons">
-          <Link className="button button--primary button--lg" to="/docs/introduction/why-adriane">
-            Why Adriane →
-          </Link>
-          <Link className="button button--secondary button--lg" to="/docs/getting-started/installation">
-            Get started
-          </Link>
+    <header className="hero2">
+      <div className="container hero2Grid">
+        <div className="hero2Copy">
+          <span className="alphaBadge">alpha · honest about scope</span>
+          <h1 className="hero2Title">Governed agents,<br />by construction.</h1>
+          <p className="hero2Tagline">
+            A stateful, resumable agent-graph engine. Deterministic, checkpointed after every node,
+            and gated for human approval — so an agent <strong>stops for a human</strong> before it acts.
+          </p>
+          <div className="hero2Buttons">
+            <Link className="button button--primary button--lg" to="/docs/getting-started/quickstart">
+              Try in 5 minutes →
+            </Link>
+            <Link className="button button--secondary button--lg" to="/docs/introduction/why-adriane">
+              Why Adriane?
+            </Link>
+          </div>
+          <div className="agentStrip">
+            <span className="agentBot">🤖 Building with a coding agent?</span>
+            <span>
+              Start at <a href={useBaseUrl("/llms.txt")}>/llms.txt</a> and the{" "}
+              <Link to="/docs/reference/built-for-ai-agents">For-AI-agents</Link> guide.
+            </span>
+          </div>
         </div>
-        <div className="heroCode">
-          <CodeBlock language="bash">{`# TypeScript
-npm i @adriane-ai/graph-sdk
-
-# Python
-pip install adriane-ai`}</CodeBlock>
+        <div className="hero2Demo">
+          <CodeBlock language="ts">{HERO_CODE}</CodeBlock>
+          <div className="runStrip">
+            <span className="runStep">run()</span>
+            <span className="arrow">→</span>
+            <span className="pill pillSuspended">suspended</span>
+            <span className="arrow">→</span>
+            <span className="runStep">approve (resolvedBy = you)</span>
+            <span className="arrow">→</span>
+            <span className="pill pillDone">completed</span>
+          </div>
         </div>
       </div>
     </header>
   );
 }
 
-function Features() {
+function Goals() {
   return (
-    <section className="container">
-      <div className="featureGrid">
-        {FEATURES.map((f) => (
-          <div className="featureCard" key={f.title}>
-            <div className="featureEyebrow">{f.eyebrow}</div>
-            <h3>{f.title}</h3>
-            <p>{f.body}</p>
-          </div>
+    <section className="container homeSection">
+      <h2 className="homeH2">I want to…</h2>
+      <div className="goalGrid">
+        {GOALS.map((g) => (
+          <Link className="goalTile" key={g.k} to={g.to}>
+            <span className="goalK">{g.k}</span>
+            {g.label}
+          </Link>
         ))}
       </div>
+    </section>
+  );
+}
+
+function Tracks() {
+  return (
+    <section className="container homeSection">
+      <h2 className="homeH2">Pick your path</h2>
+      <div className="trackGrid">
+        {TRACKS.map((t) => (
+          <Link className="trackCard" key={t.name} to={t.to}>
+            <h3>{t.name}</h3>
+            <p>{t.body}</p>
+            <span className="trackGo">Start →</span>
+          </Link>
+        ))}
+      </div>
+      <p className="scopeStrip">
+        Honest about scope: see the{" "}
+        <Link to="/docs/introduction/comparison">comparison</Link> and the{" "}
+        <Link to="/docs/roadmap">roadmap</Link> (stable / experimental / reserved).
+      </p>
     </section>
   );
 }
@@ -85,12 +124,13 @@ function Features() {
 export default function Home() {
   return (
     <Layout
-      title="The governed agentic graph framework"
-      description="Adriane — build stateful, resumable agent graphs. Deterministic, checkpointed, observable, governed. One Rust engine, TypeScript and Python SDKs."
+      title="Governed agents, by construction"
+      description="Adriane — a stateful, resumable agent-graph engine. Deterministic, checkpointed, governed with human-approval gates. One Rust engine, TypeScript and Python SDKs."
     >
       <Hero />
       <main>
-        <Features />
+        <Goals />
+        <Tracks />
       </main>
     </Layout>
   );

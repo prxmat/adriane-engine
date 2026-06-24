@@ -63,6 +63,7 @@ const sidebars = {
           type: "category",
           label: "Deep agents",
           items: [
+            "advanced-agents/overview",
             "advanced-agents/middleware-and-profiles",
             "advanced-agents/governed-filesystem",
             "advanced-agents/deep-agents",
@@ -73,6 +74,7 @@ const sidebars = {
           type: "category",
           label: "Integrations",
           items: [
+            "integrations/overview",
             "building/llm-gateway",
             "building/providers",
             {
@@ -141,6 +143,7 @@ const sidebars = {
       type: "category",
       label: "Cookbook",
       items: [
+        "recipes/overview",
         "recipes/governed-refund-agent",
         "recipes/react-planner-critic",
         "recipes/idea-to-ship-pipeline",
@@ -162,6 +165,7 @@ const sidebars = {
       type: "category",
       label: "Govern",
       items: [
+        "governance/approval-decision",
         "governance/governance-model",
         "governance/approval-gates",
         "governance/tool-approval-and-attestation",

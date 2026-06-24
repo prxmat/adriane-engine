@@ -2,6 +2,8 @@
 sidebar_position: 3
 title: Resume across processes
 description: Suspend a governed run in one process, persist the checkpoint, and resume it in another — by implementing the Checkpointer interface or running on Adriane Studio.
+tags: ["state", "ops"]
+difficulty: advanced
 ---
 
 # Resume across processes

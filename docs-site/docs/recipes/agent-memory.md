@@ -2,6 +2,8 @@
 sidebar_position: 11
 title: Long-term agent memory (recall across runs)
 description: Give an agent governed long-term memory — it recalls relevant past context before a run and persists after.
+tags: ["state"]
+difficulty: intermediate
 ---
 
 # Long-term agent memory

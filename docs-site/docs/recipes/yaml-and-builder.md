@@ -2,6 +2,8 @@
 sidebar_position: 5
 title: YAML and the builder
 description: Author the same governed graph two ways — as Adriane DSL YAML and as the TypeScript builder — and see they compile to the same definition.
+tags: ["dsl"]
+difficulty: beginner
 ---
 
 # YAML and the builder

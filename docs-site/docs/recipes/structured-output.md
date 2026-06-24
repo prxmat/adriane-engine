@@ -2,6 +2,8 @@
 sidebar_position: 8
 title: Structured output (typed JSON from an agent)
 description: Constrain an agent to a JSON Schema, validated in-engine, with a bounded retry and a fail-closed/lenient mode.
+tags: ["models"]
+difficulty: intermediate
 ---
 
 # Structured output

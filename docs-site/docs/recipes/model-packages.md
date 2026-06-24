@@ -2,6 +2,8 @@
 sidebar_position: 12
 title: Choosing a model (the `model` surface)
 description: One import, one mental model — model.openai("gpt-4o").invoke(), zero-config model.invoke(), tiers as properties. Executed in the one Rust engine.
+tags: ["models"]
+difficulty: beginner
 ---
 
 # Choosing a model

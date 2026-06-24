@@ -96,3 +96,166 @@
   color: var(--ifm-color-primary);
   font-weight: 700;
 }
+
+/* ── Landing v2 (governed by construction) ─────────────────────────── */
+:root {
+  --adr-gate: #f2b23e; /* approval / human-in-the-loop amber */
+  --adr-go: #57b685; /* completed */
+}
+[data-theme="dark"] {
+  --adr-gate: #f2b23e;
+  --adr-go: #74cf9a;
+}
+
+.hero2 {
+  padding: 4.5rem 0 3rem;
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(1100px 460px at 78% -12%, rgba(91, 77, 219, 0.22), transparent 60%);
+}
+.hero2Grid {
+  display: grid;
+  grid-template-columns: 1fr 1.05fr;
+  gap: 2.5rem;
+  align-items: center;
+}
+@media (max-width: 900px) {
+  .hero2Grid { grid-template-columns: 1fr; gap: 1.75rem; }
+}
+.alphaBadge {
+  display: inline-block;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  color: var(--adr-gate);
+  border: 1px solid color-mix(in srgb, var(--adr-gate) 40%, transparent);
+  background: color-mix(in srgb, var(--adr-gate) 11%, transparent);
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  margin-bottom: 1.1rem;
+}
+.hero2Title {
+  font-size: clamp(2.3rem, 5vw, 3.5rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.05;
+  margin: 0 0 1rem;
+}
+.hero2Tagline {
+  font-size: clamp(1.02rem, 2vw, 1.22rem);
+  opacity: 0.85;
+  max-width: 36ch;
+  margin: 0 0 1.6rem;
+}
+.hero2Buttons { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+.agentStrip {
+  margin-top: 1.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px dashed var(--ifm-toc-border-color);
+  border-radius: 10px;
+  font-size: 0.9rem;
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.agentBot { font-weight: 600; }
+.hero2Demo { min-width: 0; }
+.hero2Demo .theme-code-block { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.28); }
+.runStrip {
+  margin-top: 0.9rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.78rem;
+}
+.runStep { color: var(--ifm-color-emphasis-700); }
+.runStrip .arrow { color: var(--ifm-color-emphasis-500); }
+.pill {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+}
+.pillSuspended {
+  color: var(--adr-gate);
+  background: color-mix(in srgb, var(--adr-gate) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--adr-gate) 38%, transparent);
+}
+.pillDone {
+  color: var(--adr-go);
+  background: color-mix(in srgb, var(--adr-go) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--adr-go) 38%, transparent);
+}
+
+.homeSection { padding: 2.5rem 0 0.5rem; }
+.homeH2 {
+  font-size: 1.05rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ifm-color-emphasis-600);
+  font-weight: 700;
+  margin-bottom: 1.1rem;
+}
+.goalGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.7rem;
+}
+@media (max-width: 900px) { .goalGrid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .goalGrid { grid-template-columns: 1fr; } }
+.goalTile {
+  display: block;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 10px;
+  padding: 0.95rem 1rem;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-font-color-base);
+  font-weight: 600;
+  font-size: 0.94rem;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.goalTile:hover {
+  text-decoration: none;
+  transform: translateY(-2px);
+  border-color: var(--adr-gate);
+}
+.goalK {
+  display: block;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--ifm-color-emphasis-500);
+  margin-bottom: 0.45rem;
+}
+
+.trackGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.9rem;
+}
+@media (max-width: 900px) { .trackGrid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .trackGrid { grid-template-columns: 1fr; } }
+.trackCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 12px;
+  padding: 1.25rem 1.25rem 1.1rem;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-font-color-base);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.trackCard:hover { text-decoration: none; transform: translateY(-3px); border-color: var(--ifm-color-primary); }
+.trackCard h3 { font-size: 1.05rem; margin: 0; }
+.trackCard p { font-size: 0.9rem; opacity: 0.82; margin: 0; flex: 1; }
+.trackGo { font-size: 0.85rem; font-weight: 600; color: var(--ifm-color-primary); }
+.scopeStrip {
+  margin: 1.5rem 0 0;
+  font-size: 0.9rem;
+  color: var(--ifm-color-emphasis-700);
+}

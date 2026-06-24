@@ -2,6 +2,8 @@
 sidebar_position: 9
 title: Multimodal input (send an image to an agent)
 description: Attach image/audio/file content blocks to an agent run via a channel, fanned out per provider.
+tags: ["models"]
+difficulty: beginner
 ---
 
 # Multimodal input

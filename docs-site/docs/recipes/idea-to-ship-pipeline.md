@@ -2,6 +2,8 @@
 sidebar_position: 6
 title: Idea-to-ship pipeline
 description: A full governed venture pipeline — agents, a structural human gate, and a native agent suspension through an ApprovalEngine — start to finish.
+tags: ["governance", "agents"]
+difficulty: advanced
 ---
 
 # Idea-to-ship pipeline

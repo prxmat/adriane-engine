@@ -26,6 +26,11 @@ await Bun.write("llms.txt", generateLlmsTxt()); // or fs.writeFileSync
 Serve it at `/llms.txt`, or commit it so an agent reading the repo finds it. It is generated from the
 same catalog the runtime uses, so it never drifts from the real API.
 
+:::tip Live on this site
+This documentation serves its own index at [pathname:///llms.txt](pathname:///llms.txt) — point your
+coding agent there first.
+:::
+
 ## Per-node JSON Schema
 
 Every component node param is described by JSON Schema, so an agent can validate a graph it is about
