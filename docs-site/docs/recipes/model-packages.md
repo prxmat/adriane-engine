@@ -1,50 +1,90 @@
 ---
 sidebar_position: 12
-title: Choosing a model (per-provider packages)
-description: Declare an agent's model with a per-provider package — like @langchain/openai, but executed in Rust.
+title: Choosing a model (the `model` surface)
+description: One import, one mental model — model.openai("gpt-4o").invoke(), zero-config model.invoke(), tiers as properties. Executed in the one Rust engine.
 ---
 
 # Choosing a model
 
-Pick an agent's model with a **per-provider package** (ADR 0031) — the LangChain-style ergonomics,
-but the call executes in the **one Rust engine** (no TS provider client, one consistent behaviour):
+One import, one surface (ADR 0034). The call executes in the **one Rust engine** — no TS provider
+client, one consistent behaviour:
 
 ```ts
-import { createGraph } from "@adriane-ai/graph-sdk";
-import { openai, OpenAIModel } from "@adriane-ai/model-openai";
+import { model, createGraph } from "@adriane-ai/graph-sdk";
 
-const app = createGraph({ name: "assistant" })
-  .agentNode("reply", {
-    model: openai("gpt-4o"),          // or new OpenAIModel("gpt-4o") / openai.frontier()
-    prompt: { system: "Answer concisely." }
-  })
+// zero-config: provider resolved from whichever API key is in your env; fails loud if none
+await model.invoke("Summarize this PR in one line.");
+
+// the one-liner: the provider IS the method
+await model.openai("gpt-4o").invoke("hi");
+await model.anthropic("claude-opus-4-8").invoke("hi");
+
+// tiers are properties — let the engine pick the model (and provider, when omitted)
+await model.fast.invoke("classify: spam?");
+await model.anthropic.frontier.invoke("hi");
+
+// drop the same value into a graph — no re-wrap
+createGraph({ name: "assistant" })
+  .agentNode("triage", { model: model.openai.fast, prompt: { system: "Classify." } })
+  .agentNode("reply",  { model: model.anthropic("claude-opus-4-8"), prompt: { system: "Answer." } })
   .compile();
-
-await app.run({ question: "hi" });
 ```
 
-`model` replaces the old required `llm` (now optional + deprecated). One package per provider:
-`@adriane-ai/model-openai` · `-anthropic` · `-gemini` · `-mistral`, plus `openaiCompatible({ baseURL })`
-for any OpenAI-compatible endpoint.
+`model.cohere` is a **compile error** (not a key on the surface); an unknown provider at runtime
+throws `UnknownProviderError` — never a silent default.
 
-## Call a model standalone
+## Typed structured output
 
-A model is also callable on its own (the call still runs through the Rust gateway):
+`.output(schema)` constrains the response to a JSON Schema (driven natively per provider in the
+engine, ADR 0029) and types the result — still a single engine call. The schema is any
+`{ jsonSchema, parse }` (no hard Zod dependency); wrap a Zod schema in one line:
 
 ```ts
-const m = new OpenAIModel("gpt-4o");
-const res = await m.invoke("Summarize this in one line: …");
-console.log(res.content);
+import { z } from "zod";
+
+const Triage = z.object({ severity: z.enum(["low", "high"]), area: z.string() });
+
+const out = await model
+  .openai("gpt-4o")
+  .output({
+    jsonSchema: {
+      type: "object",
+      properties: { severity: { enum: ["low", "high"] }, area: { type: "string" } },
+      required: ["severity", "area"]
+    },
+    parse: (v) => Triage.parse(v)
+  })
+  .invoke("db is down");
+
+out.parsed.severity; // typed "low" | "high"
 ```
 
-## Tiers + custom endpoints
+> A one-line `jsonSchema(zodSchema)` adapter (Zod → `{ jsonSchema, parse }`) is a small follow-up;
+> the generic contract above keeps the SDK Zod-free today.
+
+## API keys (from the environment)
+
+Keys are read from the environment, fail-loud, never inlined:
+
+- `model.openai(...)` reads `OPENAI_API_KEY` (per-provider defaults: `ANTHROPIC_API_KEY`,
+  `GEMINI_API_KEY`, `MISTRAL_API_KEY`, …); override with `model.openai("gpt-4o", { apiKeyEnv: "CORP_KEY" })`.
+- A named provider with no key → `MissingProviderKeyError` (names the exact var to set).
+- A provider-less `model.fast` / `model.invoke()` with no key in env → `NoProviderInEnvError`.
+
+## Custom / self-hosted endpoints
 
 ```ts
-openai.frontier();                              // let the engine resolve the tier's model
-openaiCompatible("llama-3.1", { baseURL: "http://localhost:1234/v1" });
+await model.ollama("llama3.3").invoke("hi");                  // local, keyless
+await model.openaiCompatible({ baseURL: "http://localhost:1234/v1", model: "qwen2.5", apiKeyEnv: "VLLM_KEY" }).invoke("hi");
 ```
 
-Honest note: a model package is a **declaration** routed to a compiled-in Rust adapter (provider
-slug + model + key env), not a new executor — the real extension point for an unknown endpoint is
-`openaiCompatible`. API keys come from the environment (`OPENAI_API_KEY`, …). See
-[ADR 0031](https://github.com/prxmat/adriane-engine/blob/main/docs/adr/0031-per-model-provider-packages.md).
+## Notes
+
+- Every form resolves to a plain `ModelSpec` (`{ provider?, model?, tier?, baseURL?, apiKeyEnv? }`)
+  — methodless data that crosses the napi/pyo3 wire. Zero runtime cost; `.invoke()` is a single
+  engine call. No TS HTTP client.
+- The per-provider packages (`@adriane-ai/model-openai`, `-anthropic`, …) still exist (ADR 0031);
+  `model.<provider>` is the unified front door over them.
+- `@adriane-ai/graph-sdk` installs **without** any provider SDK (ADR 0034 16a).
+- See [ADR 0034](https://github.com/prxmat/adriane-engine/blob/main/docs/adr/0034-model-surface-and-env-key-resolution.md)
+  and [ADR 0031](https://github.com/prxmat/adriane-engine/blob/main/docs/adr/0031-per-model-provider-packages.md).

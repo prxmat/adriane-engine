@@ -203,9 +203,6 @@ importers:
       '@adriane-ai/napi':
         specifier: workspace:*
         version: link:../../crates/bindings
-      '@anthropic-ai/sdk':
-        specifier: ^0.69.0
-        version: 0.69.0(zod@3.25.76)
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(pg@8.21.0)
@@ -256,9 +253,6 @@ importers:
 
   packages/llm-gateway:
     dependencies:
-      '@anthropic-ai/sdk':
-        specifier: ^0.69.0
-        version: 0.69.0(zod@3.25.76)
       zod:
         specifier: ^3.24.4
         version: 3.25.76
@@ -269,6 +263,10 @@ importers:
       vitest:
         specifier: ^3.2.6
         version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)
+    optionalDependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.69.0
+        version: 0.69.0(zod@3.25.76)
 
   packages/memory-store:
     devDependencies:
@@ -2576,6 +2574,7 @@ snapshots:
       json-schema-to-ts: 3.1.1
     optionalDependencies:
       zod: 3.25.76
+    optional: true
 
   '@babel/helper-string-parser@7.29.7': {}
 
@@ -2585,7 +2584,8 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.7
 
-  '@babel/runtime@7.29.7': {}
+  '@babel/runtime@7.29.7':
+    optional: true
 
   '@babel/types@7.29.7':
     dependencies:
@@ -3814,6 +3814,7 @@ snapshots:
     dependencies:
       '@babel/runtime': 7.29.7
       ts-algebra: 2.0.0
+    optional: true
 
   json-schema-traverse@0.4.1: {}
 
@@ -4260,7 +4261,8 @@ snapshots:
 
   tree-kill@1.2.2: {}
 
-  ts-algebra@2.0.0: {}
+  ts-algebra@2.0.0:
+    optional: true
 
   ts-api-utils@2.5.0(typescript@5.9.3):
     dependencies:

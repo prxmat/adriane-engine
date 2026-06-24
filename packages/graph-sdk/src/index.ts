@@ -258,7 +258,11 @@ export type { StreamEvent, StreamMode } from "@adriane-ai/graph-runtime";
 // the Pg adapters from `@adriane-ai/db-adapters` in private/control-plane code.
 export { InMemoryCheckpointer, DynamicInterrupt } from "@adriane-ai/graph-runtime";
 
-// Building blocks for agent/tool nodes, re-exported so a single import suffices.
+// Building blocks for agent/tool nodes, re-exported so a single import suffices. ADR 0034 (16a):
+// these stay re-exported (back-compat), but `@anthropic-ai/sdk` is now lazy-loaded inside the
+// Anthropic adapter + dropped from this package's deps — so `pnpm add @adriane-ai/graph-sdk` no
+// longer pulls a provider SDK. The Rust engine is the real execution path; this TS gateway is the
+// deprecated fallback.
 export {
   DefaultLLMGateway,
   MockLLMProviderAdapter,
@@ -292,11 +296,32 @@ export type { ToolRegistry, ToolDefinition, ToolId, AgentResult } from "@adriane
 // ADR 0031: per-model provider overlays. Install a provider package for the concrete classes
 // (`@adriane-ai/model-openai`, `-anthropic`, `-gemini`, `-mistral`); these shared base types +
 // the OpenAI-compatible escape hatch are re-exported here for convenience.
-export { Model, OpenAICompatibleModel, openaiCompatible, toModelSpec, assertKnownProvider } from "@adriane-ai/model-core";
+export {
+  Model,
+  OpenAICompatibleModel,
+  openaiCompatible,
+  toModelSpec,
+  parseModelString,
+  assertKnownProvider,
+  // ADR 0034 (16d): the unified `model` surface — the DX entry point.
+  model,
+  models,
+  SpecModel,
+  TypedModel,
+  resolveProviderKeys,
+  DEFAULT_KEY_ENV,
+  UnknownProviderError,
+  MissingProviderKeyError,
+  NoProviderInEnvError
+} from "@adriane-ai/model-core";
 export type {
   ModelSpec,
   ModelLike,
   ProviderSlug,
+  ProviderEntry,
+  ModelOptions,
+  OutputSchema,
+  ResolvedKeys,
   ChatMessage,
   ModelResponse,
   ModelUsage,
