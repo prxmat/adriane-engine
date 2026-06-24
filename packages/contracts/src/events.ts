@@ -55,6 +55,22 @@ const RunFailedSchema = BaseEventSchema.extend({
   error: z.string().min(1)
 });
 
+// ADR 0033 phase 13: an observational per-token delta. Does NOT extend BaseEventSchema
+// because its `timestamp` is the engine's millis-since-epoch string (the same value every
+// Rust event carries on the napi wire), not the ISO datetime the control plane re-stamps on
+// the persisted/API path — see ADR 0033 resolution #3 (the pre-existing Rust↔TS timestamp
+// divergence, out of scope here). `parentRunId`/`spawnId` tag a `mapAgents` sub-agent stream.
+const TokenDeltaSchema = z.object({
+  type: z.literal("token_delta"),
+  runId: z.string().min(1),
+  nodeId: z.string().min(1),
+  messageId: z.string().min(1),
+  delta: z.string(),
+  parentRunId: z.string().min(1).optional(),
+  spawnId: z.number().int().min(0).optional(),
+  timestamp: z.string().min(1)
+});
+
 export const RunEventDtoSchema = z.discriminatedUnion("type", [
   NodeStartedSchema,
   NodeCompletedSchema,
@@ -62,7 +78,8 @@ export const RunEventDtoSchema = z.discriminatedUnion("type", [
   RunSuspendedSchema,
   RunResumedSchema,
   RunCompletedSchema,
-  RunFailedSchema
+  RunFailedSchema,
+  TokenDeltaSchema
 ]);
 
 export type RunEventDto = z.infer<typeof RunEventDtoSchema>;

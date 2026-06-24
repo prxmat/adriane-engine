@@ -487,8 +487,9 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
    * - `values` — a full `state_value` per node completion, accumulated by replaying the
    *   node deltas through the channel reducers (the SDK mirrors the engine's reducers),
    *   plus a final authoritative `state_value` from the resolved run.
-   * - `messages` — a `message_delta` per new entry appended to the `messages` channel
-   *   (message-level; token-level deltas need gateway token streaming — still deferred).
+   * - `messages` — a `message_delta` per new entry appended to the `messages` channel,
+   *   plus (ADR 0033, when the run opts into `streamTokens`) a `message_delta` per LLM
+   *   token delta, grouped by `messageId`.
    * - `debug` — every run-lifecycle event wrapped as a `debug` payload.
    */
   public stream(
@@ -574,6 +575,19 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
           return fresh.flatMap((message) => messageDeltas(message, event.nodeId));
         }
       }
+      // ADR 0033 phase 13: per-token LLM deltas project onto the existing `message_delta`
+      // stream event (no new StreamMode). `messageId` groups a turn's tokens so the client
+      // concatenates them; `nodeId` is the agent node (or the `mapAgents` node for a spawn).
+      if (event.type === "token_delta" && mode === "messages") {
+        return [
+          {
+            type: "message_delta",
+            delta: event.delta,
+            nodeId: event.nodeId,
+            messageId: event.messageId
+          }
+        ];
+      }
       if (mode === "debug") {
         const nodeId = ("nodeId" in event ? event.nodeId : ("" as NodeId)) as NodeId;
         return [{ type: "debug", payload: event, nodeId }];
@@ -590,7 +604,14 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
     });
 
     let done = false;
-    const runPromise = this.rustRunner!.run(runId, initialData as Record<string, unknown>, {})
+    // ADR 0033 phase 13: `messages` mode is the token-granular consumer, so it opts the
+    // run into per-token streaming. Other modes leave it off → agents stay on `complete()`.
+    const runPromise = this.rustRunner!.run(
+      runId,
+      initialData as Record<string, unknown>,
+      {},
+      mode === "messages"
+    )
       .then((state) => {
         this.captureSuspension(state);
         return state;

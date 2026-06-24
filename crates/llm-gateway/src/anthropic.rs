@@ -19,15 +19,20 @@
 //!
 //! Tool transcript (ADR 0014): assistant `tool_calls` serialize to `tool_use` content
 //! blocks and `role:"tool"` results to a `tool_result` block (linked by `tool_use_id`), so
-//! a tool-calling agent holds a real multi-turn conversation with Anthropic. (Streaming is
-//! still deferred.)
+//! a tool-calling agent holds a real multi-turn conversation with Anthropic.
+//!
+//! Streaming (ADR 0033): [`AnthropicPort::create_stream`] streams the Messages API SSE,
+//! reassembled by [`AnthropicStreamAccumulator`] (unit-tested offline); the assembled
+//! response is byte-identical to `create()`.
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
-use crate::gateway::LlmProviderAdapter;
+use crate::gateway::{LlmProviderAdapter, TokenSink};
+use crate::sse::SseDecoder;
 use crate::types::{
     ContentBlock, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, MediaSource,
     ResponseFormat,
@@ -140,6 +145,132 @@ pub struct AnthropicRawResponse {
     pub usage: AnthropicUsage,
 }
 
+/// Reassembles a streaming Messages response from its SSE events (ADR 0033, phase 13).
+/// Pure + offline-testable: feed each event's `data:` JSON to [`Self::push_event`] (which
+/// returns a text delta when the event carries one), then [`Self::finish`] yields the same
+/// [`AnthropicRawResponse`] the non-streaming `create()` would have produced — so the
+/// assembled response (the authoritative one the agent consumes) is correct regardless of
+/// how the deltas were chunked.
+///
+/// Anthropic's event grammar (the fields we read): `message_start` carries the input/cache
+/// usage; `content_block_start` opens a `text` or `tool_use` block at an index;
+/// `content_block_delta` carries a `text_delta` (a token) or an `input_json_delta` (a
+/// fragment of a tool call's JSON input); `message_delta` carries the `stop_reason` and the
+/// output token count; `message_stop`/`ping` are terminal/no-ops.
+#[derive(Default)]
+pub struct AnthropicStreamAccumulator {
+    blocks: Vec<AnthropicContentBlock>,
+    /// Per-block accumulated `tool_use` input JSON fragments, indexed alongside `blocks`.
+    tool_json: Vec<String>,
+    stop_reason: Option<String>,
+    usage: AnthropicUsage,
+}
+
+impl AnthropicStreamAccumulator {
+    fn ensure_block(&mut self, index: usize) {
+        while self.blocks.len() <= index {
+            self.blocks.push(AnthropicContentBlock::default());
+            self.tool_json.push(String::new());
+        }
+    }
+
+    /// Process one SSE `data:` payload. Returns the text delta if this event carried one.
+    pub fn push_event(&mut self, data: &str) -> Option<String> {
+        let value: Value = serde_json::from_str(data).ok()?;
+        match value.get("type").and_then(Value::as_str)? {
+            "message_start" => {
+                if let Some(usage) = value.pointer("/message/usage") {
+                    self.merge_usage(usage);
+                }
+                None
+            }
+            "content_block_start" => {
+                let index = value.get("index").and_then(Value::as_u64)? as usize;
+                self.ensure_block(index);
+                if let Some(block) = value.get("content_block") {
+                    let entry = &mut self.blocks[index];
+                    entry.block_type = block
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    entry.id = block.get("id").and_then(Value::as_str).map(str::to_owned);
+                    entry.name = block.get("name").and_then(Value::as_str).map(str::to_owned);
+                }
+                None
+            }
+            "content_block_delta" => {
+                let index = value.get("index").and_then(Value::as_u64)? as usize;
+                self.ensure_block(index);
+                let delta = value.get("delta")?;
+                match delta.get("type").and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        let text = delta.get("text").and_then(Value::as_str)?;
+                        let entry = &mut self.blocks[index];
+                        entry.text.get_or_insert_with(String::new).push_str(text);
+                        Some(text.to_owned())
+                    }
+                    Some("input_json_delta") => {
+                        if let Some(fragment) = delta.get("partial_json").and_then(Value::as_str) {
+                            self.tool_json[index].push_str(fragment);
+                        }
+                        None
+                    }
+                    _ => None,
+                }
+            }
+            "message_delta" => {
+                if let Some(reason) = value.pointer("/delta/stop_reason").and_then(Value::as_str) {
+                    self.stop_reason = Some(reason.to_owned());
+                }
+                if let Some(usage) = value.get("usage") {
+                    self.merge_usage(usage);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn merge_usage(&mut self, usage: &Value) {
+        if let Some(v) = usage.get("input_tokens").and_then(Value::as_u64) {
+            self.usage.input_tokens = v as u32;
+        }
+        if let Some(v) = usage.get("output_tokens").and_then(Value::as_u64) {
+            self.usage.output_tokens = v as u32;
+        }
+        if let Some(v) = usage.get("cache_read_input_tokens").and_then(Value::as_u64) {
+            self.usage.cache_read_input_tokens = Some(v as u32);
+        }
+        if let Some(v) = usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_u64)
+        {
+            self.usage.cache_creation_input_tokens = Some(v as u32);
+        }
+    }
+
+    /// Finalize: parse each `tool_use` block's accumulated JSON into its `input`, and emit
+    /// the structural [`AnthropicRawResponse`] the rest of the adapter maps via `to_response`.
+    pub fn finish(mut self) -> AnthropicRawResponse {
+        for (index, block) in self.blocks.iter_mut().enumerate() {
+            if block.block_type == "tool_use" {
+                let raw = &self.tool_json[index];
+                block.input = if raw.is_empty() {
+                    Some(Value::Object(Map::new()))
+                } else {
+                    Some(serde_json::from_str(raw).unwrap_or(Value::Object(Map::new())))
+                };
+            }
+        }
+        AnthropicRawResponse {
+            content: self.blocks,
+            stop_reason: self.stop_reason,
+            usage: self.usage,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Port seam
 // ---------------------------------------------------------------------------
@@ -150,6 +281,29 @@ pub struct AnthropicRawResponse {
 pub trait AnthropicPort: Send + Sync {
     async fn create(&self, params: AnthropicCreateParams)
         -> Result<AnthropicRawResponse, LlmError>;
+
+    /// Stream the Messages response, calling `on_delta` per text delta, returning the
+    /// fully-assembled raw response (ADR 0033, phase 13). Default impl is chunk-once: it
+    /// calls [`Self::create`] and emits the assembled text as a single delta — so a test
+    /// port (or any non-HTTP port) streams without implementing real SSE. Only
+    /// [`HttpAnthropicPort`] overrides this with the provider's event stream.
+    async fn create_stream(
+        &self,
+        params: AnthropicCreateParams,
+        on_delta: &TokenSink<'_>,
+    ) -> Result<AnthropicRawResponse, LlmError> {
+        let raw = self.create(params).await?;
+        let text: String = raw
+            .content
+            .iter()
+            .filter(|block| block.block_type == "text")
+            .filter_map(|block| block.text.clone())
+            .collect();
+        if !text.is_empty() {
+            on_delta(&text);
+        }
+        Ok(raw)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +535,19 @@ impl LlmProviderAdapter for AnthropicAdapter {
         let raw = self.port.create(params).await?;
         Ok(to_response(&request, model, raw))
     }
+
+    async fn stream(
+        &self,
+        request: LlmRequest,
+        on_delta: &TokenSink<'_>,
+    ) -> Result<LlmResponse, LlmError> {
+        let params = self.build_params(&request);
+        let model = params.model.clone();
+        // The assembled raw response is authoritative — `to_response` maps it exactly as
+        // on the `complete()` path, so the agent's result is identical regardless of chunking.
+        let raw = self.port.create_stream(params, on_delta).await?;
+        Ok(to_response(&request, model, raw))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +714,61 @@ impl AnthropicPort for HttpAnthropicPort {
             .json::<AnthropicRawResponse>()
             .await
             .map_err(|err| LlmError::Provider(format!("anthropic response decode failed: {err}")))
+    }
+
+    /// Real SSE over `POST /v1/messages` with `"stream": true`. Consumes the byte stream,
+    /// frames it into events, and folds them through [`AnthropicStreamAccumulator`], emitting
+    /// each text delta live. The transport (reqwest `bytes_stream`) is verified on a live key
+    /// via `scripts/probe-anthropic.ts`, not in CI — like `create()`; the SSE reassembly is
+    /// unit-tested offline through the accumulator.
+    async fn create_stream(
+        &self,
+        params: AnthropicCreateParams,
+        on_delta: &TokenSink<'_>,
+    ) -> Result<AnthropicRawResponse, LlmError> {
+        let mut body = build_request_body(&params);
+        if let Value::Object(map) = &mut body {
+            map.insert("stream".to_owned(), json!(true));
+        }
+        let response = self
+            .client
+            .post(format!("{}/v1/messages", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| LlmError::Provider(format!("anthropic stream request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider(format!(
+                "anthropic returned {status}: {text}"
+            )));
+        }
+
+        let mut decoder = SseDecoder::default();
+        let mut accumulator = AnthropicStreamAccumulator::default();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|err| {
+                LlmError::Provider(format!("anthropic stream read failed: {err}"))
+            })?;
+            let text = String::from_utf8_lossy(&bytes);
+            for payload in decoder.push(&text) {
+                if let Some(delta) = accumulator.push_event(&payload) {
+                    on_delta(&delta);
+                }
+            }
+        }
+        if let Some(payload) = decoder.finish() {
+            if let Some(delta) = accumulator.push_event(&payload) {
+                on_delta(&delta);
+            }
+        }
+        Ok(accumulator.finish())
     }
 }
 
@@ -1031,5 +1253,67 @@ mod tests {
         assert_eq!(tools[1]["input_schema"]["type"], json!("custom"));
         assert!(tools[1].get("description").is_none());
         assert_eq!(tools[1]["cache_control"], json!({ "type": "ephemeral" }));
+    }
+
+    /// ADR 0033 phase 13: the SSE accumulator reassembles a text stream — the deltas arrive
+    /// in order and the assembled response carries the concatenated text + usage.
+    #[test]
+    fn stream_accumulator_reassembles_a_text_response() {
+        let mut acc = AnthropicStreamAccumulator::default();
+        let events = [
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":4}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+            r#"{"type":"message_stop"}"#,
+        ];
+        let deltas: Vec<String> = events.iter().filter_map(|e| acc.push_event(e)).collect();
+        assert_eq!(deltas, vec!["Hel".to_owned(), "lo".to_owned()]);
+
+        let raw = acc.finish();
+        assert_eq!(raw.content.len(), 1);
+        assert_eq!(raw.content[0].text.as_deref(), Some("Hello"));
+        assert_eq!(raw.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(raw.usage.input_tokens, 12);
+        assert_eq!(raw.usage.output_tokens, 7);
+        assert_eq!(raw.usage.cache_read_input_tokens, Some(4));
+
+        // The assembled raw maps to the same LlmResponse shape `complete()` produces.
+        let request = LlmRequest {
+            provider: LlmProvider::Anthropic,
+            model: "claude-opus-4-8".to_owned(),
+            messages: vec![],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            response_format: None,
+        };
+        let response = to_response(&request, "claude-opus-4-8".to_owned(), raw);
+        assert_eq!(response.content, "Hello");
+        assert_eq!(response.usage.completion_tokens, 7);
+    }
+
+    /// A `tool_use` block's input JSON arrives as `input_json_delta` fragments; the
+    /// accumulator concatenates and parses them into the structured tool call.
+    #[test]
+    fn stream_accumulator_reassembles_a_tool_use_from_json_fragments() {
+        let mut acc = AnthropicStreamAccumulator::default();
+        for event in [
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu1","name":"search"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"rust\"}"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+        ] {
+            // tool_use fragments emit no text delta.
+            assert_eq!(acc.push_event(event), None);
+        }
+        let raw = acc.finish();
+        assert_eq!(raw.content[0].block_type, "tool_use");
+        assert_eq!(raw.content[0].id.as_deref(), Some("tu1"));
+        assert_eq!(raw.content[0].name.as_deref(), Some("search"));
+        assert_eq!(raw.content[0].input, Some(json!({ "q": "rust" })));
     }
 }

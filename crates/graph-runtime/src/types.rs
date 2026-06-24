@@ -73,6 +73,33 @@ pub enum RunEvent {
         error: String,
         timestamp: String,
     },
+    /// One observational per-token delta during agent generation (ADR 0033, phase 13).
+    ///
+    /// **Observational only — never durable.** Unlike every other variant, a `TokenDelta`
+    /// is NEVER put on the `EventBus` (so it never enters the in-memory events vector, a
+    /// checkpoint, or the durable journal). It is built and serialized directly onto the
+    /// napi `on_event` sink in `bindings` (the `agents-core` `EventSink` impl), bypassing
+    /// the bus entirely — `durability ≠ observability`. The authoritative generation
+    /// result is the assembled `LlmResponse`, which flows through the normal path and is
+    /// what every checkpoint records; these deltas are a live read view of the same
+    /// generation. Do **not** emit this via `EventBus::emit`.
+    TokenDelta {
+        run_id: RunId,
+        node_id: NodeId,
+        /// Groups all deltas of one agent turn so a consumer concatenates them.
+        message_id: String,
+        delta: String,
+        /// The parent run for a `mapAgents` spawn (the run that fanned it out); `None`
+        /// for a top-level agent node. Additive to the `<parentRunId>:<nodeId>` RunId
+        /// convention, not a replacement.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_run_id: Option<RunId>,
+        /// Which `mapAgents` sub-agent produced this delta (input index = merge order);
+        /// `None` for a top-level agent node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spawn_id: Option<u32>,
+        timestamp: String,
+    },
 }
 
 #[cfg(test)]
@@ -95,5 +122,45 @@ mod tests {
         assert!(json.contains("\"nodeId\":\"n\""));
         assert!(!json.contains("run_id"));
         assert!(!json.contains("node_id"));
+    }
+
+    /// ADR 0033 phase 13: a top-level `TokenDelta` carries no spawn/parent fields (both
+    /// `None` → omitted from the wire), and tags/fields follow the same camelCase contract.
+    #[test]
+    fn token_delta_top_level_omits_spawn_and_parent_fields() {
+        let event = RunEvent::TokenDelta {
+            run_id: RunId::from("r"),
+            node_id: NodeId::from("assistant"),
+            message_id: "r:turn-0".to_owned(),
+            delta: "Hel".to_owned(),
+            parent_run_id: None,
+            spawn_id: None,
+            timestamp: "0".to_owned(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"token_delta\""));
+        assert!(json.contains("\"messageId\":\"r:turn-0\""));
+        assert!(json.contains("\"delta\":\"Hel\""));
+        // Absent spawn/parent → omitted, not `null`, so the wire stays lean.
+        assert!(!json.contains("spawnId"));
+        assert!(!json.contains("parentRunId"));
+    }
+
+    /// A `mapAgents` spawn's delta carries `spawnId` + `parentRunId` (camelCase), so a
+    /// consumer can demultiplex interleaved sub-agent streams.
+    #[test]
+    fn token_delta_spawn_carries_spawn_and_parent_fields() {
+        let event = RunEvent::TokenDelta {
+            run_id: RunId::from("r"),
+            node_id: NodeId::from("fanner"),
+            message_id: "r:spawn2:turn-1".to_owned(),
+            delta: "lo".to_owned(),
+            parent_run_id: Some(RunId::from("r")),
+            spawn_id: Some(2),
+            timestamp: "0".to_owned(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"spawnId\":2"));
+        assert!(json.contains("\"parentRunId\":\"r\""));
     }
 }

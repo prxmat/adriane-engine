@@ -35,7 +35,7 @@ pub use node::{
 };
 pub use plan_execute::{PlanExecuteAgent, PlanExecuteResult, PlanStep, PLANNER_MODEL};
 pub use react::{
-    AgentResult, ApprovalRequestItem, ReActAgent, DEFAULT_MAX_ITERATIONS, DEFAULT_MODEL,
+    AgentResult, ApprovalRequestItem, EventSink, ReActAgent, DEFAULT_MAX_ITERATIONS, DEFAULT_MODEL,
 };
 pub use reflection::{
     ReflectionAgent, ReflectionResult, DEFAULT_MAX_REFLECTIONS, REFLECTION_MODEL, REVISE_MARKERS,

@@ -31,6 +31,22 @@ pub const DEFAULT_MODEL: &str = "claude-opus-4-8";
 /// Default iteration budget, matching the TS default.
 pub const DEFAULT_MAX_ITERATIONS: usize = 6;
 
+/// Sink for observational per-token deltas (ADR 0033, phase 13). Implemented in `bindings`
+/// to forward each delta to JS as a `RunEvent::TokenDelta` over the napi `on_event` TSFN —
+/// crucially **bypassing the runtime `EventBus`**, so token deltas never enter a checkpoint
+/// or the durable event journal (durability ≠ observability). Defined here, not in
+/// `graph-runtime`, so `agents-core` gains no dependency on the runtime crate.
+///
+/// It is purely observational: emitting deltas must not affect the agent's result. The
+/// authoritative response is always the one `gateway.stream()` returns (byte-identical to
+/// `complete()`); deltas are a side view of the same generation.
+pub trait EventSink: Send + Sync {
+    /// Emit one token delta. `spawn_id` tags which `mapAgents` sub-agent produced it
+    /// (`None` for a top-level agent node). `message_id` groups all deltas of one agent
+    /// turn, so a consumer concatenates them into a single streamed message.
+    fn token_delta(&self, spawn_id: Option<u32>, message_id: &str, delta: &str);
+}
+
 /// One pending approval. `subject` is `"tool:<name>"`, exactly like the TS shape
 /// (`{ description: "tool:<name>" }`) flattened to its description string.
 ///
@@ -117,6 +133,10 @@ pub struct ReActAgent {
     /// the channel is excluded from the stringified State dump so binary bytes are not
     /// re-fed as text. `None` → text-only seed (unchanged).
     input_blocks_channel: Option<String>,
+    /// ADR 0033 phase 13: an optional observational token-delta sink. When `Some`, the loop
+    /// drives `gateway.stream()` and emits each delta; when `None` it calls `gateway.complete()`
+    /// and the path is byte-identical to before. Opt-in by construction.
+    event_sink: Option<Arc<dyn EventSink>>,
 }
 
 impl ReActAgent {
@@ -138,12 +158,22 @@ impl ReActAgent {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             middleware: MiddlewareStack::new(),
             input_blocks_channel: None,
+            event_sink: None,
         }
     }
 
     /// Bind the channel carrying this run's multimodal input blocks (ADR 0030 9e).
     pub fn with_input_blocks_channel(mut self, channel: impl Into<String>) -> Self {
         self.input_blocks_channel = Some(channel.into());
+        self
+    }
+
+    /// Attach an observational token-delta sink (ADR 0033 phase 13). With a sink installed,
+    /// each LLM call streams via `gateway.stream()` and emits a delta per token; without one,
+    /// the loop calls `gateway.complete()` and behaves exactly as before. Opt-in: a run with
+    /// no consumer keeps its current, byte-identical path.
+    pub fn with_event_sink(mut self, sink: Arc<dyn EventSink>) -> Self {
+        self.event_sink = Some(sink);
         self
     }
 
@@ -189,6 +219,22 @@ impl ReActAgent {
         input: &Value,
         channels: &BTreeMap<String, Value>,
         approved_tool_names: &HashSet<String>,
+    ) -> Result<AgentResult, LlmError> {
+        self.run_scoped(input, channels, approved_tool_names, None)
+            .await
+    }
+
+    /// As [`Self::run`], but tags any emitted token deltas with `spawn_id` — the
+    /// `mapAgents` sub-agent index (ADR 0033 phase 13b), so a consumer can demultiplex the
+    /// interleaved streams of concurrent spawns. A top-level agent node passes `None`
+    /// (via [`Self::run`]). Behaviourally identical to `run` apart from the delta tag; with
+    /// no `event_sink` installed, `spawn_id` is unused.
+    pub async fn run_scoped(
+        &self,
+        input: &Value,
+        channels: &BTreeMap<String, Value>,
+        approved_tool_names: &HashSet<String>,
+        spawn_id: Option<u32>,
     ) -> Result<AgentResult, LlmError> {
         let mut trace: Vec<String> = Vec::new();
         let mut approval_requests: Vec<ApprovalRequestItem> = Vec::new();
@@ -277,7 +323,23 @@ impl ReActAgent {
                     &ctx,
                 )
                 .await?;
-            let response = self.gateway.complete(request.clone()).await?;
+            // ADR 0033 phase 13: opt-in token streaming. With a sink, drive
+            // `gateway.stream()` and emit each delta (purely observational); the RETURNED
+            // response is the authoritative, fully-assembled one — byte-identical to the
+            // `complete()` path, so `after_model`, usage, history, and every checkpoint are
+            // unchanged. Without a sink, the path is exactly as before.
+            let response = match &self.event_sink {
+                Some(sink) => {
+                    // One stable id per agent turn: all deltas of this iteration share it,
+                    // so a consumer concatenates them into a single streamed message. The
+                    // sink (built in `bindings`) namespaces it with the run/spawn context.
+                    let message_id = format!("turn-{iteration}");
+                    let sink = Arc::clone(sink);
+                    let emit = move |delta: &str| sink.token_delta(spawn_id, &message_id, delta);
+                    self.gateway.stream(request.clone(), &emit).await?
+                }
+                None => self.gateway.complete(request.clone()).await?,
+            };
             // ADR 0025: `after_model`.
             let response = self
                 .middleware
@@ -592,6 +654,97 @@ mod tests {
             responses,
         )));
         Arc::new(gateway)
+    }
+
+    /// A test [`EventSink`] that records every observed token delta with its tags.
+    #[derive(Default)]
+    struct RecordingSink {
+        deltas: Mutex<Vec<(Option<u32>, String, String)>>,
+    }
+    impl EventSink for RecordingSink {
+        fn token_delta(&self, spawn_id: Option<u32>, message_id: &str, delta: &str) {
+            self.deltas.lock().expect("lock").push((
+                spawn_id,
+                message_id.to_owned(),
+                delta.to_owned(),
+            ));
+        }
+    }
+
+    /// A gateway whose adapter streams the scripted deltas, returning `content` assembled.
+    fn streaming_gateway_with(
+        responses: Vec<LlmResponse>,
+        scripts: Vec<Vec<String>>,
+    ) -> Arc<DefaultLlmGateway> {
+        let mut gateway = DefaultLlmGateway::new();
+        gateway.register_adapter(Box::new(
+            MockAdapter::new(LlmProvider::Anthropic, responses).with_stream_scripts(scripts),
+        ));
+        Arc::new(gateway)
+    }
+
+    /// ADR 0033 phase 13 — the determinism guard: the streaming path is byte-identical to
+    /// the `complete()` path (same `AgentResult`), AND the deltas are observed in order,
+    /// tagged as a top-level turn (`spawn_id` None, `message_id` "turn-0").
+    #[tokio::test]
+    async fn token_streaming_is_byte_identical_and_emits_ordered_deltas() {
+        let script = vec![vec!["FINAL".to_owned(), ": do".to_owned(), "ne".to_owned()]];
+
+        // Baseline: no sink → complete().
+        let baseline = ReActAgent::new(
+            "a",
+            "t",
+            streaming_gateway_with(vec![text("FINAL: done")], script.clone()),
+        )
+        .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+        .await
+        .unwrap();
+
+        // Streaming: a sink → stream().
+        let sink = Arc::new(RecordingSink::default());
+        let streamed = ReActAgent::new(
+            "a",
+            "t",
+            streaming_gateway_with(vec![text("FINAL: done")], script),
+        )
+        .with_event_sink(sink.clone())
+        .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+        .await
+        .unwrap();
+
+        // The result is identical — streaming changes nothing the run records.
+        assert_eq!(baseline, streamed);
+
+        let deltas = sink.deltas.lock().expect("lock");
+        let texts: Vec<&str> = deltas.iter().map(|(_, _, d)| d.as_str()).collect();
+        assert_eq!(texts, vec!["FINAL", ": do", "ne"]);
+        assert!(deltas.iter().all(|(spawn, _, _)| spawn.is_none()));
+        assert_eq!(deltas[0].1, "turn-0");
+    }
+
+    /// ADR 0033 phase 13b: `run_scoped` tags every emitted delta with its `spawn_id` (the
+    /// `mapAgents` sub-agent index), so concurrent spawns' interleaved streams demultiplex.
+    #[tokio::test]
+    async fn run_scoped_tags_deltas_with_the_spawn_id() {
+        let sink = Arc::new(RecordingSink::default());
+        let agent = ReActAgent::new(
+            "w",
+            "sub",
+            streaming_gateway_with(
+                vec![text("FINAL: ok")],
+                vec![vec!["FINAL: ".to_owned(), "ok".to_owned()]],
+            ),
+        )
+        .with_event_sink(sink.clone());
+
+        agent
+            .run_scoped(&json!({}), &BTreeMap::new(), &HashSet::new(), Some(3))
+            .await
+            .unwrap();
+
+        let deltas = sink.deltas.lock().expect("lock");
+        assert!(!deltas.is_empty());
+        assert!(deltas.iter().all(|(spawn, _, _)| *spawn == Some(3)));
     }
 
     /// A gateway that captures the first request, to inspect the seed message (ADR 0030 9e).

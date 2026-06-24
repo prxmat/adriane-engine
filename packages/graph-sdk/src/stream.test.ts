@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { Message, MessageId } from "@adriane-ai/graph-core";
 
-import { createGraph, rustEngineAvailable, type RunId, type StreamEvent } from "./index.js";
+import {
+  createGraph,
+  DefaultLLMGateway,
+  rustEngineAvailable,
+  type RunId,
+  type StreamEvent
+} from "./index.js";
 
 /**
  * Incremental streaming over the Rust engine (ADR 0015): `values` accumulates a full
@@ -84,6 +90,55 @@ describeIfRust("@adriane-ai/graph-sdk — incremental streaming (Rust engine)", 
     if (deltas[0]?.type === "message_delta") {
       expect(deltas[0].delta).toBe("hello world");
       expect(deltas[0].nodeId).toBe("say");
+    }
+  });
+
+  it("`messages` mode streams per-token deltas from an agent node (ADR 0033 phase 13)", async () => {
+    // Force the deterministic mock gateway (no provider keys), so the agent's generation
+    // is reproducible offline. The mock streams chunk-once (the whole content as one
+    // delta), which the engine surfaces as a `token_delta` → projected to `message_delta`.
+    const savedKeys: Record<string, string | undefined> = {};
+    for (const key of ["ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "ADRIANE_USE_OLLAMA"]) {
+      savedKeys[key] = process.env[key];
+      delete process.env[key];
+    }
+    try {
+      const app = createGraph({ name: "stream-tokens" })
+        .agentNode("assistant", {
+          llm: new DefaultLLMGateway(),
+          prompt: { system: "You are a brief assistant." },
+          maxIterations: 1
+        })
+        .compile();
+
+      expect(app.usesRustEngine).toBe(true);
+      const events: StreamEvent[] = [];
+      for await (const event of app.stream({ question: "hi" }, "messages", {
+        runId: "run_tokens" as RunId
+      })) {
+        events.push(event);
+      }
+
+      // The agent writes no `messages` channel; every message_delta here therefore comes
+      // from a token_delta projection — proving the per-token path is wired end to end.
+      const deltas = events.filter((e) => e.type === "message_delta");
+      expect(deltas.length).toBeGreaterThanOrEqual(1);
+      const first = deltas[0];
+      expect(first?.type).toBe("message_delta");
+      if (first?.type === "message_delta") {
+        expect(first.delta.length).toBeGreaterThan(0);
+        expect(first.nodeId).toBe("assistant");
+        // The messageId groups a turn's tokens (namespaced with the run id by the sink).
+        expect(first.messageId.length).toBeGreaterThan(0);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(savedKeys)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
     }
   });
 });

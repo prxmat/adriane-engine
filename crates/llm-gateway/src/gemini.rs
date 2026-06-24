@@ -20,14 +20,20 @@
 //!
 //! Multimodal (ADR 0030): a message's `content_blocks` fan out to `inlineData`/`fileData`
 //! parts (in), and inline media a model returns is surfaced on `LlmResponse.content_blocks`
-//! (out). Streaming is not ported yet.
+//! (out).
+//!
+//! Streaming (ADR 0033): [`GeminiPort::generate_stream`] streams `streamGenerateContent`
+//! (`alt=sse`), reassembled by [`GeminiStreamAccumulator`] (unit-tested offline); the
+//! assembled response is byte-identical to `generate()`.
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::error::LlmError;
-use crate::gateway::LlmProviderAdapter;
+use crate::gateway::{LlmProviderAdapter, TokenSink};
+use crate::sse::SseDecoder;
 use crate::types::{
     ContentBlock, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage, MediaSource,
     ResponseFormat,
@@ -108,6 +114,82 @@ pub struct GeminiRawResponse {
     pub usage_metadata: Option<GeminiUsageMetadata>,
 }
 
+/// Reassembles a `streamGenerateContent` response from its SSE chunks (ADR 0033, phase 13).
+/// Pure + offline-testable: feed each chunk's `data:` JSON to [`Self::push_event`] (which
+/// returns the chunk's text), then [`Self::finish`] yields the [`GeminiRawResponse`] the
+/// adapter maps via `to_response`. Gemini sends each chunk's `usageMetadata` cumulatively
+/// (last wins) and `functionCall` parts whole (never fragmented).
+#[derive(Default)]
+pub struct GeminiStreamAccumulator {
+    text: String,
+    function_calls: Vec<GeminiFunctionCall>,
+    finish_reason: Option<String>,
+    usage: Option<GeminiUsageMetadata>,
+}
+
+impl GeminiStreamAccumulator {
+    /// Process one SSE `data:` payload. Returns this chunk's text (the token delta) if any.
+    pub fn push_event(&mut self, data: &str) -> Option<String> {
+        let value: Value = serde_json::from_str(data).ok()?;
+        if let Some(meta) = value.get("usageMetadata") {
+            if let Ok(parsed) = serde_json::from_value::<GeminiUsageMetadata>(meta.clone()) {
+                self.usage = Some(parsed);
+            }
+        }
+        let candidate = value.get("candidates")?.get(0)?;
+        if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
+            self.finish_reason = Some(reason.to_owned());
+        }
+        let parts = candidate
+            .pointer("/content/parts")
+            .and_then(Value::as_array)?;
+        let mut chunk_text = String::new();
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                chunk_text.push_str(text);
+                self.text.push_str(text);
+            }
+            if let Some(call) = part.get("functionCall") {
+                if let Ok(parsed) = serde_json::from_value::<GeminiFunctionCall>(call.clone()) {
+                    self.function_calls.push(parsed);
+                }
+            }
+        }
+        if chunk_text.is_empty() {
+            None
+        } else {
+            Some(chunk_text)
+        }
+    }
+
+    /// Emit the assembled response: one text part (the concatenated text) followed by the
+    /// `functionCall` parts, in arrival order — the shape `to_response` already maps.
+    pub fn finish(self) -> GeminiRawResponse {
+        let mut parts: Vec<GeminiPart> = Vec::new();
+        if !self.text.is_empty() {
+            parts.push(GeminiPart {
+                text: Some(self.text),
+                function_call: None,
+                inline_data: None,
+            });
+        }
+        for call in self.function_calls {
+            parts.push(GeminiPart {
+                text: None,
+                function_call: Some(call),
+                inline_data: None,
+            });
+        }
+        GeminiRawResponse {
+            candidates: vec![GeminiCandidate {
+                content: GeminiContent { parts, role: None },
+                finish_reason: self.finish_reason,
+            }],
+            usage_metadata: self.usage,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Port seam
 // ---------------------------------------------------------------------------
@@ -118,6 +200,35 @@ pub struct GeminiRawResponse {
 #[async_trait]
 pub trait GeminiPort: Send + Sync {
     async fn generate(&self, model: String, body: Value) -> Result<GeminiRawResponse, LlmError>;
+
+    /// Stream `streamGenerateContent`, calling `on_delta` per text chunk, returning the
+    /// assembled response (ADR 0033, phase 13). Default impl is chunk-once: it `generate()`s
+    /// and emits the assembled text as one delta — so a test port streams without real SSE.
+    /// Only [`HttpGeminiPort`] overrides this with the provider's event stream.
+    async fn generate_stream(
+        &self,
+        model: String,
+        body: Value,
+        on_delta: &TokenSink<'_>,
+    ) -> Result<GeminiRawResponse, LlmError> {
+        let raw = self.generate(model, body).await?;
+        let text: String = raw
+            .candidates
+            .first()
+            .map(|candidate| {
+                candidate
+                    .content
+                    .parts
+                    .iter()
+                    .filter_map(|part| part.text.clone())
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        if !text.is_empty() {
+            on_delta(&text);
+        }
+        Ok(raw)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +499,21 @@ impl LlmProviderAdapter for GeminiAdapter {
         let raw = self.port.generate(model.clone(), body).await?;
         Ok(to_response(&request, model, raw))
     }
+
+    async fn stream(
+        &self,
+        request: LlmRequest,
+        on_delta: &TokenSink<'_>,
+    ) -> Result<LlmResponse, LlmError> {
+        let model = self.resolve_model(&request.model);
+        let body = build_request_body(&request);
+        // The assembled raw response is authoritative — same `to_response` mapping as `complete()`.
+        let raw = self
+            .port
+            .generate_stream(model.clone(), body, on_delta)
+            .await?;
+        Ok(to_response(&request, model, raw))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +573,59 @@ impl GeminiPort for HttpGeminiPort {
             .json::<GeminiRawResponse>()
             .await
             .map_err(|err| LlmError::Provider(format!("gemini response decode failed: {err}")))
+    }
+
+    /// Real SSE over `POST {base}/models/{model}:streamGenerateContent?alt=sse`. Frames the
+    /// byte stream and folds the chunks through [`GeminiStreamAccumulator`], emitting each
+    /// text chunk live. Transport verified on a live key (probe), not in CI — like
+    /// `generate()`; the chunk reassembly is unit-tested offline through the accumulator.
+    async fn generate_stream(
+        &self,
+        model: String,
+        body: Value,
+        on_delta: &TokenSink<'_>,
+    ) -> Result<GeminiRawResponse, LlmError> {
+        let url = format!(
+            "{}/models/{model}:streamGenerateContent?alt=sse",
+            self.base_url.trim_end_matches('/')
+        );
+        let response = self
+            .client
+            .post(url)
+            .header("x-goog-api-key", &self.api_key)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| LlmError::Provider(format!("gemini stream request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider(format!(
+                "gemini returned {status}: {text}"
+            )));
+        }
+
+        let mut decoder = SseDecoder::default();
+        let mut accumulator = GeminiStreamAccumulator::default();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk
+                .map_err(|err| LlmError::Provider(format!("gemini stream read failed: {err}")))?;
+            let text = String::from_utf8_lossy(&bytes);
+            for payload in decoder.push(&text) {
+                if let Some(delta) = accumulator.push_event(&payload) {
+                    on_delta(&delta);
+                }
+            }
+        }
+        if let Some(payload) = decoder.finish() {
+            if let Some(delta) = accumulator.push_event(&payload) {
+                on_delta(&delta);
+            }
+        }
+        Ok(accumulator.finish())
     }
 }
 
@@ -835,5 +1014,66 @@ mod tests {
         let usage = raw.usage_metadata.as_ref().unwrap();
         assert_eq!(usage.prompt_token_count, Some(10));
         assert_eq!(usage.cached_content_token_count, Some(2));
+    }
+
+    /// ADR 0033 phase 13: the SSE accumulator reassembles a streamed generateContent —
+    /// text chunks in order, cumulative usage (last wins), mapped to the same response.
+    #[test]
+    fn stream_accumulator_reassembles_text_and_usage() {
+        let mut acc = GeminiStreamAccumulator::default();
+        let deltas: Vec<String> = [
+            r#"{"candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":6,"candidatesTokenCount":3}}"#,
+        ]
+        .iter()
+        .filter_map(|e| acc.push_event(e))
+        .collect();
+        assert_eq!(deltas, vec!["Hel".to_owned(), "lo".to_owned()]);
+
+        let raw = acc.finish();
+        let request = LlmRequest {
+            provider: LlmProvider::Google,
+            model: "gemini-2.0".to_owned(),
+            messages: vec![],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            response_format: None,
+        };
+        let response = to_response(&request, "gemini-2.0".to_owned(), raw);
+        assert_eq!(response.content, "Hello");
+        assert_eq!(response.stop_reason.as_deref(), Some("STOP"));
+        assert_eq!(response.usage.prompt_tokens, 6);
+        assert_eq!(response.usage.completion_tokens, 3);
+    }
+
+    /// A streamed `functionCall` part (Gemini sends it whole) reassembles into a tool call.
+    #[test]
+    fn stream_accumulator_reassembles_a_function_call() {
+        let mut acc = GeminiStreamAccumulator::default();
+        assert_eq!(
+            acc.push_event(
+                r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{"q":"rust"}}}]},"finishReason":"STOP"}]}"#
+            ),
+            None
+        );
+        let raw = acc.finish();
+        let request = LlmRequest {
+            provider: LlmProvider::Google,
+            model: "gemini-2.0".to_owned(),
+            messages: vec![],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            response_format: None,
+        };
+        let response = to_response(&request, "gemini-2.0".to_owned(), raw);
+        let calls = response.tool_calls.expect("tool call assembled");
+        assert_eq!(calls[0].name, "search");
+        assert_eq!(calls[0].input, json!({ "q": "rust" }));
+        // Tool calls surface as the `tool_use` stop reason regardless of finishReason.
+        assert_eq!(response.stop_reason.as_deref(), Some("tool_use"));
     }
 }

@@ -1,9 +1,9 @@
 //! Adriane llm-gateway (Rust).
 //!
 //! The only crate allowed to talk to LLM providers — the Rust port of
-//! `@adriane-ai/llm-gateway`. Requests route through a gateway to a provider adapter;
-//! this slice ships the async traits + a mock. Real provider adapters and streaming
-//! land behind the same traits later.
+//! `@adriane-ai/llm-gateway`. Requests route through a gateway to a provider adapter
+//! (`complete()`) and, opt-in, stream per-token deltas (`stream()`, ADR 0033) with the
+//! Anthropic / OpenAI-compatible / Gemini adapters all backing real provider SSE.
 
 #![forbid(unsafe_code)]
 
@@ -18,6 +18,7 @@ pub mod model_policy;
 pub mod openai_compatible;
 pub mod redactor;
 pub mod secrets_redactor;
+pub mod sse;
 pub mod types;
 
 pub use anthropic::{
