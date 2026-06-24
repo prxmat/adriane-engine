@@ -144,6 +144,10 @@ export type { ComponentSchema, JsonSchema } from "./schema-generator.js";
 export { explainRun } from "./run-explainer.js";
 export type { RunExplanation } from "./run-explainer.js";
 
+// `adriane dev` — the local run inspector (watch a graph execute in the browser).
+export { serveInspector } from "./dev-inspector.js";
+export type { InspectorHandle, InspectorOptions } from "./dev-inspector.js";
+
 export { rustValidatorActive } from "./rust-validator.js";
 export { rustEngineAvailable } from "./rust-engine.js";
 

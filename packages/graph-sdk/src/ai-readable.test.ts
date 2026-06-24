@@ -3,10 +3,11 @@ import type { RunEvent } from "@adriane-ai/graph-runtime";
 import { describe, expect, it } from "vitest";
 
 import { generateLlmsTxt } from "./llms-txt-generator.js";
-import { componentSchemas, paramTypeToJsonSchema } from "./schema-generator.js";
+import { componentSchemas, type ComponentSchema, paramTypeToJsonSchema } from "./schema-generator.js";
 import { explainRun } from "./run-explainer.js";
 
-const state = (over: Partial<GraphState> & { channels: Record<string, unknown> }): GraphState =>
+// Loose fixture builder — branded RunId/NodeId are erased through the cast.
+const state = (over: Record<string, unknown>): GraphState =>
   ({
     runId: "r1",
     graphId: "g1",
@@ -45,8 +46,8 @@ describe("AI-readable triad (ADR DX batch 3)", () => {
 
     it("emits a per-component object schema with required + descriptions", () => {
       const schemas = componentSchemas();
-      const pb = schemas.promptBuilder;
-      expect(pb).toBeDefined();
+      expect(schemas.promptBuilder).toBeDefined();
+      const pb = schemas.promptBuilder as ComponentSchema;
       expect(pb.paramsSchema.type).toBe("object");
       expect(pb.paramsSchema.additionalProperties).toBe(false);
       expect(pb.paramsSchema.required).toContain("template");
@@ -84,9 +85,9 @@ describe("AI-readable triad (ADR DX batch 3)", () => {
     });
 
     it("surfaces a failure from the event log", () => {
-      const events: RunEvent[] = [
+      const events = [
         { type: "node_failed", runId: "r1", nodeId: "build", error: "boom", attempt: 1, timestamp: "0" }
-      ];
+      ] as unknown as RunEvent[];
       const e = explainRun(state({ status: "failed", currentNodeId: "build", channels: {} }), events);
       expect(e.failure).toEqual({ node: "build", error: "boom" });
       expect(e.summary).toContain("boom");
