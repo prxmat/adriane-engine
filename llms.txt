@@ -1,0 +1,114 @@
+# Adriane
+
+> The open framework for stateful, resumable, **governed** agent graphs. A Rust execution engine
+> driven by a thin TypeScript SDK (`@adriane-ai/graph-sdk`). Every run is deterministic, checkpointed
+> after each node, and resumable — including across process restarts and human approvals. There is
+> **no TypeScript execution fallback**: graphs run on the Rust engine (shipped prebuilt).
+
+## Install
+
+```bash
+npm install @adriane-ai/graph-sdk
+```
+The Rust engine ships prebuilt (macOS/Linux-glibc/Windows) — no toolchain to install.
+
+## Core API (import from `@adriane-ai/graph-sdk`)
+
+- `createGraph({ name }) -> GraphBuilder` — fluent, typed builder. Channel value types flow through.
+- `.channel(name, { type, default? })` — declare a typed state channel.
+- `.node(id, async (input, state) => partialChannels)` — an action node.
+- `.agentNode(id, { model, prompt, tools?, middleware?, maxIterations? })` — a ReAct agent node.
+- `.humanGate(id)` — suspends the run for human approval; `app.resume(runId)` continues from the checkpoint.
+- `.edge(from, to)` and `.conditionalEdge(from, to, name, (state) => boolean)` — routing. Conditions are
+  **named predicates**, never eval'd strings.
+- `.compile() -> CompiledGraph` (throws `GraphCompileError` on invalid) / `.safeCompile() -> Result`.
+- `app.run(initialData?) -> GraphState`, `app.resume(runId)`, `app.signal(runId, name, payload)`.
+- `app.stream(initialData, mode)` — `mode` ∈ `values | updates | messages | debug`; `messages` streams per-token.
+- `app.explain(runId) -> RunExplanation` — why a run suspended / what it awaits / what failed.
+
+## Picking a model (the `model` surface)
+
+```ts
+import { model } from "@adriane-ai/graph-sdk";
+await model.invoke("hi");                    // zero-config: provider from env keys, fails loud if none
+await model.openai("gpt-4o").invoke("hi");   // provider is the method
+await model.fast.invoke("classify");         // tiers are properties: fast|balanced|frontier|creative
+model.openaiCompatible({ baseURL, model });  // any OpenAI-wire endpoint
+model.openai("gpt-4o").output(schema)        // typed structured output (JSON Schema → the engine)
+```
+Providers: openai, anthropic, gemini, mistral, ollama, openrouter, minimax, huggingface, lmstudio.
+Keys come from the environment (`OPENAI_API_KEY`, …); a missing key fails loud with the exact var.
+
+## Capability tiers
+
+- `frontier` — Highest-capability models for the hardest reasoning, code and analysis tasks where quality outweighs cost.
+- `balanced` — A balanced default trading capability against latency and cost for everyday agentic work.
+- `fast` — Lowest-latency, lowest-cost models for high-volume, well-scoped tasks (classification, extraction, summarisation).
+- `creative` — Models tuned for fluent, stylistic prose — writing, editing and tone-sensitive rewriting.
+
+## Component nodes (`.componentNode(id, { kind, params })` — run natively in Rust)
+
+- `promptBuilder` (prompt) — Render every {{var}} placeholder from the channels into a target channel.
+- `jsonValidator` (validation) — Validate a channel value's type and required keys, writing an ok flag and an errors list.
+- `outputParser` (parsing) — Extract the first balanced JSON object or array from a text channel.
+- `router` (routing) — Pick a route string from a channel value by ordered match rules (pairs with a conditional edge).
+- `retriever` (retrieval) — Score candidate documents against a query and keep the top-k by similarity.
+- `reranker` (retrieval) — Reorder a retrieval-result array, optionally re-scoring against a query embedding.
+- `textCleaner` (text) — Normalise a text channel: strip HTML, lowercase, collapse whitespace, trim.
+- `documentSplitter` (text) — Split a text channel into an array of chunk strings by chars or sentences.
+- `htmlToText` (text) — Strip HTML tags from a text channel and decode the common named entities.
+- `csvParser` (parsing) — Parse a CSV text channel into an array of row objects (or arrays).
+- `documentJoiner` (data) — Concatenate the array values across several channels into one merged array.
+- `deduplicator` (data) — De-duplicate an array channel, keeping the first occurrence and preserving order.
+- `truncator` (text) — Truncate a text channel to at most maxChars characters with an ellipsis.
+- `regexExtractor` (parsing) — Extract literal-pattern matches (with ^/$ anchors) from a text channel.
+- `answerBuilder` (text) — Assemble a final answer string, optionally appending numbered citations.
+- `fieldMapper` (data) — Remap an object channel's fields (by dotted path) into a new object.
+- `fieldExtractor` (data) — Extract a scalar from a channel: follow an optional dotted path, and (finalOnly) reduce an agent reasoning trace to the text after the last "final:" marker.
+- `bm25Retriever` (retrieval) — Lexical BM25 ranking of a corpus against a query; keep the top-k by score.
+- `keywordRetriever` (retrieval) — Lexical keyword-overlap ranking: score each doc by the fraction of distinct query terms it contains.
+- `sentenceWindowSplitter` (splitter) — Split text into overlapping windows of whole sentences (a sliding window with an explicit stride).
+- `languageDetector` (text) — Heuristic language detection (en/fr/es/de/it/und) by stop-word hits, with an optional confidence score.
+- `metadataFilter` (data) — Keep the items of an array channel whose dotted-path field satisfies a predicate.
+- `listJoiner` (data) — Combine several array channels into one list by concat, union (dedupe) or interleave.
+- `mergeRanker` (retrieval) — Fuse several retrieval-result streams into one ranking with Reciprocal Rank Fusion (RRF).
+- `evaluator` (evaluation) — Score actual vs expected text (token-F1 / set overlap / exact match), with an optional pass flag.
+- `chatMessageBuilder` (generation) — Assemble a role-tagged chat-message array ([{ role, content }]) an LLM generator consumes.
+- `conditionalRouter` (routing) — Multi-branch rule routing over the channels by dotted-path predicates (pairs with a conditional edge).
+- `documentWriter` (writer) — Append documents into an in-state document store array (optionally de-duplicating by a field).
+- `httpFetch` (integration, integration) — Integration (vendor I/O): perform a real HTTP request via global fetch, writing { status, ok, body, json }. Never throws — non-2xx is surfaced via status/ok; an error/timeout writes { ok: false, error }.
+- `webSearch` (integration, integration) — Integration (vendor I/O): run a real web search (default: Tavily connector behind TAVILY_API_KEY), writing { results, note? }. Degrades gracefully with no network call (empty results + note) when the key is absent.
+
+## Prebuilt agents
+
+- `summarizer` — Condenses input text into a short, faithful summary. (tier: fast)
+- `classifier` — Assigns the input to exactly one label from a fixed set. (tier: fast)
+- `extractor` — Extracts structured fields from unstructured text as JSON. (tier: fast)
+- `sqlGenerator` — Generates a SQL query from a natural-language request and schema. (tier: balanced)
+- `ragAnswerer` — Answers a question grounded in retrieved documents. Composed as a graph: the retriever component fetches candidate documents, the reranker component reorders them, and this agent step writes a grounded answer citing the supplied context. (tier: balanced)
+- `refundApprover` — Decides whether to issue a refund and routes the action through a human approval gate before calling the refund tool. (tier: balanced, suspends for approval)
+- `translator` — Translates the input text into a target language, preserving meaning. (tier: fast)
+- `sentimentAnalyzer` — Classifies the emotional tone of the input text. (tier: fast)
+- `entityExtractor` — Extracts named entities from text as a JSON array. (tier: fast)
+- `piiRedactor` — Redacts personally identifiable information from the input text. (tier: fast)
+- `intentClassifier` — Maps the input to a single conversational intent label. (tier: fast)
+- `titleGenerator` — Generates a short, descriptive title for the input text. (tier: fast)
+- `keywordExtractor` — Extracts the key terms from the input text as a JSON array. (tier: fast)
+- `questionAnswerer` — Answers a question directly and concisely from its own knowledge. (tier: balanced)
+- `codeReviewer` — Reviews a code snippet or diff for correctness, security, and quality. (tier: frontier)
+- `copyEditor` — Polishes prose for clarity, grammar, flow, and tone. (tier: creative)
+
+## Errors
+
+Every error carries a stable `code`, a one-line `hint` (the fix), and a `docUrl`. SDK errors also
+offer `.format()` (message + hint + docs). Codes include `ADR_GRAPH_COMPILE`, `ADR_UNKNOWN_NODE`,
+`ADR_GOVERNANCE_MIDDLEWARE_REJECTED`, `ADR_RUST_ENGINE_REQUIRED`, `ADR_UNKNOWN_PROVIDER`,
+`ADR_MISSING_PROVIDER_KEY`, `ADR_NO_PROVIDER_IN_ENV`.
+
+## Invariants (governed by construction)
+
+- Deterministic + resumable: checkpoint after every node; resume from the latest checkpoint.
+- Human-in-the-loop: `humanGate` nodes suspend cleanly and resume on approval.
+- Safe: no eval / new Function / dynamic import of user strings; conditions are named predicates;
+  agents cannot approve their own outputs; sensitive actions route through approval gates.
+- Governance is engine-sealed: a user may only add efficiency middleware (compress/terse/contextBudget).

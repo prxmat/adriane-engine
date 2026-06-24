@@ -16,6 +16,7 @@ import {
 } from "@adriane-ai/graph-runtime";
 
 import { AdrianeSdkError, ResumeStateNotFoundError } from "./errors.js";
+import { explainRun, type RunExplanation } from "./run-explainer.js";
 import {
   type AgentApprovalBinding,
   type FsPolicyRule,
@@ -683,6 +684,27 @@ export class CompiledGraph<TState extends ChannelValues = ChannelValues> {
   }
 
   /** Record a run's state if it suspended, so resume/approve can feed it back to Rust. */
+  /**
+   * Explain where a run stands (ADR AI-DX): its status, why it suspended, what unblocks it, and
+   * what failed — a structured account a human or an AI agent reads to pick the next move. Reads
+   * the suspended state this instance retains; an unknown run id (it completed, failed, or runs on
+   * another instance) returns a `status: "unknown"` explanation. For an arbitrary run, pass its
+   * `GraphState` to {@link explainRun} directly.
+   */
+  public explain(runId: RunId): RunExplanation {
+    const state = this.suspendedStates.get(String(runId));
+    if (state === undefined) {
+      return {
+        runId: String(runId),
+        status: "unknown",
+        currentNode: "",
+        summary: `No suspended run '${String(runId)}' on this CompiledGraph instance — it has completed, failed, or runs elsewhere. Pass a live GraphState to explainRun(state) to explain any run.`,
+        channels: []
+      };
+    }
+    return explainRun(state);
+  }
+
   private captureSuspension(state: TypedGraphState<ChannelValues>): void {
     if (state.status === "suspended") {
       this.suspendedStates.set(String(state.runId), state as unknown as GraphState);

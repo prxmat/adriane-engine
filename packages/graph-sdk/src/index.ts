@@ -137,6 +137,13 @@ export type {
   ModelTierInfo
 } from "./catalog.js";
 
+// AI-readable surface (ADR DX batch 3): ground-truth for AI agents + run introspection.
+export { generateLlmsTxt } from "./llms-txt-generator.js";
+export { componentSchema, componentSchemas, paramTypeToJsonSchema } from "./schema-generator.js";
+export type { ComponentSchema, JsonSchema } from "./schema-generator.js";
+export { explainRun } from "./run-explainer.js";
+export type { RunExplanation } from "./run-explainer.js";
+
 export { rustValidatorActive } from "./rust-validator.js";
 export { rustEngineAvailable } from "./rust-engine.js";
 
