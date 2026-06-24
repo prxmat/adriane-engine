@@ -1,44 +1,54 @@
 // @ts-check
 
-// A MANUAL sidebar (LangChain-style information architecture): top-level sections
-// Get started · Build · Tutorials · Govern · Monitor · Deploy · Reference, with Build
-// split into sub-sections. Files stay where they are on disk — this file controls the
-// navigation grouping only, so doc URLs and cross-links are unchanged. (Test and No-code
-// agents are intentionally deferred until they have real content.)
+// A MANUAL, JOURNEY-FIRST sidebar (ADR-less Phase-2 DX redesign): the top level maps to
+// audience intent — Start here · Learn · Build · Govern · Operate · Integrations · Cookbook ·
+// Reference · For AI agents — and Diátaxis (tutorial / how-to / reference / explanation) governs
+// the grouping inside. Files stay where they are on disk: this file controls navigation grouping
+// only, so doc URLs and cross-links are unchanged (a re-grouping, not a content move).
 /** @type {import('@docusaurus/plugin-content-docs').SidebarsConfig} */
 const sidebars = {
   docs: [
     {
       type: "category",
-      label: "Get started",
+      label: "Start here",
       collapsed: false,
       items: [
         "introduction/why-adriane",
-        "introduction/comparison",
         "getting-started/quickstart",
         "getting-started/installation",
-        "getting-started/your-first-run"
+        "getting-started/your-first-run",
+        "introduction/comparison",
+        "start-here/pick-your-path"
+      ]
+    },
+    {
+      type: "category",
+      label: "Learn",
+      items: [
+        {
+          type: "category",
+          label: "Foundations",
+          items: [
+            "core-concepts/graphs-nodes-edges-state",
+            "core-concepts/channels-and-reducers",
+            "core-concepts/execution-contract"
+          ]
+        },
+        {
+          type: "category",
+          label: "Resumability & state",
+          items: [
+            "core-concepts/resumability-and-approvals",
+            "core-concepts/memory-architecture"
+          ]
+        },
+        "core-concepts/runtime-and-engine"
       ]
     },
     {
       type: "category",
       label: "Build",
-      collapsed: false,
       items: [
-        {
-          type: "category",
-          label: "Concepts",
-          items: [
-            "core-concepts/graphs-nodes-edges-state",
-            "core-concepts/channels-and-reducers",
-            "core-concepts/execution-contract",
-            "core-concepts/resumability-and-approvals",
-            "core-concepts/runtime-and-engine",
-            "core-concepts/memory-architecture",
-            "architecture/overview",
-            "architecture/napi-bridge"
-          ]
-        },
         {
           type: "category",
           label: "Graphs",
@@ -72,40 +82,6 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Integrations",
-          items: [
-            "integrations/overview",
-            "building/llm-gateway",
-            "building/providers",
-            {
-              type: "category",
-              label: "Models",
-              items: [
-                "integrations/models/overview",
-                "integrations/models/anthropic",
-                "integrations/models/google",
-                "integrations/models/openai",
-                "integrations/models/azure",
-                "integrations/models/mistral",
-                "integrations/models/openrouter",
-                "integrations/models/groq",
-                "integrations/models/huggingface",
-                "integrations/models/ollama",
-                "integrations/models/nvidia",
-                "integrations/models/aws-bedrock"
-              ]
-            },
-            { type: "category", label: "Middleware", items: ["integrations/middleware/overview"] },
-            { type: "category", label: "Backends", items: ["integrations/backends/overview"] },
-            { type: "category", label: "Checkpointers", items: ["integrations/checkpointers/overview"] },
-            { type: "category", label: "Retrievers", items: ["integrations/retrievers/overview"] },
-            { type: "category", label: "Text splitters", items: ["integrations/text-splitters/overview"] },
-            { type: "category", label: "Vector stores", items: ["integrations/vector-stores/overview"] },
-            { type: "category", label: "Sandboxes", items: ["integrations/sandboxes/overview"] }
-          ]
-        },
-        {
-          type: "category",
           label: "Adriane Lang (DSL)",
           items: [
             "dsl/graph-yaml-syntax",
@@ -115,28 +91,82 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Components",
-          items: ["building/components-reference"]
-        },
-        {
-          type: "category",
-          label: "Knowledge",
+          label: "Knowledge & RAG",
           items: ["knowledge/knowledge-base-and-graph", "knowledge/open-knowledge-format"]
         },
+        { type: "category", label: "Components", items: ["building/components-reference"] },
+        { type: "category", label: "MCP", items: ["building/mcp-server"] }
+      ]
+    },
+    {
+      type: "category",
+      label: "Govern",
+      items: [
+        "governance/approval-decision",
+        "governance/governance-model",
+        "governance/approval-gates",
+        "governance/tool-approval-and-attestation",
+        "governance/pii-redaction"
+      ]
+    },
+    {
+      type: "category",
+      label: "Operate",
+      items: [
         {
           type: "category",
-          label: "MCP",
-          items: ["building/mcp-server"]
+          label: "Observe",
+          items: [
+            "governance/observable-runs",
+            "governance/observability-otel",
+            "recipes/dev-inspector"
+          ]
         },
         {
           type: "category",
-          label: "SDK parity",
+          label: "Deploy & run",
           items: [
-            "sdk-parity/one-engine-two-languages",
-            "sdk-parity/typescript-sdk",
-            "sdk-parity/python-sdk"
+            "production/deployment",
+            "production/best-practices",
+            "production/troubleshooting",
+            "cli/commands",
+            "reference/configuration-and-env"
           ]
         }
+      ]
+    },
+    {
+      type: "category",
+      label: "Integrations",
+      items: [
+        "integrations/overview",
+        "building/llm-gateway",
+        "building/providers",
+        {
+          type: "category",
+          label: "Models",
+          items: [
+            "integrations/models/overview",
+            "integrations/models/anthropic",
+            "integrations/models/google",
+            "integrations/models/openai",
+            "integrations/models/azure",
+            "integrations/models/mistral",
+            "integrations/models/openrouter",
+            "integrations/models/groq",
+            "integrations/models/huggingface",
+            "integrations/models/ollama",
+            "integrations/models/nvidia",
+            "integrations/models/aws-bedrock"
+          ]
+        },
+        { type: "category", label: "Middleware", items: ["integrations/middleware/overview"] },
+        { type: "category", label: "Backends", items: ["integrations/backends/overview"] },
+        { type: "category", label: "Checkpointers", items: ["integrations/checkpointers/overview"] },
+        { type: "category", label: "Retrievers", items: ["integrations/retrievers/overview"] },
+        { type: "category", label: "Text splitters", items: ["integrations/text-splitters/overview"] },
+        { type: "category", label: "Vector stores", items: ["integrations/vector-stores/overview"] },
+        { type: "category", label: "Sandboxes", items: ["integrations/sandboxes/overview"] }
       ]
     },
     {
@@ -157,49 +187,36 @@ const sidebars = {
         "recipes/agent-memory",
         "recipes/model-packages",
         "recipes/token-streaming",
-        "recipes/dev-inspector",
         "recipes/governed-skills"
       ]
     },
     {
       type: "category",
-      label: "Govern",
-      items: [
-        "governance/approval-decision",
-        "governance/governance-model",
-        "governance/approval-gates",
-        "governance/tool-approval-and-attestation",
-        "governance/pii-redaction"
-      ]
-    },
-    {
-      type: "category",
-      label: "Monitor",
-      items: ["governance/observable-runs", "governance/observability-otel"]
-    },
-    {
-      type: "category",
-      label: "Deploy",
-      items: [
-        "production/deployment",
-        "production/best-practices",
-        "production/troubleshooting",
-        "cli/commands"
-      ]
-    },
-    {
-      type: "category",
-      label: "API Reference",
+      label: "Reference",
       items: [
         "reference/builder-api",
         "reference/component-catalog",
         "reference/events-and-streams",
         "reference/errors",
-        "reference/built-for-ai-agents",
-        "reference/configuration-and-env",
+        "architecture/overview",
+        "architecture/napi-bridge",
+        {
+          type: "category",
+          label: "SDK parity",
+          items: [
+            "sdk-parity/one-engine-two-languages",
+            "sdk-parity/typescript-sdk",
+            "sdk-parity/python-sdk"
+          ]
+        },
         "glossary",
         "roadmap"
       ]
+    },
+    {
+      type: "category",
+      label: "For AI agents",
+      items: ["reference/built-for-ai-agents"]
     }
   ]
 };
