@@ -2,7 +2,7 @@
   "name": "@adriane-ai/approval-engine",
   "private": true,
   "license": "Apache-2.0",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "[DEPRECATED — execution moved to the Rust engine in crates/; the TS engine remains only as a fallback when the @adriane-ai/napi native addon is absent] Human-approval gates and Ed25519 attestation for sensitive actions. Superseded by the crates/approval-engine Rust crate.",
   "type": "module",
   "main": "./dist/index.js",

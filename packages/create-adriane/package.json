@@ -1,6 +1,6 @@
 {
   "name": "create-adriane",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Scaffold a governed Adriane agent-graph app in one command: npm create adriane@latest",
   "type": "module",
   "license": "Apache-2.0",
