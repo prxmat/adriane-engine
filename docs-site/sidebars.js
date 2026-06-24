@@ -106,7 +106,8 @@ const sidebars = {
         "governance/governance-model",
         "governance/approval-gates",
         "governance/tool-approval-and-attestation",
-        "governance/pii-redaction"
+        "governance/pii-redaction",
+        "governance/compliance-framework"
       ]
     },
     {
@@ -175,6 +176,7 @@ const sidebars = {
       items: [
         "recipes/overview",
         "recipes/governed-refund-agent",
+        "recipes/build-a-governed-deep-agent",
         "recipes/react-planner-critic",
         "recipes/idea-to-ship-pipeline",
         "recipes/rag-question-answerer",
