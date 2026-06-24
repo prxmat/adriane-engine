@@ -186,6 +186,36 @@ one-node subgraph (checkpointed, audited, suspension-propagating). Full walkthro
 | `reportChannel` | `string` | `"report"` | The only channel the child's report lands in. |
 | `compress` | `boolean` | `true` | Run the sub-agent terse (a summary, not a full transcript). |
 
+### `mapAgents(id, config)`
+
+```ts
+mapAgents<TJoin extends string>(
+  id: string,
+  config: MapAgentNodeConfig & { joinAt: TJoin }
+): GraphBuilder<TState & { [K in TJoin]: AgentResult[] }>;
+```
+
+Add a **dynamic fan-out**: run `config.subAgent` once per item in the `config.overChannel` array,
+**concurrently**, and write the per-item results — in **input order** (deterministic, resumable) —
+into `config.joinAt` as an `AgentResult[]`. Unlike [`fanOut`](#fanoutfrom-parallelto-joinat) (a
+fixed node list) or [`taskNode`](#tasknodeid-config) (one isolated sub-agent), `mapAgents` spawns a
+runtime-sized N, each sharing the run's channels with one item as its `input`. Full walkthrough in
+[deep agents](/docs/advanced-agents/deep-agents#mapagents--dynamic-fan-out).
+
+| `MapAgentNodeConfig` field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `overChannel` | `string` | — (required) | Channel holding the array of items to map over (auto-declared `json`, default `[]`). |
+| `subAgent` | `AgentNodeConfig` | — (required) | The sub-agent to run per item. |
+| `joinAt` | `string` | — (required) | Channel the per-item results land in, in input order (auto-declared `json`). |
+| `suspendForApproval` | `boolean` | `false` | A gated spawn suspends the whole map; resume re-runs it. |
+| `label` | `string` | `id` | Display label. |
+
+:::note Rust engine only
+`mapAgents` registers no TypeScript-fallback handler — it is a native Rust node. A graph using it
+needs the native addon (it is not backed by the TS dev/test path). Each spawn gets `items[i]` as
+its `input`; an absent or non-array `overChannel` yields an empty array and no spawns.
+:::
+
 ### `subgraph(id, child, options?)`
 
 ```ts

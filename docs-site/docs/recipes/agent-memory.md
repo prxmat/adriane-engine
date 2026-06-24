@@ -43,3 +43,6 @@ await app.run({ question: "when can I deploy?" }); // recalls the earlier fact
 The OSS engine recalls/persists **in-memory** (across runs within a process). The control plane
 swaps a **Neo4j**-backed store (native vector index + entity graph) behind the same seam, with
 governed LLM entity-extraction. See [ADR 0026](https://github.com/prxmat/adriane-engine/blob/main/docs/adr/0026-memory-architecture-engine-studio.md).
+
+For the conceptual model — the four memory planes and the unified seam — see
+[Memory architecture](/docs/core-concepts/memory-architecture).

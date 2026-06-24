@@ -34,6 +34,7 @@ const sidebars = {
             "core-concepts/execution-contract",
             "core-concepts/resumability-and-approvals",
             "core-concepts/runtime-and-engine",
+            "core-concepts/memory-architecture",
             "architecture/overview",
             "architecture/napi-bridge"
           ]
@@ -191,6 +192,7 @@ const sidebars = {
         "reference/events-and-streams",
         "reference/errors",
         "reference/built-for-ai-agents",
+        "reference/configuration-and-env",
         "glossary",
         "roadmap"
       ]
