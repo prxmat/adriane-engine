@@ -1,0 +1,26 @@
+{
+  "name": "create-adriane",
+  "version": "1.2.0",
+  "description": "Scaffold a governed Adriane agent-graph app in one command: npm create adriane@latest",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "create-adriane": "index.mjs"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "files": [
+    "index.mjs"
+  ],
+  "keywords": [
+    "adriane",
+    "agents",
+    "graph",
+    "scaffold",
+    "create"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
