@@ -58,9 +58,57 @@ specific signing key. After the fact you can verify that:
 - the decision was made by the holder of that key, and
 - the recorded decision has not been altered.
 
+### A durable, hash-chained record
+
+A single signature proves one decision wasn't altered. It does **not** stop someone from
+*dropping* an awkward decision, *reordering* two, or *inserting* one after the fact. So
+attestations for a run are **hash-chained**: each record carries the hash of the previous
+decision on that run (`prevHash`), and the first link's `prevHash` is `null`. To tamper with
+any decision — or to remove or reorder one — you would have to re-sign every record after it,
+which you cannot do without the signing key. The **sequence** is now tamper-evident, not just
+each link.
+
+The chain is **durable**: records are persisted append-only and survive a restart, so the
+proof outlives the process that produced it. The signing key is loaded from the environment
+(`ADRIANE_ATTESTATION_KEY`, a base64 PKCS8 key) so verification holds across restarts and
+across instances; a control plane falls back to an *ephemeral* key in development only, with a
+loud warning — an ephemeral key makes prior attestations unverifiable after a reboot, so it is
+never used in production (a KMS/Vault-held key is the hardening from there).
+
+### Verifying the chain
+
+A control plane exposes the run's chain — and verifies it for you server-side — at
+`GET /runs/:runId/attestations`:
+
+```json
+{
+  "records": [
+    { "approvalId": "ap-1", "subject": "tool:refund", "status": "approved",
+      "resolvedBy": "alice@acme.eu", "prevHash": null,        "payloadHash": "9f2c…", "signature": "…" },
+    { "approvalId": "ap-2", "subject": "tool:payout", "status": "rejected",
+      "resolvedBy": "bob@acme.eu",   "prevHash": "9f2c…",     "payloadHash": "41ab…", "signature": "…" }
+  ],
+  "verified": true
+}
+```
+
+`verified` is the result of re-checking every signature **and** every `prevHash` link over the
+whole run. An auditor doesn't take your word for it — they call the endpoint (or run the same
+check offline against the records) and get a yes/no.
+
 Combined with the [event journal](./observable-runs) — which captures the suspend, the pending
 request, the resolution, and the resume in order — you get an audit trail that is both
-**complete** (every transition is an event) and **tamper-evident** (every decision is signed).
+**complete** (every transition is an event) and **tamper-evident** (every decision is signed
+*and* chained).
+
+### Proof, not just a signature
+
+A signature says "a human authorised this." Because Adriane runs are
+[deterministic and replayable](../core-concepts/execution-contract), the attestation points at
+a run you can **re-derive from its checkpoints** — so the evidence is the decision *and the
+exact execution that led to it*, not an assertion bolted on beside it. That is the difference
+between a system that *attests and blocks* and one that *runs, resumes, and replays* the
+governed work itself.
 
 ## End to end
 
