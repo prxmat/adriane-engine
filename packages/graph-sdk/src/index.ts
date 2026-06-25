@@ -176,11 +176,17 @@ export type { ApprovedToolWire } from "./rust-engine.js";
 export {
   runCatalogGraph,
   resumeCatalogGraph,
+  replayCatalogGraph,
   isCatalogGraph,
   readComponentCarrier,
   readAgentCarrier,
   RustEngineUnavailableError
 } from "./run-catalog-graph.js";
+
+// Replay-as-evidence (ADR 0038): the faithfulness check — a deterministic replay must reproduce
+// the SAME governed decisions the run was attested for. Separate from `verifyChain` (tamper-evidence).
+export { verifyReplayDecisions } from "./verify-replay.js";
+export type { ReplayDecision, VerifyReplayResult } from "./verify-replay.js";
 export type {
   CatalogRunOutcome,
   RunCatalogGraphOptions,
