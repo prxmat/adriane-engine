@@ -1,9 +1,14 @@
 {
   "name": "@adriane-ai/model-core",
-  "private": true,
   "license": "Apache-2.0",
-  "version": "1.4.0",
+  "version": "1.4.3",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

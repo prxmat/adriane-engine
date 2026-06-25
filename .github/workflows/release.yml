@@ -124,6 +124,15 @@ jobs:
         run: pnpm --filter @adriane-ai/napi publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # model-core is graph-sdk's only @adriane-ai RUNTIME dependency kept external (not inlined);
+      # it must be on npm BEFORE graph-sdk so a consumer's `npm install @adriane-ai/graph-sdk`
+      # resolves it. Its own only dep is napi (published just above).
+      - name: Build + publish @adriane-ai/model-core
+        run: |
+          pnpm --filter @adriane-ai/model-core build
+          pnpm --filter @adriane-ai/model-core publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Build + publish @adriane-ai/graph-sdk bundle
         run: |
           pnpm --filter @adriane-ai/graph-sdk build
