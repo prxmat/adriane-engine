@@ -230,6 +230,12 @@ pub struct EngineSpec {
     /// ignored by start.
     #[serde(default)]
     pub state: Option<GraphState>,
+    /// Replay-as-evidence (ADR 0038): a recorded run journal — `{ decisions, clock }` as JSON
+    /// — fed on `Entry::Replay` so the re-execution re-serves the original LLM outputs (via
+    /// a `ReplayGateway`) and timestamps (via a `RecordedClock`) instead of re-sampling.
+    /// Absent for a normal run.
+    #[serde(default)]
+    pub replay_journal: Option<String>,
     /// Tools a human has granted on the approve OR resume path: each carries its
     /// `{ name, requestedBy, resolvedBy }` provenance. The bridge validates the
     /// no-self-approval invariant per tool, then writes only the validated *names* into
@@ -283,6 +289,11 @@ pub struct RunOutcome {
     /// Pending tool approvals gathered from the agent output channels when the run
     /// suspended for approval. Empty when not suspended on an approval gate.
     pub pending_approvals: Vec<ApprovalRequestItem>,
+    /// Replay-as-evidence (ADR 0038): the recorded LLM I/O + clock journal for this run,
+    /// `{ decisions, clock }` as JSON, when it executed in record mode (env `ADRIANE_LLM_RECORD`).
+    /// `None` otherwise. The control plane persists it to re-feed a later verify-replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_journal: Option<String>,
 }
 
 #[cfg(test)]
@@ -566,6 +577,7 @@ mod tests {
                 approval_key: None,
                 input: None,
             }],
+            replay_journal: None,
         };
         let wire = serde_json::to_string(&outcome).expect("serializes");
         assert!(wire.contains("\"pendingApprovals\""));
