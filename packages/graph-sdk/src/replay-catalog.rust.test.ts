@@ -86,6 +86,49 @@ describe("@adriane-ai/graph-sdk — replay-as-evidence napi round-trip (ADR 0038
     }
   );
 
+  (rustEngineAvailable() ? it : it.skip)(
+    "surfaces the entry state in record mode, then re-derives the WHOLE run from it (ADR 0040)",
+    async () => {
+      const definition = docQaReferenceDefinition();
+
+      // RECORD: a record-mode run surfaces its ENTRY state (the seed for replay_from) + the journal.
+      process.env.ADRIANE_LLM_RECORD = "1";
+      const recorded = await runCatalogGraph(definition, {
+        runId: "run_entry_state_evidence" as RunId,
+        initialData: { question: QUESTION, documents: DOCUMENTS }
+      });
+      delete process.env.ADRIANE_LLM_RECORD;
+
+      expect(recorded.status).toBe("completed");
+      // The entry state is present (record mode) and is the un-run initial state (version 0).
+      expect(recorded.entryState).toBeDefined();
+      const entryState = recorded.entryState as NonNullable<typeof recorded.entryState>;
+      expect(entryState.version).toBe(0);
+      expect((entryState as { status: string }).status).toBe("running");
+      const recordedAnswer = recorded.state.channels.answer;
+
+      // REPLAY from the ENTRY state (not the terminal one): re-derive the whole run deterministically.
+      let replayed: CatalogRunOutcome;
+      try {
+        replayed = await replayCatalogGraph(
+          definition,
+          entryState,
+          "cp_entry_state_seed",
+          recorded.replayJournal ?? "{}"
+        );
+      } catch (error) {
+        if (lacksReplaySupport(error)) return;
+        throw error;
+      }
+
+      // The replay re-derived the full pipeline to completion — the SAME answer, from the start.
+      expect(replayed.usedRustEngine).toBe(true);
+      expect(replayed.status).toBe("completed");
+      expect(replayed.state.channels.answer).toEqual(recordedAnswer);
+      expect(String(replayed.state.runId).startsWith("run_entry_state_evidence:fork:")).toBe(true);
+    }
+  );
+
   it("verifyReplayDecisions confirms an attested chain reproduced by a replay", () => {
     // The faithfulness comparator over the two decision sets the control plane will derive (L5).
     const attested = [{ status: "approved", subject: "ship the release notes" }];

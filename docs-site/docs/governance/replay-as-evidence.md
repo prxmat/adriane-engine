@@ -67,10 +67,13 @@ re-execution cannot (and should not) reproduce. `subject` is derived identically
 (the decision's description, else the canonical JSON of its subject), so the comparison is exact.
 
 :::note Deriving the checkpoint to replay from
-To re-derive a *whole* run you replay from its **earliest** checkpoint (the entry state). A control
-plane persists every checkpoint — the engine checkpoints after each node — and feeds the first one
-back as `checkpointState` + `checkpointId`. The serving endpoint that performs record → replay →
-compare against the attested chain lives in the control plane (Adriane Studio, or one you build).
+To re-derive a *whole* run you replay from its **entry state** (the initial state, before the entry
+node ran). A record-mode `runCatalogGraph` surfaces that state as `outcome.entryState` — the control
+plane persists it (alongside the pure journal) and later feeds it back as `checkpointState` to
+`replayCatalogGraph`. The replay re-derives deterministically and re-suspends at the first gate,
+surfacing the requested subjects in `outcome.pendingApprovals` — the faithfulness signal compared to
+the attested chain. The serving endpoint that performs record → replay → compare lives in the
+control plane (Adriane Studio, or one you build).
 :::
 
 ## Next
