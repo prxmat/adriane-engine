@@ -136,6 +136,21 @@ jobs:
           pnpm --filter @adriane-ai/cli publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # contracts + config: the shared DTO/Zod boundary + env parsing the control plane consumes
+      # directly (ADR 0037 "residual 4" = graph-sdk + napi + contracts + config). Plain tsc packages
+      # (only `zod`), published from their built dist.
+      - name: Build + publish @adriane-ai/contracts
+        run: |
+          pnpm --filter @adriane-ai/contracts build
+          pnpm --filter @adriane-ai/contracts publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Build + publish @adriane-ai/config
+        run: |
+          pnpm --filter @adriane-ai/config build
+          pnpm --filter @adriane-ai/config publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # 3a. Build one abi3 wheel per platform (cp39-abi3 covers CPython 3.9+).
   python-wheels:

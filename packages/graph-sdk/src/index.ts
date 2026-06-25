@@ -338,6 +338,8 @@ export {
   InMemoryApprovalEngine,
   Ed25519Attestor,
   canonicalJson,
+  verifyAttestation,
+  verifyChain,
   ApprovalSelfApprovalError,
   ApprovalAlreadyResolvedError,
   ApprovalNotFoundError
@@ -346,7 +348,8 @@ export type {
   ApprovalEngine,
   ApprovalId,
   ApprovalRequest,
-  RequestApprovalParams
+  RequestApprovalParams,
+  AttestationRecord
 } from "@adriane-ai/approval-engine";
 export { InMemoryArtifactStore } from "@adriane-ai/artifact-store";
 export type { ArtifactStore, Artifact, ArtifactId, ArtifactVersion } from "@adriane-ai/artifact-store";
