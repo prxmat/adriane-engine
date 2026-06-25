@@ -90,6 +90,12 @@ export type CatalogRunOutcome = {
   status: string;
   /** True when execution ran on the Rust engine (always, since this seam requires it). */
   usedRustEngine: true;
+  /**
+   * Replay-as-evidence (ADR 0038): the recorded LLM I/O + clock journal (`{ decisions, clock }`
+   * JSON) when the run executed in record mode (`ADRIANE_LLM_RECORD`); `undefined` otherwise. The
+   * control plane persists it to re-feed a later replay (`verify-replay`).
+   */
+  replayJournal?: string;
 };
 
 /** Options for {@link runCatalogGraph} / {@link resumeCatalogGraph}. */
@@ -290,7 +296,12 @@ export const runCatalogGraph = async (
   const runId = options.runId ?? generateRunId();
   const state = (await runner.run(runId, options.initialData ?? {})) as unknown as GraphState;
   const governed = await fileApprovalRequests(definition, state, runId, options.approvalEngine);
-  return { state: governed, status: governed.status, usedRustEngine: true };
+  return {
+    state: governed,
+    status: governed.status,
+    usedRustEngine: true,
+    replayJournal: runner.recordedJournal()
+  };
 };
 
 /**
@@ -336,7 +347,44 @@ export const resumeCatalogGraph = async (
     String(resumed.runId) as RunId,
     options.approvalEngine
   );
-  return { state: governed, status: governed.status, usedRustEngine: true };
+  return {
+    state: governed,
+    status: governed.status,
+    usedRustEngine: true,
+    replayJournal: runner.recordedJournal()
+  };
+};
+
+/**
+ * Replay-as-evidence (ADR 0038): re-execute a recorded catalog run from `checkpointId`, re-feeding
+ * its `replayJournal` (LLM outputs + timestamps from a record-mode {@link runCatalogGraph}) on the
+ * Rust engine so the re-derivation is deterministic. A forked, READ-ONLY run — it never files
+ * approval requests or opens gates. Returns the replayed state; the caller compares its governed
+ * decisions to the attested chain via {@link verifyReplayDecisions}. Requires a native addon with
+ * replay support (`engineReplay`); throws otherwise.
+ */
+export const replayCatalogGraph = async (
+  definition: GraphDefinition,
+  state: GraphState,
+  checkpointId: string,
+  replayJournal: string,
+  options: Pick<RunCatalogGraphOptions, "onEvent" | "providerKeys" | "fsPolicy"> = {}
+): Promise<CatalogRunOutcome> => {
+  if (!rustEngineAvailable()) {
+    throw new RustEngineUnavailableError();
+  }
+  // No approval engine on replay — it is read-only EVIDENCE and must never open a new gate.
+  const runner = tryCreateRustRunner<ChannelValues>(
+    assembleParts(definition, false, options.providerKeys, options.fsPolicy)
+  );
+  if (runner === null) {
+    throw new RustEngineUnavailableError();
+  }
+  if (options.onEvent !== undefined) {
+    runner.subscribe(options.onEvent);
+  }
+  const replayed = (await runner.replay(state, checkpointId, replayJournal)) as unknown as GraphState;
+  return { state: replayed, status: replayed.status, usedRustEngine: true };
 };
 
 /** One approval request the seam files, normalized to the `{ description }` subject. */

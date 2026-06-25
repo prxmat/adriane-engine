@@ -106,6 +106,7 @@ const sidebars = {
         "governance/governance-model",
         "governance/approval-gates",
         "governance/tool-approval-and-attestation",
+        "governance/replay-as-evidence",
         "governance/pii-redaction",
         "governance/compliance-framework"
       ]

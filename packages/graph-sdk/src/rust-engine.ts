@@ -66,6 +66,18 @@ type NativeEngine = {
     onCondition: EngineConditionCallback,
     onEvent: EngineEventCallback
   ): Promise<string>;
+  /**
+   * Replay-as-evidence (ADR 0038). OPTIONAL + feature-detected: an older prebuilt addon may lack
+   * it, so it is deliberately NOT part of the {@link hasEngineFns} hard guard — its absence must
+   * never drop ALL Rust execution to the TS fallback (it only disables replay).
+   */
+  engineReplay?(
+    specJson: string,
+    checkpointId: string,
+    onNode: EngineNodeCallback,
+    onCondition: EngineConditionCallback,
+    onEvent: EngineEventCallback
+  ): Promise<string>;
 };
 
 let cachedNative: NativeEngine | null | undefined;
@@ -240,6 +252,12 @@ type EngineSpecWire = {
   streamTokens?: boolean;
   initialData?: Record<string, unknown>;
   state?: GraphState;
+  /**
+   * Replay-as-evidence (ADR 0038): a recorded run journal (`{ decisions, clock }` JSON) re-fed
+   * on the replay path so re-execution re-serves the original LLM outputs + timestamps instead
+   * of re-sampling. Set only by the replay path.
+   */
+  replayJournal?: string;
   approvedTools?: ApprovedToolWire[];
   agents: Record<string, AgentSpecWire>;
   /**
@@ -272,6 +290,12 @@ type RunOutcomeWire = {
    * approve) + `input` (the path/content, so a reviewer sees what is approved).
    */
   pendingApprovals: { subject: string; reason: string; approvalKey?: string; input?: unknown }[];
+  /**
+   * Replay-as-evidence (ADR 0038): the recorded LLM I/O + clock journal (`{ decisions, clock }`
+   * JSON) when the run executed in record mode (`ADRIANE_LLM_RECORD`); `undefined` otherwise. The
+   * control plane persists it to re-feed a later replay.
+   */
+  replayJournal?: string;
 };
 
 /** Payload the Rust `on_node` seam sends for a JS node handler or a JS tool. */
@@ -297,11 +321,24 @@ export class RustGraphRunner<TState extends ChannelValues> {
   private readonly native: NativeEngine;
   private readonly parts: RustRunnerParts<TState>;
   private readonly eventSubscribers = new Set<(event: RunEvent) => void>();
+  /** The last run's recorded journal (ADR 0038, record mode); `undefined` outside record mode. */
+  private lastReplayJournal: string | undefined;
 
   /** Construct only after {@link rustEngineAvailable} returned true. */
   public constructor(native: NativeEngine, parts: RustRunnerParts<TState>) {
     this.native = native;
     this.parts = parts;
+  }
+
+  /** The recorded LLM I/O + clock journal from the last run, when it ran in record mode
+   * (`ADRIANE_LLM_RECORD`) — the control plane persists it to re-feed a replay (ADR 0038). */
+  public recordedJournal(): string | undefined {
+    return this.lastReplayJournal;
+  }
+
+  /** Whether the installed native addon supports replay (`engineReplay`) — feature-detected. */
+  public canReplay(): boolean {
+    return typeof this.native.engineReplay === "function";
   }
 
   /** Subscribe to forwarded run-lifecycle events. Returns an unsubscribe fn. */
@@ -422,6 +459,8 @@ export class RustGraphRunner<TState extends ChannelValues> {
 
   private outcomeToState(outcomeJson: string): TypedGraphState<TState> {
     const outcome = JSON.parse(outcomeJson) as RunOutcomeWire;
+    // ADR 0038: capture a record-mode run's journal so callers can persist it (`recordedJournal`).
+    this.lastReplayJournal = outcome.replayJournal;
     // The wire state is already a valid camelCase GraphState; channels are the typed
     // shape declared by the builder, so this cast is exact (no field reshaping).
     return outcome.state as unknown as TypedGraphState<TState>;
@@ -527,6 +566,34 @@ export class RustGraphRunner<TState extends ChannelValues> {
       JSON.stringify(spec),
       name,
       JSON.stringify(payload ?? null),
+      this.onNode,
+      this.onCondition,
+      this.onEvent
+    );
+    return this.outcomeToState(outcomeJson);
+  }
+
+  /**
+   * Replay-as-evidence (ADR 0038): re-execute the run from `checkpointId`, re-feeding the recorded
+   * `replayJournal` (`{ decisions, clock }` JSON from a record-mode run's {@link recordedJournal})
+   * so the re-derivation is deterministic — the same LLM outputs + timestamps, not a re-sample. A
+   * forked, read-only run that never opens approval gates. Requires the native addon to expose
+   * `engineReplay` (a newer prebuilt); guard with {@link canReplay} first.
+   */
+  public async replay(
+    state: GraphState,
+    checkpointId: string,
+    replayJournal: string
+  ): Promise<TypedGraphState<TState>> {
+    if (this.native.engineReplay === undefined) {
+      throw new Error(
+        "the installed @adriane-ai/napi addon has no replay support (engineReplay) — rebuild/upgrade it"
+      );
+    }
+    const spec: EngineSpecWire = { ...this.baseSpec(), state, replayJournal };
+    const outcomeJson = await this.native.engineReplay(
+      JSON.stringify(spec),
+      checkpointId,
       this.onNode,
       this.onCondition,
       this.onEvent

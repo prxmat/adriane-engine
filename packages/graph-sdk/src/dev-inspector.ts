@@ -12,9 +12,10 @@ import type { ChannelValues, InitialData } from "./typed.js";
  * with `explain()` and a one-click resume. Dependency-free (node:http only) and self-contained
  * (the page is inline HTML/JS — no CDN, no build step), so it drops into any project.
  *
- * v1 streams a single run live. True time-travel (rewind to and replay from an arbitrary
- * checkpoint) needs a fork control through the napi bridge and is the v2 (the runtime already
- * checkpoints every node; the local surface to rewind is the remaining work).
+ * v1 streams a single run live. The replay-from-checkpoint primitive now exists —
+ * {@link replayCatalogGraph} forks a deterministic re-execution from any checkpoint (ADR 0038) and
+ * {@link verifyReplayDecisions} proves it reproduces the attested decisions. Wiring that into a
+ * one-click "rewind & replay" governance lens in this page is the remaining v2 surface.
  */
 export type InspectorHandle = {
   /** The URL the inspector is served at. */

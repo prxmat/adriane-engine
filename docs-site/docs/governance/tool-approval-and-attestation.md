@@ -108,7 +108,9 @@ A signature says "a human authorised this." Because Adriane runs are
 a run you can **re-derive from its checkpoints** — so the evidence is the decision *and the
 exact execution that led to it*, not an assertion bolted on beside it. That is the difference
 between a system that *attests and blocks* and one that *runs, resumes, and replays* the
-governed work itself.
+governed work itself. [Replay as evidence](./replay-as-evidence) makes that concrete: it
+re-derives the run and proves the replay reaches the **same decisions** — a faithfulness
+guarantee distinct from the tamper-evidence the chain gives you.
 
 ## End to end
 
