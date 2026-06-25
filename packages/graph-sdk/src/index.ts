@@ -305,6 +305,63 @@ export type {
 export { InMemoryToolRegistry } from "@adriane-ai/agents-core";
 export type { ToolRegistry, ToolDefinition, ToolId, AgentResult } from "@adriane-ai/agents-core";
 
+// ── ADR 0037: the product consumes the engine through this one door ───────────────────────────
+// Additive re-exports so the control plane imports engine surface from `@adriane-ai/graph-sdk`
+// instead of the (unpublished) engine internals. tsup INLINES every package below, so these add
+// nothing to publish — the published residual stays {graph-sdk, contracts, napi, config}. Identity
+// is preserved (the same inlined source), so `implements` in the control plane keeps type-checking.
+
+// graph-core — graph-definition types + the validator.
+export { validateGraph, GraphStateSchema, GraphValidationError } from "@adriane-ai/graph-core";
+export type { NodeType, NodeDefinition, EdgeDefinition, EdgeId, GraphId } from "@adriane-ai/graph-core";
+
+// graph-runtime — engine primitives + checkpoint/interrupt types.
+export {
+  GraphRuntime,
+  InMemoryConditionRegistry,
+  InMemoryEventBus,
+  InMemoryNodeRegistry
+} from "@adriane-ai/graph-runtime";
+export type { Checkpointer, Checkpoint, CheckpointId, InterruptConfig } from "@adriane-ai/graph-runtime";
+
+// agents-core — the ReAct agent (the control plane builds governed agents over it).
+export { ReActAgent } from "@adriane-ai/agents-core";
+export type { AgentId } from "@adriane-ai/agents-core";
+
+// llm-gateway — adapter/request types for extraction services + custom adapters.
+export type { LLMModel, LLMProviderAdapter, LLMRequest } from "@adriane-ai/llm-gateway";
+
+// Governed seams (ADR 0037 D3) — the interfaces the control plane's Pg* adapters implement, plus the
+// in-memory defaults + the Ed25519 attestor. This WIDENS the public governance/storage surface
+// deliberately (mandatory-review): the engine's already-public interface set, additive, in-bundle.
+export {
+  InMemoryApprovalEngine,
+  Ed25519Attestor,
+  canonicalJson,
+  ApprovalSelfApprovalError,
+  ApprovalAlreadyResolvedError,
+  ApprovalNotFoundError
+} from "@adriane-ai/approval-engine";
+export type {
+  ApprovalEngine,
+  ApprovalId,
+  ApprovalRequest,
+  RequestApprovalParams
+} from "@adriane-ai/approval-engine";
+export { InMemoryArtifactStore } from "@adriane-ai/artifact-store";
+export type { ArtifactStore, Artifact, ArtifactId, ArtifactVersion } from "@adriane-ai/artifact-store";
+
+// search + memory-store — inlined (zero @adriane-ai deps); the control plane uses them directly.
+export { InMemorySearchProvider, DEFAULT_SEARCH_LIMIT } from "@adriane-ai/search";
+export type {
+  SearchProvider,
+  SearchDocument,
+  SearchHit,
+  SearchResourceType,
+  SearchQueryOptions
+} from "@adriane-ai/search";
+export type { BaseStore, MemoryNamespace, MemoryKey, MemoryItem } from "@adriane-ai/memory-store";
+
 // ADR 0031: per-model provider overlays. Install a provider package for the concrete classes
 // (`@adriane-ai/model-openai`, `-anthropic`, `-gemini`, `-mistral`); these shared base types +
 // the OpenAI-compatible escape hatch are re-exported here for convenience.

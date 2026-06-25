@@ -23,7 +23,12 @@ export default defineConfig({
       "@adriane-ai/graph-runtime": fromHere("../graph-runtime/src/index.ts"),
       "@adriane-ai/agents-core": fromHere("../agents-core/src/index.ts"),
       "@adriane-ai/llm-gateway": fromHere("../llm-gateway/src/index.ts"),
-      "@adriane-ai/model-core": fromHere("../model-core/src/index.ts")
+      "@adriane-ai/model-core": fromHere("../model-core/src/index.ts"),
+      // ADR 0037: now re-exported through the index, so tests resolving the index need them too.
+      "@adriane-ai/approval-engine": fromHere("../approval-engine/src/index.ts"),
+      "@adriane-ai/artifact-store": fromHere("../artifact-store/src/index.ts"),
+      "@adriane-ai/search": fromHere("../search/src/index.ts"),
+      "@adriane-ai/memory-store": fromHere("../memory-store/src/index.ts")
     }
   }
 });

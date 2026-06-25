@@ -11,6 +11,7 @@
     "../graph-core/src/**/*",
     "../graph-runtime/src/**/*",
     "../memory-store/src/**/*",
+    "../search/src/**/*",
     "../llm-gateway/src/**/*",
     "../agents-core/src/**/*",
     "../approval-engine/src/**/*",
