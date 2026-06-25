@@ -1,8 +1,16 @@
 # ADR 0038 — Replay-as-evidence: deterministic governed-run replay cross-checked against the attestation chain
 
-- **Status:** Proposed (awaiting owner sign-off — open questions below are blocking)
+- **Status:** Accepted (owner sign-off 2026-06-25)
 - **Date:** 2026-06-25
 - **Relates to:** [0037 product-engine-consumption](./0037-product-engine-consumption.md) (the engine door this builds on), the durable attestation chain (control-plane, private PR #30), [0033 token-streaming](./0033-token-streaming-and-subagent-tagging.md) (event-stream invariants)
+
+## Decisions at sign-off (2026-06-25)
+
+The owner accepted the ADR and resolved its blocking questions:
+
+1. **Engine that backs the work: the PUBLIC `adriane-engine` (source of truth).** The Rust/napi/SDK changes land in the public repo, not the vendored private `engine/` tree. Consequence: the product cannot consume replay end-to-end until the engine is published to npm + repointed (`^1.4.0`) — which is money-blocked (Track D step 8). Replay is built + tested in the public engine first; product wiring (`verify-replay` endpoint) follows the repoint. (Reconciles with [0037](./0037-product-engine-consumption.md).)
+2. **Record-and-replay scope: full LLM I/O per run.** The decision journal records the complete LLM request/response stream (plus clock readings + human grants), not just a deterministic skeleton with a pinned transcript. This is the only way to faithfully reproduce an agent's decisions on replay; the heavier per-run journal store is accepted.
+3. **Equivalence relation, attested-field exclusion, two-property framing, standalone scope** — accepted as proposed below (semantic equivalence over the ordered `{status, subject}` decision set; `approvalId`/`decidedAt`/`resolvedBy` excluded as non-reproducible human/control-plane facts; `verifyChain` = tamper-evidence and `verify-replay` = faithfulness reported independently; this ADR stands alone alongside 0037).
 
 ## Context
 
@@ -50,7 +58,7 @@ Multiple engine public-API surfaces change (⇒ mandatory human review):
 - **Wire up the existing `replayFrom()` as-is** — it routes to the TS stub runtime (no-op tool/action nodes) and a non-deterministic substrate, so it proves nothing on a real run. Rejected; deterministic replay must be _added_.
 - **Fold replay into `verifyChain()`** — conflates two different properties (tamper-evidence vs faithfulness). Rejected; kept as two independent checks.
 
-## Open questions for the owner (BLOCKING)
+## Open questions (RESOLVED at sign-off — see "Decisions at sign-off" above)
 
 1. **Equivalence definition** — is "the run reproduces the same ordered `{status, tool-subject}` decisions" the right proof claim for buyers/auditors, or do you want a stronger/different relation? (product/compliance decision, not just engineering)
 2. **Record-and-replay scope** — record the full LLM I/O per run (new per-run journal store), or replay only the deterministic skeleton with the LLM transcript pinned from checkpoints/events? The former is heavier but is the only way to faithfully reproduce agent decisions.
