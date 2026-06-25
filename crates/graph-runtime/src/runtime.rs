@@ -1263,6 +1263,20 @@ mod tests {
         assert_eq!(clock.now_string(), "b");
     }
 
+    #[test]
+    fn recording_clock_captures_exactly_the_sequence_it_returns() {
+        // ADR 0038 layer 2b: a record-mode run wraps the real clock in a RecordingClock that
+        // captures every now_string() it returns, in order — the sequence a RecordedClock replays.
+        let recorded = Arc::new(Mutex::new(Vec::<String>::new()));
+        let clock = crate::interfaces::RecordingClock::new(
+            Arc::new(crate::interfaces::SystemClock),
+            Arc::clone(&recorded),
+        );
+        let a = clock.now_string();
+        let b = clock.now_string();
+        assert_eq!(recorded.lock().unwrap().clone(), vec![a, b]);
+    }
+
     #[tokio::test]
     async fn injected_clock_drives_run_timestamps_not_the_wall_clock() {
         // ADR 0038 (replay-as-evidence): with a RecordedClock injected, the run's durable

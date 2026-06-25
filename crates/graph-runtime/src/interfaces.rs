@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use adriane_graph_core::{GraphState, NodeId, RunId};
@@ -209,6 +209,31 @@ impl Clock for RecordedClock {
         let i = self.cursor.fetch_add(1, Ordering::SeqCst);
         let idx = i.min(self.values.len() - 1);
         self.values[idx].clone()
+    }
+}
+
+/// Wraps another [`Clock`] (typically [`SystemClock`]) and RECORDS every `now_string()` into
+/// a shared buffer in call order — so a record-mode run captures the exact timestamp sequence
+/// a later [`RecordedClock`] replays (ADR 0038). Transparent: returns the inner value unchanged.
+pub struct RecordingClock {
+    inner: Arc<dyn Clock>,
+    recorded: Arc<Mutex<Vec<String>>>,
+}
+
+impl RecordingClock {
+    pub fn new(inner: Arc<dyn Clock>, recorded: Arc<Mutex<Vec<String>>>) -> Self {
+        Self { inner, recorded }
+    }
+}
+
+impl Clock for RecordingClock {
+    fn now_string(&self) -> String {
+        let value = self.inner.now_string();
+        self.recorded
+            .lock()
+            .expect("recording clock mutex poisoned")
+            .push(value.clone());
+        value
     }
 }
 

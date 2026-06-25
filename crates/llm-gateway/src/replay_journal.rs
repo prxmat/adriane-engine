@@ -54,6 +54,16 @@ impl RecordingGateway {
         }
     }
 
+    /// Wrap `inner`, recording into a CALLER-OWNED shared journal — so several agent gateways
+    /// in one run all append to a single run-scoped journal (ADR 0038, layer 2b). The caller
+    /// holds the same `Arc` and reads it after the run to persist the full LLM I/O.
+    pub fn with_journal(
+        inner: Arc<dyn LlmGateway>,
+        journal: Arc<Mutex<Vec<RecordedCall>>>,
+    ) -> Self {
+        Self { inner, journal }
+    }
+
     /// A shared handle to the recorded calls — clone it before the run, read it after to
     /// build the [`LlmJournal`] to persist.
     pub fn journal_handle(&self) -> Arc<Mutex<Vec<RecordedCall>>> {
