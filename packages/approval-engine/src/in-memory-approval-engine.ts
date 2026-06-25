@@ -22,7 +22,8 @@ export class InMemoryApprovalEngine implements ApprovalEngine {
       requestedBy: params.requestedBy,
       subject: params.subject,
       status: "pending",
-      createdAt: new Date()
+      createdAt: new Date(),
+      tenantId: params.tenantId
     };
 
     this.approvals.set(approval.id, approval);
