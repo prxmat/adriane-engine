@@ -17,6 +17,8 @@ export type ApprovalRequest = {
   resolvedAt?: Date;
   rejectionReason?: string;
   createdAt: Date;
+  /** Tenant scope (ADR 0036 #4) — set by the control plane; the engine is tenant-agnostic. */
+  tenantId?: string;
 };
 
 export type ApprovalDecision = { approved: true } | { approved: false; reason: string };
