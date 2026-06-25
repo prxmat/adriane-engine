@@ -191,3 +191,27 @@ pub async fn engine_signal(
     )
     .await
 }
+
+/// Replay-as-evidence (ADR 0038): re-execute a run from `checkpointId`, re-feeding the
+/// recorded LLM outputs + timestamps from `specJson.replayJournal` instead of re-sampling.
+/// Returns the replayed run's `RunOutcome` JSON (a forked, read-only re-derivation). The
+/// caller compares the replayed governance decisions to the attested chain (verify-replay).
+#[napi(
+    ts_args_type = "specJson: string, checkpointId: string, onNode: (payloadJson: string) => string | Promise<string>, onCondition: (payloadJson: string) => boolean | string | Promise<boolean | string>, onEvent: (payloadJson: string) => void",
+    ts_return_type = "Promise<string>"
+)]
+pub async fn engine_replay(
+    spec_json: String,
+    checkpoint_id: String,
+    on_node: StringCallback,
+    on_condition: StringCallback,
+    on_event: StringCallback,
+) -> napi::Result<String> {
+    let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
+    bridge::run(
+        spec_json,
+        callbacks,
+        bridge::Entry::Replay { checkpoint_id },
+    )
+    .await
+}

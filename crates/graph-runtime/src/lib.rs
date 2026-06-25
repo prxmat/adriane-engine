@@ -11,9 +11,10 @@ pub mod runtime;
 pub mod types;
 
 pub use interfaces::{
-    sync_handler, BoxFuture, Checkpointer, ConditionFn, ConditionRegistry, EventBus, EventObserver,
-    InMemoryCheckpointer, InMemoryConditionRegistry, InMemoryEventBus, InMemoryNodeRegistry,
-    Interrupt, NodeHandler, NodeOutput, NodeRegistry,
+    sync_handler, BoxFuture, Checkpointer, Clock, ConditionFn, ConditionRegistry, EventBus,
+    EventObserver, InMemoryCheckpointer, InMemoryConditionRegistry, InMemoryEventBus,
+    InMemoryNodeRegistry, Interrupt, NodeHandler, NodeOutput, NodeRegistry, RecordedClock,
+    RecordingClock, SystemClock,
 };
 pub use runtime::{GraphRuntime, RuntimeError};
 pub use types::{Checkpoint, CheckpointId, RunEvent};

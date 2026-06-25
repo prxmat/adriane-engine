@@ -21,7 +21,7 @@
 //!   settle the promise. No `call_with_return_value` / sync-channel hack remains.
 
 use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use adriane_agents_core::{
     agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem,
@@ -39,14 +39,16 @@ use adriane_fs_backend::{
 };
 use adriane_graph_core::{EdgeType, GraphState, NodeId, NodeType, RunId};
 use adriane_graph_runtime::{
-    Checkpoint, CheckpointId, Checkpointer, ConditionRegistry, GraphRuntime,
-    InMemoryConditionRegistry, InMemoryNodeRegistry, NodeOutput, NodeRegistry, RunEvent,
+    Checkpoint, CheckpointId, Checkpointer, Clock, ConditionRegistry, GraphRuntime,
+    InMemoryConditionRegistry, InMemoryNodeRegistry, NodeOutput, NodeRegistry, RecordedClock,
+    RecordingClock, RunEvent, SystemClock,
 };
 use adriane_llm_gateway::{
     AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort, HttpGeminiPort,
-    HttpPiiRedactor, HttpPromptCompressor, LlmError, LlmProvider, LlmResponse, LlmToolCall,
-    LlmUsage, MediaResolver, MediaSource, MockAdapter, ModelChoice, ModelPolicy,
-    OpenAiCompatibleAdapter, RegexSecretsRedactor,
+    HttpPiiRedactor, HttpPromptCompressor, LlmError, LlmGateway, LlmJournal, LlmProvider,
+    LlmResponse, LlmToolCall, LlmUsage, MediaResolver, MediaSource, MockAdapter, ModelChoice,
+    ModelPolicy, OpenAiCompatibleAdapter, RecordedCall, RecordingGateway, RegexSecretsRedactor,
+    ReplayGateway,
 };
 use adriane_memory::{InMemoryMemoryStore, MemoryStore, MockEmbedder, RecallMode, RetrievalPolicy};
 use adriane_skills::{InMemorySkillStore, SkillStore};
@@ -74,6 +76,118 @@ pub enum Entry {
         name: String,
         payload: Value,
     },
+    /// Replay-as-evidence (ADR 0038): re-execute a run from `checkpoint_id`, re-feeding the
+    /// journaled LLM outputs + timestamps (`spec.replay_journal`) instead of re-sampling. A
+    /// forked, read-only re-derivation — never opens new approval gates.
+    Replay {
+        checkpoint_id: String,
+    },
+}
+
+/// How this run feeds its non-deterministic inputs (ADR 0038). Built once per run in `run()`
+/// from the spec + entry, then threaded into the runtime (the clock) and every agent gateway.
+#[derive(Clone)]
+enum ReplayMode {
+    /// Normal run: real clock, live provider calls.
+    Live,
+    /// Record mode (`ADRIANE_LLM_RECORD`): wrap each agent gateway to journal its LLM I/O into
+    /// the shared `journal`, and the clock to capture its timestamp sequence into `clock`.
+    Record {
+        journal: Arc<Mutex<Vec<RecordedCall>>>,
+        clock: Arc<Mutex<Vec<String>>>,
+    },
+    /// Replay mode (`Entry::Replay`): every agent gateway is the SAME shared `ReplayGateway`
+    /// (so each recorded call is consumed once across the whole run), and the clock replays
+    /// the recorded timestamp sequence.
+    Replay {
+        gateway: Arc<ReplayGateway>,
+        clock: Vec<String>,
+    },
+}
+
+/// The persisted replay journal wire shape: the LLM I/O decisions + the ordered timestamp
+/// sequence the run emitted (ADR 0038). Serialized into `RunOutcome.replay_journal` in record
+/// mode and re-fed via `EngineSpec.replay_journal` on `Entry::Replay`.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplayJournalWire {
+    decisions: LlmJournal,
+    clock: Vec<String>,
+}
+
+impl ReplayMode {
+    /// Resolve the mode: `Entry::Replay` (+ `spec.replay_journal`) → Replay; else the
+    /// `ADRIANE_LLM_RECORD` env flag → Record; else Live.
+    fn resolve(spec: &EngineSpec, entry: &Entry) -> napi::Result<ReplayMode> {
+        if matches!(entry, Entry::Replay { .. }) {
+            let raw = spec.replay_journal.as_deref().ok_or_else(|| {
+                napi::Error::from_reason(
+                    "Entry::Replay requires `replay_journal` (the recorded run journal)".to_owned(),
+                )
+            })?;
+            let wire: ReplayJournalWire = serde_json::from_str(raw).map_err(|error| {
+                napi::Error::from_reason(format!("invalid replay_journal JSON: {error}"))
+            })?;
+            return Ok(ReplayMode::Replay {
+                gateway: Arc::new(ReplayGateway::new(wire.decisions)),
+                clock: wire.clock,
+            });
+        }
+        let recording = std::env::var("ADRIANE_LLM_RECORD")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        if recording {
+            return Ok(ReplayMode::Record {
+                journal: Arc::new(Mutex::new(Vec::new())),
+                clock: Arc::new(Mutex::new(Vec::new())),
+            });
+        }
+        Ok(ReplayMode::Live)
+    }
+
+    /// The clock to install on the runtime: `RecordingClock` (record) captures the run's
+    /// timestamp sequence; `RecordedClock` (replay) re-feeds it; `None` (live) → default.
+    fn runtime_clock(&self) -> Option<Arc<dyn Clock>> {
+        match self {
+            ReplayMode::Live => None,
+            ReplayMode::Record { clock, .. } => Some(Arc::new(RecordingClock::new(
+                Arc::new(SystemClock),
+                Arc::clone(clock),
+            ))),
+            ReplayMode::Replay { clock, .. } => Some(Arc::new(RecordedClock::new(clock.clone()))),
+        }
+    }
+
+    /// Wrap an agent's bare gateway per the mode: record (journal into the shared buffer),
+    /// replay (the shared ReplayGateway, ignoring the live `inner`), or live (passthrough).
+    fn wrap_gateway(&self, inner: Arc<dyn LlmGateway>) -> Arc<dyn LlmGateway> {
+        match self {
+            ReplayMode::Live => inner,
+            ReplayMode::Record { journal, .. } => {
+                Arc::new(RecordingGateway::with_journal(inner, Arc::clone(journal)))
+            }
+            ReplayMode::Replay { gateway, .. } => Arc::clone(gateway) as Arc<dyn LlmGateway>,
+        }
+    }
+
+    /// In record mode, serialize the captured journal (LLM I/O + clock) for `RunOutcome`.
+    fn recorded_journal_json(&self) -> Option<String> {
+        match self {
+            ReplayMode::Record { journal, clock } => {
+                let wire = ReplayJournalWire {
+                    decisions: LlmJournal {
+                        calls: journal
+                            .lock()
+                            .expect("record journal mutex poisoned")
+                            .clone(),
+                    },
+                    clock: clock.lock().expect("record clock mutex poisoned").clone(),
+                };
+                serde_json::to_string(&wire).ok()
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The three JS callbacks, as TSFNs cloned into every seam closure.
@@ -108,7 +222,11 @@ pub async fn run(spec_json: String, callbacks: JsCallbacks, entry: Entry) -> nap
     let spec: EngineSpec = serde_json::from_str(&spec_json)
         .map_err(|error| napi::Error::from_reason(format!("invalid engine spec JSON: {error}")))?;
 
-    let runtime = build_runtime(&spec, callbacks)?;
+    // ADR 0038: resolve the replay mode (live / record / replay) once, before the runtime is
+    // built — it drives the runtime's clock and every agent gateway, and (record mode) the
+    // recorded journal is read back into the outcome after the run.
+    let mode = ReplayMode::resolve(&spec, &entry)?;
+    let runtime = build_runtime(&spec, callbacks, &mode)?;
     let final_state = drive(&runtime, &spec, entry).await?;
 
     let pending_approvals = collect_pending_approvals(&spec, &final_state);
@@ -121,6 +239,7 @@ pub async fn run(spec_json: String, callbacks: JsCallbacks, entry: Entry) -> nap
         state: final_state,
         status,
         pending_approvals,
+        replay_journal: mode.recorded_journal_json(),
     };
     serde_json::to_string(&outcome).map_err(|error| napi::Error::from_reason(error.to_string()))
 }
@@ -192,6 +311,24 @@ async fn drive(
             seed_inbox(runtime, &run_id, &spec.inbox);
             runtime
                 .resume_with_signal(&run_id, &name, payload)
+                .await
+                .map_err(runtime_err)
+        }
+        Entry::Replay { checkpoint_id } => {
+            // ADR 0038 (replay-as-evidence): re-derive the run from `checkpoint_id`. The runtime
+            // was built (in `run()`) with a RecordedClock + a ShareReplayGateway from the journal,
+            // so re-execution re-feeds the original LLM outputs + timestamps. `replay_from` forks a
+            // new run id — read-only evidence, never advancing or re-opening the original run.
+            let state = spec.state.clone().ok_or_else(|| {
+                napi::Error::from_reason(
+                    "replay requires `state` (the serialized GraphState to seed the checkpoint)"
+                        .to_owned(),
+                )
+            })?;
+            let run_id = state.run_id.clone();
+            seed_replay_checkpoint(runtime, &checkpoint_id, state);
+            runtime
+                .replay_from(&run_id, &CheckpointId(checkpoint_id))
                 .await
                 .map_err(runtime_err)
         }
@@ -285,6 +422,19 @@ fn seed_checkpoint(runtime: &GraphRuntime, state: GraphState) {
     runtime.checkpointer().save(checkpoint);
 }
 
+/// Seed the checkpointer under the EXACT `checkpoint_id` a replay forks from (ADR 0038), so
+/// `replay_from`'s `load_by_id` + run-id filter both hit. Unlike `seed_checkpoint`, the id is
+/// taken verbatim (not derived from `state.checkpoint_id` / a `:seed` fallback).
+fn seed_replay_checkpoint(runtime: &GraphRuntime, checkpoint_id: &str, state: GraphState) {
+    let checkpoint = Checkpoint {
+        id: CheckpointId(checkpoint_id.to_owned()),
+        run_id: state.run_id.clone(),
+        graph_state: state,
+        created_at: "0".to_owned(),
+    };
+    runtime.checkpointer().save(checkpoint);
+}
+
 /// Assemble the runtime: a node registry with JS handlers + agent handlers, and a
 /// condition registry that bridges every conditional edge's condition to JS.
 /// Resolve the run id this runtime build is for: a resume/approve carries it on the
@@ -344,7 +494,7 @@ static SKILL_STORE: std::sync::LazyLock<Arc<InMemorySkillStore>> =
 
 fn build_agent_middleware(
     agent_spec: &AgentSpec,
-    gateway: &Arc<DefaultLlmGateway>,
+    gateway: &Arc<dyn LlmGateway>,
     provider: LlmProvider,
     model: &str,
     node_id: &str,
@@ -538,7 +688,11 @@ fn build_fs_policy(rules: &[FsPolicyRule]) -> StaticPathPolicy {
     )
 }
 
-fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<GraphRuntime> {
+fn build_runtime(
+    spec: &EngineSpec,
+    callbacks: JsCallbacks,
+    mode: &ReplayMode,
+) -> napi::Result<GraphRuntime> {
     let js_node_ids: HashSet<&str> = spec.js_node_ids.iter().map(String::as_str).collect();
 
     // Run-scoped governed filesystem (ADR 0024 phase 2b): ONE in-memory artifact store
@@ -576,13 +730,13 @@ fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<Grap
             nodes.register(NodeId::from(id), handler);
         } else if let Some(agent_spec) = spec.agents.get(&id) {
             let handler = build_agent_handler(
-                &id, agent_spec, spec, &callbacks, &fs_store, &fs_policy, &fs_run_id,
+                &id, agent_spec, spec, &callbacks, &fs_store, &fs_policy, &fs_run_id, mode,
             )?;
             nodes.register(NodeId::from(id), handler);
         } else if let Some(map_spec) = spec.map_agents.get(&id) {
             // ADR 0027 phase 4b: a `mapAgents` dynamic-fan-out node.
             let handler = build_map_agent_handler(
-                &id, map_spec, spec, &callbacks, &fs_store, &fs_policy, &fs_run_id,
+                &id, map_spec, spec, &callbacks, &fs_store, &fs_policy, &fs_run_id, mode,
             )?;
             nodes.register(NodeId::from(id), handler);
         } else if node.node_type == NodeType::HumanGate {
@@ -616,8 +770,13 @@ fn build_runtime(spec: &EngineSpec, callbacks: JsCallbacks) -> napi::Result<Grap
         conditions.register(name.clone(), js_condition(name.clone(), &callbacks));
     }
 
-    let runtime = GraphRuntime::new(spec.graph.clone(), nodes, conditions)
+    let mut runtime = GraphRuntime::new(spec.graph.clone(), nodes, conditions)
         .with_subgraphs(spec.subgraphs.clone());
+    // ADR 0038: record mode installs a RecordingClock (captures the timestamp sequence);
+    // replay mode a RecordedClock (re-feeds it). Live keeps the default SystemClock.
+    if let Some(clock) = mode.runtime_clock() {
+        runtime = runtime.with_clock(clock);
+    }
 
     // Forward every run-lifecycle event to JS, fire-and-forget. The observer runs
     // synchronously inside `emit`; we only enqueue a non-blocking TSFN call (no
@@ -733,6 +892,7 @@ fn build_react_agent(
     fs_store: &Arc<dyn ArtifactStore>,
     fs_policy: &Arc<StaticPathPolicy>,
     fs_run_id: &RunId,
+    mode: &ReplayMode,
 ) -> napi::Result<Arc<ReActAgent>> {
     // Resolve the concrete model BEFORE building the gateway, so the registered
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
@@ -741,7 +901,14 @@ fn build_react_agent(
     // ADR 0025 phase 3b: the gateway is now the BARE provider router; PII redaction +
     // prompt compression are agent middleware on the stack (built below), not gateway
     // wrappers. The RedactingGateway/CompressingGateway structs remain for non-agent callers.
-    let gateway = build_gateway(agent_spec, &resolved, &spec.provider_keys, Some(fs_store));
+    // ADR 0038: `mode` wraps it for record/replay.
+    let gateway = build_gateway(
+        agent_spec,
+        &resolved,
+        &spec.provider_keys,
+        Some(fs_store),
+        mode,
+    );
 
     let approval_tools: HashSet<&str> = agent_spec
         .approval_tool_names
@@ -845,6 +1012,7 @@ fn build_react_agent(
 }
 
 /// Wrap a built ReAct agent as an ordinary single-node agent handler.
+#[allow(clippy::too_many_arguments)] // run-scoped seams (fs + replay mode) threaded explicitly
 fn build_agent_handler(
     node_id: &str,
     agent_spec: &AgentSpec,
@@ -853,9 +1021,10 @@ fn build_agent_handler(
     fs_store: &Arc<dyn ArtifactStore>,
     fs_policy: &Arc<StaticPathPolicy>,
     fs_run_id: &RunId,
+    mode: &ReplayMode,
 ) -> napi::Result<adriane_graph_runtime::NodeHandler> {
     let agent = build_react_agent(
-        node_id, agent_spec, spec, callbacks, fs_store, fs_policy, fs_run_id,
+        node_id, agent_spec, spec, callbacks, fs_store, fs_policy, fs_run_id, mode,
     )?;
     let output_channel = agent_spec
         .output_channel
@@ -872,6 +1041,7 @@ fn build_agent_handler(
 /// Build a `mapAgents` dynamic-fan-out node handler (ADR 0027 phase 4b): the sub-agent is built
 /// exactly like an ordinary agent, then run once per item in `over_channel` (concurrently),
 /// merging the per-item results — in input order — into `join_at`.
+#[allow(clippy::too_many_arguments)] // run-scoped seams (fs + replay mode) threaded explicitly
 fn build_map_agent_handler(
     node_id: &str,
     map_spec: &crate::spec::MapAgentSpec,
@@ -880,6 +1050,7 @@ fn build_map_agent_handler(
     fs_store: &Arc<dyn ArtifactStore>,
     fs_policy: &Arc<StaticPathPolicy>,
     fs_run_id: &RunId,
+    mode: &ReplayMode,
 ) -> napi::Result<adriane_graph_runtime::NodeHandler> {
     let agent = build_react_agent(
         node_id,
@@ -889,6 +1060,7 @@ fn build_map_agent_handler(
         fs_store,
         fs_policy,
         fs_run_id,
+        mode,
     )?;
     Ok(map_node_handler(
         agent,
@@ -1105,7 +1277,8 @@ fn build_gateway(
     resolved: &ModelChoice,
     keys: &BTreeMap<String, String>,
     fs_store: Option<&Arc<dyn ArtifactStore>>,
-) -> Arc<DefaultLlmGateway> {
+    mode: &ReplayMode,
+) -> Arc<dyn LlmGateway> {
     let mut gateway = DefaultLlmGateway::new();
     let model = if resolved.model.is_empty() {
         None
@@ -1122,14 +1295,18 @@ fn build_gateway(
     }
 
     // ADR 0030 9c: bind the artifact-backed media resolver so multimodal `Artifact` refs are
-    // resolved to bytes at the gateway boundary (the run-scoped store the fs also uses).
+    // resolved to bytes at the gateway boundary (the run-scoped store the fs also uses). Bind
+    // on the CONCRETE DefaultLlmGateway (with_media_resolver is not on the trait) BEFORE the
+    // replay-mode wrap turns it into a trait object.
     let gateway = match fs_store {
         Some(store) => gateway.with_media_resolver(Arc::new(ArtifactMediaResolver {
             store: store.clone(),
         })),
         None => gateway,
     };
-    Arc::new(gateway)
+    // ADR 0038: wrap per replay mode — record (journal LLM I/O), replay (the shared
+    // ReplayGateway), or live (passthrough).
+    mode.wrap_gateway(Arc::new(gateway))
 }
 
 /// Build a gateway for a STANDALONE one-shot completion (ADR 0031 — the `Model.invoke()` path
@@ -1498,6 +1675,7 @@ mod tests {
             &resolve_agent_model(&agent_spec),
             &BTreeMap::new(),
             None,
+            &ReplayMode::Live,
         );
         let mut registry = InMemoryToolRegistry::new();
         registry.register(
@@ -1560,7 +1738,7 @@ mod tests {
         let from = |value: serde_json::Value| -> crate::spec::AgentSpec {
             serde_json::from_value(value).expect("agent spec parses")
         };
-        let gateway = Arc::new(DefaultLlmGateway::new());
+        let gateway: Arc<dyn LlmGateway> = Arc::new(DefaultLlmGateway::new());
         let build = |spec: &crate::spec::AgentSpec| {
             build_agent_middleware(spec, &gateway, LlmProvider::Anthropic, "m", "test-node")
         };
@@ -1640,7 +1818,7 @@ mod tests {
     /// with no PII service and no resolved efficiency middleware (so a stack is never ungoverned).
     #[test]
     fn secrets_floor_is_always_governed() {
-        let gateway = Arc::new(DefaultLlmGateway::new());
+        let gateway: Arc<dyn LlmGateway> = Arc::new(DefaultLlmGateway::new());
         let spec: crate::spec::AgentSpec =
             serde_json::from_value(json!({ "provider": "anthropic" })).expect("spec parses");
         let stack =
@@ -1661,7 +1839,7 @@ mod tests {
     /// tenant-scoped by construction and unrepresentable from user resolved_middleware.
     #[test]
     fn memory_overlay_installs_a_governed_middleware() {
-        let gateway = Arc::new(DefaultLlmGateway::new());
+        let gateway: Arc<dyn LlmGateway> = Arc::new(DefaultLlmGateway::new());
         let spec: crate::spec::AgentSpec = serde_json::from_value(json!({
             "provider": "anthropic",
             "memory": { "namespace": "tenant:t1:agent:a", "topK": 3, "recall": "vector" }
@@ -1678,7 +1856,7 @@ mod tests {
     /// the bridge to a real middleware — the TS↔Rust parity contract for skill loading.
     #[test]
     fn skills_overlay_installs_a_sealed_middleware() {
-        let gateway = Arc::new(DefaultLlmGateway::new());
+        let gateway: Arc<dyn LlmGateway> = Arc::new(DefaultLlmGateway::new());
         let spec: crate::spec::AgentSpec = serde_json::from_value(json!({
             "provider": "anthropic",
             "skills": { "namespace": "skill:t1:org", "required": ["house-style@1.0.0"], "advisoryK": 2 }
@@ -1721,6 +1899,7 @@ mod tests {
             &resolve_agent_model(&agent_spec),
             &BTreeMap::new(),
             None,
+            &ReplayMode::Live,
         );
 
         let mut registry = InMemoryToolRegistry::new();
@@ -1778,6 +1957,7 @@ mod tests {
             stream_tokens: false,
             initial_data: BTreeMap::new(),
             state: None,
+            replay_journal: None,
             approved_tools: vec![],
             agents: [("assistant".to_owned(), agent_spec)].into_iter().collect(),
             component_nodes: BTreeMap::new(),
@@ -1941,7 +2121,13 @@ mod tests {
 
         // The gateway registers a real adapter (not the mock) for the resolved
         // Mistral provider, since MISTRAL_API_KEY is present.
-        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new(), None);
+        let gateway = build_gateway(
+            &agent_spec,
+            &resolved,
+            &BTreeMap::new(),
+            None,
+            &ReplayMode::Live,
+        );
         assert!(Arc::strong_count(&gateway) >= 1);
 
         // Restore env so other tests see a pristine environment.
@@ -2003,7 +2189,13 @@ mod tests {
             "no keys + tier should resolve to Mock"
         );
 
-        let gateway = build_gateway(&agent_spec, &resolved, &BTreeMap::new(), None);
+        let gateway = build_gateway(
+            &agent_spec,
+            &resolved,
+            &BTreeMap::new(),
+            None,
+            &ReplayMode::Live,
+        );
         let mut registry = InMemoryToolRegistry::new();
         registry.register(
             ToolDefinition {
@@ -2283,6 +2475,7 @@ mod tests {
             stream_tokens: false,
             initial_data: BTreeMap::new(),
             state: Some(suspended),
+            replay_journal: None,
             approved_tools: vec![ApprovedTool {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
@@ -2350,6 +2543,7 @@ mod tests {
             stream_tokens: false,
             initial_data: BTreeMap::new(),
             state: Some(suspended),
+            replay_journal: None,
             approved_tools: vec![ApprovedTool {
                 name: "refund".to_owned(),
                 requested_by: "assistant".to_owned(),
@@ -2393,5 +2587,40 @@ mod tests {
         assert!(!parse_bool("\"nope\""));
         assert!(!parse_bool("null"));
         assert!(!parse_bool("not json"));
+    }
+
+    #[test]
+    fn replay_mode_record_clock_captures_and_journal_roundtrips() {
+        // ADR 0038: record mode installs a RecordingClock that captures the timestamp sequence,
+        // and `recorded_journal_json` round-trips through the persisted wire shape.
+        let clock_buf = Arc::new(Mutex::new(Vec::new()));
+        let mode = ReplayMode::Record {
+            journal: Arc::new(Mutex::new(Vec::new())),
+            clock: Arc::clone(&clock_buf),
+        };
+        let clock = mode.runtime_clock().expect("record mode installs a clock");
+        let _ = clock.now_string();
+        let _ = clock.now_string();
+        assert_eq!(clock_buf.lock().unwrap().len(), 2);
+
+        let json = mode
+            .recorded_journal_json()
+            .expect("record mode produces a journal");
+        let wire: ReplayJournalWire = serde_json::from_str(&json).expect("journal round-trips");
+        assert_eq!(wire.clock.len(), 2);
+        assert!(wire.decisions.calls.is_empty());
+    }
+
+    #[test]
+    fn replay_mode_replay_installs_a_recorded_clock() {
+        // ADR 0038: replay mode installs a RecordedClock that re-feeds the recorded sequence.
+        let mode = ReplayMode::Replay {
+            gateway: Arc::new(ReplayGateway::new(LlmJournal::default())),
+            clock: vec!["7".to_owned(), "8".to_owned()],
+        };
+        let clock = mode.runtime_clock().expect("replay mode installs a clock");
+        assert_eq!(clock.now_string(), "7");
+        assert_eq!(clock.now_string(), "8");
+        assert_eq!(clock.now_string(), "8"); // clamps on exhaustion
     }
 }
