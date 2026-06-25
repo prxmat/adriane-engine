@@ -354,6 +354,14 @@ export type {
 export { InMemoryArtifactStore } from "@adriane-ai/artifact-store";
 export type { ArtifactStore, Artifact, ArtifactId, ArtifactVersion } from "@adriane-ai/artifact-store";
 
+// DSL compilers (graph-adriane + lang-adriane) — re-exported as the sanctioned YAML-string compile
+// entry point (their @deprecated notes, ADR 0003, say "compile via @adriane-ai/graph-sdk"). Bundled
+// here (pure TS + js-yaml) so they run in the BROWSER too — the Studio compiles/previews YAML
+// client-side, where the napi addon cannot run. `compileGraphFile` = graph YAML → GraphDefinition;
+// `compileFile` = prompt/agent/chain YAML. (Server code may still prefer napi `compileGraphYamlJson`.)
+export { compileGraphFile } from "@adriane-ai/graph-adriane";
+export { compileFile } from "@adriane-ai/lang-adriane";
+
 // search + memory-store — inlined (zero @adriane-ai deps); the control plane uses them directly.
 export { InMemorySearchProvider, DEFAULT_SEARCH_LIMIT } from "@adriane-ai/search";
 export type {
