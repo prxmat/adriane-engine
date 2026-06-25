@@ -24,4 +24,10 @@ pub enum LlmError {
     /// data, never a panic. (The default policy masks-and-continues instead.)
     #[error("blocked by secrets policy: {0}")]
     SecretsBlocked(String),
+    /// ADR 0038 (replay-as-evidence): a replay's recorded LLM journal has no matching
+    /// response for an outbound request — a journal gap. Surfaced as an error so a replay
+    /// can NEVER silently fall through to a live provider call (which would defeat the
+    /// "re-feed the original decisions" guarantee).
+    #[error("replay journal has no recorded response for this request: {0}")]
+    ReplayJournalMiss(String),
 }
