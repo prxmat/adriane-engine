@@ -28,7 +28,10 @@ export default defineConfig({
       "@adriane-ai/approval-engine": fromHere("../approval-engine/src/index.ts"),
       "@adriane-ai/artifact-store": fromHere("../artifact-store/src/index.ts"),
       "@adriane-ai/search": fromHere("../search/src/index.ts"),
-      "@adriane-ai/memory-store": fromHere("../memory-store/src/index.ts")
+      "@adriane-ai/memory-store": fromHere("../memory-store/src/index.ts"),
+      // The deprecated DSL compilers, now re-exported through the door for browser-safe YAML compile.
+      "@adriane-ai/graph-adriane": fromHere("../graph-adriane/src/index.ts"),
+      "@adriane-ai/lang-adriane": fromHere("../lang-adriane/src/index.ts")
     }
   }
 });
