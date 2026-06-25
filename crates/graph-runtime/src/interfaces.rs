@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use adriane_graph_core::{GraphState, NodeId, RunId};
 use serde_json::Value;
@@ -156,6 +158,58 @@ pub trait Checkpointer: Send + Sync {
 
 pub trait EventBus: Send + Sync {
     fn emit(&self, event: RunEvent);
+}
+
+/// The runtime's ONLY source of wall-clock time. Every durable timestamp
+/// (`GraphState.created_at`/`updated_at`, `Checkpoint.created_at`) and every
+/// `RunEvent.timestamp` flows through here. Ids are already deterministic (seq-based),
+/// so this is the sole non-determinism seam — making it injectable is what lets a
+/// replay re-feed the original run's timestamps (replay-as-evidence, ADR 0038).
+pub trait Clock: Send + Sync {
+    fn now_string(&self) -> String;
+}
+
+/// Real wall clock — millis since the Unix epoch, as a String. The default; its body is
+/// byte-identical to the previous free `now_string()`, so live runs are unchanged.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_string(&self) -> String {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        millis.to_string()
+    }
+}
+
+/// Replays a recorded sequence of timestamps in call order. When the sequence is
+/// exhausted it CLAMPS (repeats the last value) instead of panicking, so a small drift
+/// in `now_string()` call count between record and replay is tolerated — timestamps are
+/// evidence-cosmetic, not the faithfulness signal (which is the decision set).
+pub struct RecordedClock {
+    values: Vec<String>,
+    cursor: AtomicUsize,
+}
+
+impl RecordedClock {
+    pub fn new(values: Vec<String>) -> Self {
+        Self {
+            values,
+            cursor: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Clock for RecordedClock {
+    fn now_string(&self) -> String {
+        if self.values.is_empty() {
+            return "0".to_string();
+        }
+        let i = self.cursor.fetch_add(1, Ordering::SeqCst);
+        let idx = i.min(self.values.len() - 1);
+        self.values[idx].clone()
+    }
 }
 
 #[derive(Default)]
