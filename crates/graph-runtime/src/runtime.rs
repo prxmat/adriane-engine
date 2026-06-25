@@ -19,8 +19,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
 
 /// Default cap on node executions per run when the graph declares no `recursionLimit`.
 const DEFAULT_RECURSION_LIMIT: u64 = 1000;
@@ -86,8 +85,8 @@ fn mask_no_log(
 }
 
 use crate::interfaces::{
-    Checkpointer, ConditionRegistry, EventBus, EventObserver, InMemoryCheckpointer,
-    InMemoryConditionRegistry, InMemoryEventBus, InMemoryNodeRegistry, NodeRegistry,
+    Checkpointer, Clock, ConditionRegistry, EventBus, EventObserver, InMemoryCheckpointer,
+    InMemoryConditionRegistry, InMemoryEventBus, InMemoryNodeRegistry, NodeRegistry, SystemClock,
 };
 use crate::types::{Checkpoint, CheckpointId, RunEvent};
 
@@ -109,14 +108,6 @@ pub enum RuntimeError {
     SubgraphNotFound(String),
     #[error("subgraph '{0}' failed")]
     SubgraphFailed(String),
-}
-
-fn now_string() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    millis.to_string()
 }
 
 /// Build the id→node index for a graph (used for both the top-level graph and each
@@ -327,6 +318,10 @@ pub struct GraphRuntime {
     /// consumed by the target node's next execution (the reserved `__injected` channel).
     inbox: Mutex<HashMap<String, Vec<Value>>>,
     seq: AtomicU64,
+    /// The wall-clock seam (ADR 0038, replay-as-evidence). Defaults to `SystemClock` (live
+    /// runs unchanged); a replay injects a `RecordedClock` so re-execution reproduces the
+    /// original run's timestamps. The only non-determinism source — ids are seq-based.
+    clock: Arc<dyn Clock>,
     steps: Mutex<HashMap<String, u64>>,
 }
 
@@ -347,6 +342,7 @@ impl GraphRuntime {
             subgraphs: HashMap::new(),
             inbox: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
+            clock: Arc::new(SystemClock),
             steps: Mutex::new(HashMap::new()),
         }
     }
@@ -394,6 +390,20 @@ impl GraphRuntime {
         self
     }
 
+    /// Inject a [`Clock`] (ADR 0038). Live runs keep the default `SystemClock`; a replay
+    /// passes a `RecordedClock` of the original run's timestamps so re-execution reproduces
+    /// them instead of re-reading the wall clock. Mirrors `with_subgraphs`.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The run's wall-clock timestamp (millis-since-epoch String), through the injected
+    /// [`Clock`] seam. The sole non-determinism source the replay path overrides.
+    fn now_string(&self) -> String {
+        self.clock.now_string()
+    }
+
     /// Emitted events, for inspection / tests.
     pub fn events(&self) -> &InMemoryEventBus {
         &self.events
@@ -438,7 +448,7 @@ impl GraphRuntime {
         initial_data: BTreeMap<String, Value>,
         ctx: GraphCtx<'_>,
     ) -> Result<GraphState, RuntimeError> {
-        let now = now_string();
+        let now = self.now_string();
         let state = GraphState {
             run_id,
             graph_id: ctx.graph.id.clone(),
@@ -503,12 +513,12 @@ impl GraphRuntime {
             }
             None => state.status = GraphStatus::Completed,
         }
-        state.updated_at = now_string();
+        state.updated_at = self.now_string();
 
         self.events.emit(RunEvent::RunResumed {
             run_id: state.run_id.clone(),
             node_id: state.current_node_id.clone(),
-            timestamp: now_string(),
+            timestamp: self.now_string(),
         });
 
         let state = self.persist_checkpoint(state);
@@ -532,7 +542,7 @@ impl GraphRuntime {
         state.channels = channels;
         state.status = GraphStatus::Running;
         state.version += 1;
-        state.updated_at = now_string();
+        state.updated_at = self.now_string();
         Ok(self.persist_checkpoint(state))
     }
 
@@ -559,7 +569,7 @@ impl GraphRuntime {
         let mut state = checkpoint.graph_state;
         set_signal_payload(&mut state.channels, name, payload);
         state.version += 1;
-        state.updated_at = now_string();
+        state.updated_at = self.now_string();
         // Keep the Suspended status so `resume` advances past the waiting node.
         self.persist_checkpoint(state);
         self.resume(run_id).await
@@ -595,7 +605,7 @@ impl GraphRuntime {
         state.run_id = self.create_fork_run_id(run_id);
         state.status = GraphStatus::Running;
         state.checkpoint_id = None;
-        state.updated_at = now_string();
+        state.updated_at = self.now_string();
 
         let state = self.persist_checkpoint(state);
         // A fork replays the TOP-level graph (time-travel is a top-run concern).
@@ -633,7 +643,7 @@ impl GraphRuntime {
         if state.status == GraphStatus::Completed {
             self.events.emit(RunEvent::RunCompleted {
                 run_id: state.run_id.clone(),
-                timestamp: now_string(),
+                timestamp: self.now_string(),
             });
         }
         Ok(state)
@@ -656,7 +666,7 @@ impl GraphRuntime {
         self.events.emit(RunEvent::NodeStarted {
             run_id: state.run_id.clone(),
             node_id: node_id.clone(),
-            timestamp: now_string(),
+            timestamp: self.now_string(),
         });
 
         if node.node_type == NodeType::HumanGate {
@@ -712,7 +722,7 @@ impl GraphRuntime {
                 node_id: node_id.clone(),
                 error: error.clone(),
                 attempt,
-                timestamp: now_string(),
+                timestamp: self.now_string(),
             });
 
             if attempt >= max_attempts {
@@ -720,12 +730,12 @@ impl GraphRuntime {
                 // run loop and must NOT produce a RunCompleted event.
                 state.status = GraphStatus::Failed;
                 state.version += 1;
-                state.updated_at = now_string();
+                state.updated_at = self.now_string();
                 let persisted = self.persist_checkpoint(state);
                 self.events.emit(RunEvent::RunFailed {
                     run_id: persisted.run_id.clone(),
                     error,
-                    timestamp: now_string(),
+                    timestamp: self.now_string(),
                 });
                 return Ok(persisted);
             }
@@ -740,7 +750,7 @@ impl GraphRuntime {
             self.apply_update(&mut channels, interrupt.patch, ctx.graph);
             state.channels = channels;
             state.version += 1;
-            state.updated_at = now_string();
+            state.updated_at = self.now_string();
             return Ok(self.suspend(state, &node_id, &interrupt.reason));
         }
 
@@ -767,10 +777,10 @@ impl GraphRuntime {
                 run_id: state.run_id.clone(),
                 node_id: node_id.clone(),
                 output: mask_no_log(output.update, &ctx.graph.channels),
-                timestamp: now_string(),
+                timestamp: self.now_string(),
             });
             state.version += 1;
-            state.updated_at = now_string();
+            state.updated_at = self.now_string();
             return Ok(self.suspend(state, &node_id, reason));
         }
 
@@ -781,12 +791,12 @@ impl GraphRuntime {
             run_id: state.run_id.clone(),
             node_id: node_id.clone(),
             output: mask_no_log(output.update, &ctx.graph.channels),
-            timestamp: now_string(),
+            timestamp: self.now_string(),
         });
 
         state.channels = channels;
         state.version += 1;
-        state.updated_at = now_string();
+        state.updated_at = self.now_string();
 
         // Fan-out: run the parallel branches CONCURRENTLY, then continue at the
         // declared join node. Two invariants make this deterministic despite the
@@ -805,7 +815,7 @@ impl GraphRuntime {
                 self.events.emit(RunEvent::NodeStarted {
                     run_id: state.run_id.clone(),
                     node_id: parallel_id.clone(),
-                    timestamp: now_string(),
+                    timestamp: self.now_string(),
                 });
             }
             // Build each branch future from the shared snapshot. Calling the handler
@@ -828,7 +838,7 @@ impl GraphRuntime {
                     run_id: state.run_id.clone(),
                     node_id: parallel_id,
                     output: mask_no_log(branch.update, &ctx.graph.channels),
-                    timestamp: now_string(),
+                    timestamp: self.now_string(),
                 });
             }
             Some(fan.join_at)
@@ -854,13 +864,13 @@ impl GraphRuntime {
 
     fn suspend(&self, mut state: GraphState, node_id: &NodeId, reason: &str) -> GraphState {
         state.status = GraphStatus::Suspended;
-        state.updated_at = now_string();
+        state.updated_at = self.now_string();
         let persisted = self.persist_checkpoint(state);
         self.events.emit(RunEvent::RunSuspended {
             run_id: persisted.run_id.clone(),
             node_id: node_id.clone(),
             reason: reason.to_owned(),
-            timestamp: now_string(),
+            timestamp: self.now_string(),
         });
         persisted
     }
@@ -930,7 +940,7 @@ impl GraphRuntime {
             // fresh runtime (napi) can re-seed and re-attach to it.
             set_subgraph_state(&mut state.channels, &child_run_id, &child_state);
             state.version += 1;
-            state.updated_at = now_string();
+            state.updated_at = self.now_string();
             return Ok(self.suspend(state, &node_id, "human-gate"));
         }
 
@@ -946,11 +956,11 @@ impl GraphRuntime {
             run_id: state.run_id.clone(),
             node_id: node_id.clone(),
             output: mask_no_log(child_state.channels.clone(), &entry.graph.channels),
-            timestamp: now_string(),
+            timestamp: self.now_string(),
         });
 
         state.version += 1;
-        state.updated_at = now_string();
+        state.updated_at = self.now_string();
 
         let next = self.next_node(&node_id, &state, parent_ctx.graph);
         match next {
@@ -980,7 +990,7 @@ impl GraphRuntime {
             id,
             run_id: run_id.clone(),
             graph_state,
-            created_at: now_string(),
+            created_at: self.now_string(),
         });
     }
 
@@ -1017,7 +1027,7 @@ impl GraphRuntime {
             id,
             run_id: state.run_id.clone(),
             graph_state: state.clone(),
-            created_at: now_string(),
+            created_at: self.now_string(),
         };
         self.checkpointer.save(checkpoint);
         state
@@ -1240,6 +1250,52 @@ mod tests {
             .expect("a NodeCompleted event for emit");
         assert_eq!(output.get("secret"), Some(&json!("[REDACTED_NO_LOG]")));
         assert_eq!(output.get("public"), Some(&json!("ok")));
+    }
+
+    #[test]
+    fn recorded_clock_replays_in_order_then_clamps() {
+        // ADR 0038: a RecordedClock returns the recorded timestamps in call order, then
+        // clamps to the last value when exhausted (drift-tolerant, never panics).
+        let clock = crate::interfaces::RecordedClock::new(vec!["a".to_owned(), "b".to_owned()]);
+        assert_eq!(clock.now_string(), "a");
+        assert_eq!(clock.now_string(), "b");
+        assert_eq!(clock.now_string(), "b"); // exhausted -> clamps to the last value
+        assert_eq!(clock.now_string(), "b");
+    }
+
+    #[tokio::test]
+    async fn injected_clock_drives_run_timestamps_not_the_wall_clock() {
+        // ADR 0038 (replay-as-evidence): with a RecordedClock injected, the run's durable
+        // timestamps come from the recorded sequence — never the wall clock. Sentinel values
+        // ("100".."102") no real clock would ever produce prove the seam fully drives time.
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("emit"),
+            sync_handler(|_s| NodeOutput::update(upd(&[("v", json!(1))]))),
+        );
+        let def = graph(
+            vec![node("emit", NodeType::Action)],
+            vec![],
+            "emit",
+            vec![channel("v", ChannelReducer::Replace)],
+        );
+        let recorded = vec!["100".to_owned(), "101".to_owned(), "102".to_owned()];
+        let runtime = GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new())
+            .with_clock(Arc::new(crate::interfaces::RecordedClock::new(recorded)));
+        let final_state = runtime
+            .start(RunId::from("run-clock"), BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(final_state.status, GraphStatus::Completed);
+        // created_at is the FIRST now_string() call -> the first recorded value.
+        assert_eq!(final_state.created_at, "100");
+        // every durable timestamp is a recorded/clamped value, never a 13-digit wall-clock millis.
+        let allowed = ["100", "101", "102"];
+        assert!(
+            allowed.contains(&final_state.updated_at.as_str()),
+            "updated_at {} should come from the recorded clock",
+            final_state.updated_at
+        );
     }
 
     #[tokio::test]
