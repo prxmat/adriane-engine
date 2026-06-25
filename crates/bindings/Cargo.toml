@@ -24,7 +24,7 @@ adriane-llm-gateway = { path = "../llm-gateway" }
 adriane-memory = { path = "../memory" }
 adriane-skills = { path = "../skills" }
 async-trait = "0.1"
-napi = { version = "2", default-features = false, features = ["napi8", "async", "tokio_rt"] }
+napi = { version = "3", default-features = false, features = ["napi8", "async", "tokio_rt"] }
 napi-derive = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
