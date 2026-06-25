@@ -464,6 +464,31 @@ impl GraphRuntime {
         self.run_loop(state, ctx).await
     }
 
+    /// Build the **entry** [`GraphState`] of a fresh top-level run — the initial state
+    /// (`status: Running`, channels seeded from `initial_data`, `current_node_id` = the entry
+    /// node, `version: 0`) **without executing or persisting it**.
+    ///
+    /// Surfaced for replay-as-evidence (ADR 0040): a control plane persists this as the checkpoint
+    /// a later [`Self::replay_from`] seeds from, so a recorded run can be re-derived from its very
+    /// start. Deliberately **does not** call `now_string()` or `persist_checkpoint` — both would
+    /// consume a recorded clock tick / the `seq` counter and desync a record-mode run's journal
+    /// from its replay. The cosmetic timestamps are fixed (`"0"`); `replay_from` overwrites
+    /// `updated_at` and assigns a fresh fork id + checkpoint id anyway.
+    pub fn entry_state(&self, run_id: RunId, initial_data: BTreeMap<String, Value>) -> GraphState {
+        let ctx = self.top_ctx();
+        GraphState {
+            run_id,
+            graph_id: ctx.graph.id.clone(),
+            current_node_id: ctx.graph.entry_node_id.clone(),
+            status: GraphStatus::Running,
+            channels: self.build_initial_channels(initial_data, ctx.graph),
+            version: 0,
+            checkpoint_id: None,
+            created_at: "0".to_owned(),
+            updated_at: "0".to_owned(),
+        }
+    }
+
     /// Resume a previously suspended run from its latest checkpoint.
     pub async fn resume(&self, run_id: &RunId) -> Result<GraphState, RuntimeError> {
         self.resume_with_ctx(run_id, self.top_ctx()).await
@@ -1309,6 +1334,80 @@ mod tests {
             allowed.contains(&final_state.updated_at.as_str()),
             "updated_at {} should come from the recorded clock",
             final_state.updated_at
+        );
+    }
+
+    #[tokio::test]
+    async fn entry_state_is_a_replayable_seed_for_the_whole_run() {
+        // ADR 0040: the surfaced entry state, seeded as a checkpoint, re-derives the WHOLE run via
+        // replay_from — reaching the SAME final channels a fresh start reaches. This is the seam
+        // verify-replay relies on (no invariant change: just a clock-free initial-state builder).
+        let build = || {
+            let mut nodes = InMemoryNodeRegistry::new();
+            nodes.register(
+                NodeId::from("first"),
+                sync_handler(|_s| NodeOutput::update(upd(&[("count", json!(1))]))),
+            );
+            nodes.register(
+                NodeId::from("second"),
+                sync_handler(|s| {
+                    let c = s
+                        .channels
+                        .get("count")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    NodeOutput::update(upd(&[("count", json!(c + 10))]))
+                }),
+            );
+            let def = graph(
+                vec![
+                    node("first", NodeType::Action),
+                    node("second", NodeType::Action),
+                ],
+                vec![edge("e1", "first", "second", EdgeType::Default, None)],
+                "first",
+                vec![channel("count", ChannelReducer::Replace)],
+            );
+            GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new())
+        };
+
+        // (1) shape: entry state is the un-run initial state — Running, at the entry node, version 0,
+        // channels seeded, clock-free timestamps (so a record-mode run consumes no extra tick).
+        let entry = build().entry_state(RunId::from("r-entry"), BTreeMap::new());
+        assert_eq!(entry.status, GraphStatus::Running);
+        assert_eq!(entry.current_node_id, NodeId::from("first"));
+        assert_eq!(entry.version, 0);
+        assert_eq!(entry.created_at, "0");
+        assert_eq!(entry.updated_at, "0");
+        assert!(entry.channels.contains_key("count"));
+
+        // (2) baseline: a fresh start reaches count = 11 (1 then +10).
+        let baseline = build()
+            .start(RunId::from("r-base"), BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            baseline.channels.get("count").and_then(|v| v.as_i64()),
+            Some(11)
+        );
+
+        // (3) seeding the entry state as a checkpoint + replay_from re-derives the SAME result.
+        let rt = build();
+        let seed = rt.entry_state(RunId::from("r-entry"), BTreeMap::new());
+        rt.checkpointer().save(Checkpoint {
+            id: CheckpointId("seed".to_owned()),
+            run_id: RunId::from("r-entry"),
+            graph_state: seed,
+            created_at: "0".to_owned(),
+        });
+        let replayed = rt
+            .replay_from(&RunId::from("r-entry"), &CheckpointId("seed".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(replayed.status, GraphStatus::Completed);
+        assert_eq!(
+            replayed.channels.get("count").and_then(|v| v.as_i64()),
+            Some(11)
         );
     }
 

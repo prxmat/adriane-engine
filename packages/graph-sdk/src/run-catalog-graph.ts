@@ -96,6 +96,18 @@ export type CatalogRunOutcome = {
    * control plane persists it to re-feed a later replay (`verify-replay`).
    */
   replayJournal?: string;
+  /**
+   * Replay-as-evidence (ADR 0040): the run's ENTRY state (initial state, before the entry node ran),
+   * surfaced only on a record-mode run; `undefined` otherwise. The control plane persists it as the
+   * checkpoint a later `verify-replay` seeds {@link replayCatalogGraph} from.
+   */
+  entryState?: GraphState;
+  /**
+   * The pending approvals — the subjects the run requested when it suspended on a gate (empty if it
+   * completed without gating). On a {@link replayCatalogGraph} this is what the deterministic
+   * re-execution requested: the faithfulness signal `verify-replay` compares to the attested chain.
+   */
+  pendingApprovals?: { subject: string; reason: string; approvalKey?: string; input?: unknown }[];
 };
 
 /** Options for {@link runCatalogGraph} / {@link resumeCatalogGraph}. */
@@ -300,7 +312,9 @@ export const runCatalogGraph = async (
     state: governed,
     status: governed.status,
     usedRustEngine: true,
-    replayJournal: runner.recordedJournal()
+    replayJournal: runner.recordedJournal(),
+    entryState: runner.recordedEntryState(),
+    pendingApprovals: runner.pendingApprovals()
   };
 };
 
@@ -384,7 +398,14 @@ export const replayCatalogGraph = async (
     runner.subscribe(options.onEvent);
   }
   const replayed = (await runner.replay(state, checkpointId, replayJournal)) as unknown as GraphState;
-  return { state: replayed, status: replayed.status, usedRustEngine: true };
+  // The replay re-suspends at the first gate (no approvals seeded): `pendingApprovals` are the
+  // subjects the deterministic re-execution requested — what verify-replay compares to the chain.
+  return {
+    state: replayed,
+    status: replayed.status,
+    usedRustEngine: true,
+    pendingApprovals: runner.pendingApprovals()
+  };
 };
 
 /** One approval request the seam files, normalized to the `{ description }` subject. */

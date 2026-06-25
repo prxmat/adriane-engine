@@ -170,6 +170,12 @@ impl ReplayMode {
         }
     }
 
+    /// Whether this run is recording (env `ADRIANE_LLM_RECORD`) — the bridge surfaces the
+    /// entry state alongside the journal so a later verify-replay can seed `replay_from` (ADR 0040).
+    fn is_record(&self) -> bool {
+        matches!(self, ReplayMode::Record { .. })
+    }
+
     /// In record mode, serialize the captured journal (LLM I/O + clock) for `RunOutcome`.
     fn recorded_journal_json(&self) -> Option<String> {
         match self {
@@ -227,6 +233,17 @@ pub async fn run(spec_json: String, callbacks: JsCallbacks, entry: Entry) -> nap
     // recorded journal is read back into the outcome after the run.
     let mode = ReplayMode::resolve(&spec, &entry)?;
     let runtime = build_runtime(&spec, callbacks, &mode)?;
+
+    // ADR 0040: in record mode, surface the run's entry state (built clock-free, before driving, so
+    // it consumes no recorded tick) for a `Start` — the control plane persists it as the checkpoint
+    // a later verify-replay seeds `replay_from` from. Captured BEFORE `drive` moves `entry`.
+    let entry_state = if mode.is_record() && matches!(entry, Entry::Start) {
+        let run_id = RunId::from(spec.run_id.clone().unwrap_or_else(|| "run".to_owned()));
+        Some(runtime.entry_state(run_id, spec.initial_data.clone()))
+    } else {
+        None
+    };
+
     let final_state = drive(&runtime, &spec, entry).await?;
 
     let pending_approvals = collect_pending_approvals(&spec, &final_state);
@@ -240,6 +257,7 @@ pub async fn run(spec_json: String, callbacks: JsCallbacks, entry: Entry) -> nap
         status,
         pending_approvals,
         replay_journal: mode.recorded_journal_json(),
+        entry_state,
     };
     serde_json::to_string(&outcome).map_err(|error| napi::Error::from_reason(error.to_string()))
 }

@@ -294,6 +294,12 @@ pub struct RunOutcome {
     /// `None` otherwise. The control plane persists it to re-feed a later verify-replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_journal: Option<String>,
+    /// Replay-as-evidence (ADR 0040): the run's **entry** [`GraphState`] (initial state, before the
+    /// entry node ran), surfaced only on a record-mode `Entry::Start`. `None` otherwise. The control
+    /// plane persists it as the checkpoint a later verify-replay seeds `replay_from` from, so the
+    /// run can be re-derived from its very start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_state: Option<GraphState>,
 }
 
 #[cfg(test)]
@@ -578,6 +584,7 @@ mod tests {
                 input: None,
             }],
             replay_journal: None,
+            entry_state: None,
         };
         let wire = serde_json::to_string(&outcome).expect("serializes");
         assert!(wire.contains("\"pendingApprovals\""));

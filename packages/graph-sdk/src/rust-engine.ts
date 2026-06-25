@@ -296,6 +296,12 @@ type RunOutcomeWire = {
    * control plane persists it to re-feed a later replay.
    */
   replayJournal?: string;
+  /**
+   * Replay-as-evidence (ADR 0040): the run's ENTRY state (initial state, before the entry node
+   * ran), surfaced only on a record-mode start; `undefined` otherwise. The control plane persists it
+   * as the checkpoint a later verify-replay seeds `replayFrom` from, to re-derive the run from start.
+   */
+  entryState?: GraphState;
 };
 
 /** Payload the Rust `on_node` seam sends for a JS node handler or a JS tool. */
@@ -323,6 +329,10 @@ export class RustGraphRunner<TState extends ChannelValues> {
   private readonly eventSubscribers = new Set<(event: RunEvent) => void>();
   /** The last run's recorded journal (ADR 0038, record mode); `undefined` outside record mode. */
   private lastReplayJournal: string | undefined;
+  /** The last record-mode run's ENTRY state (ADR 0040); `undefined` outside record mode. */
+  private lastEntryState: GraphState | undefined;
+  /** The last run's pending approvals (the requested subjects when it suspended on a gate). */
+  private lastPendingApprovals: RunOutcomeWire["pendingApprovals"] = [];
 
   /** Construct only after {@link rustEngineAvailable} returned true. */
   public constructor(native: NativeEngine, parts: RustRunnerParts<TState>) {
@@ -334,6 +344,18 @@ export class RustGraphRunner<TState extends ChannelValues> {
    * (`ADRIANE_LLM_RECORD`) — the control plane persists it to re-feed a replay (ADR 0038). */
   public recordedJournal(): string | undefined {
     return this.lastReplayJournal;
+  }
+
+  /** The ENTRY state of the last record-mode run (ADR 0040) — the control plane persists it as the
+   * checkpoint a later verify-replay seeds `replay` from. `undefined` outside record mode. */
+  public recordedEntryState(): GraphState | undefined {
+    return this.lastEntryState;
+  }
+
+  /** The pending approvals (requested subjects) from the last run, when it suspended on a gate.
+   * On a replay this is what the deterministic re-execution requested — the faithfulness signal. */
+  public pendingApprovals(): RunOutcomeWire["pendingApprovals"] {
+    return this.lastPendingApprovals;
   }
 
   /** Whether the installed native addon supports replay (`engineReplay`) — feature-detected. */
@@ -461,6 +483,10 @@ export class RustGraphRunner<TState extends ChannelValues> {
     const outcome = JSON.parse(outcomeJson) as RunOutcomeWire;
     // ADR 0038: capture a record-mode run's journal so callers can persist it (`recordedJournal`).
     this.lastReplayJournal = outcome.replayJournal;
+    // ADR 0040: capture the entry state (record mode) + the run's pending approvals (the requested
+    // subjects when it suspended on a gate) — both are inputs/outputs the verify-replay flow reads.
+    this.lastEntryState = outcome.entryState;
+    this.lastPendingApprovals = outcome.pendingApprovals ?? [];
     // The wire state is already a valid camelCase GraphState; channels are the typed
     // shape declared by the builder, so this cast is exact (no field reshaping).
     return outcome.state as unknown as TypedGraphState<TState>;
