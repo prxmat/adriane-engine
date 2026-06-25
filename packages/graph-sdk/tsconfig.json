@@ -10,6 +10,8 @@
     "../model-core/src/**/*",
     "../graph-core/src/**/*",
     "../graph-runtime/src/**/*",
+    "../graph-adriane/src/**/*",
+    "../lang-adriane/src/**/*",
     "../memory-store/src/**/*",
     "../search/src/**/*",
     "../llm-gateway/src/**/*",
