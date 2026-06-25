@@ -8,6 +8,13 @@ export type RequestApprovalParams = {
   nodeId: NodeId;
   requestedBy: string;
   subject: ArtifactRef | { description: string };
+  /**
+   * Tenant the approval belongs to (ADR 0036 #4). Optional + back-compat: the engine itself is
+   * tenant-agnostic and omits it; the CONTROL PLANE supplies it so an approval can be tenant-scoped
+   * at the persistence layer (and so off-run gates — e.g. A2A outbound delegation — carry a tenant
+   * even without a real run row). When set, an impl SHOULD persist + filter on it.
+   */
+  tenantId?: string;
 };
 
 export interface ApprovalEngine {
