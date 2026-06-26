@@ -24,6 +24,29 @@ use sha2::{Digest, Sha256};
 use crate::middleware::{AgentMiddleware, Flow, RunCtx};
 use crate::react::AgentResult;
 
+/// Reserved input channel (ADR 0026 Phase B): durable memory items the CONTROL PLANE recalled from
+/// the persistent store (e.g. Neo4j) before the run and seeded here, as a JSON array of strings.
+/// When present, `before_run` injects these (cross-process durable recall) instead of the in-process
+/// store recall — the OSS default still recalls from the in-process store when the channel is absent.
+pub const MEMORY_RECALL_CHANNEL: &str = "__memoryRecall";
+
+/// Read `__memoryRecall` as a list of recalled memory texts (control-plane-seeded). Tolerant: a
+/// missing/malformed channel yields an empty list (fail-open — never sinks the run).
+fn read_recall_channel(
+    channels: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Vec<String> {
+    channels
+        .get(MEMORY_RECALL_CHANNEL)
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Recall-before / persist-after long-term memory over the [`MemoryStore`] seam.
 pub struct MemoryMiddleware {
     store: Arc<dyn MemoryStore>,
@@ -70,31 +93,44 @@ impl AgentMiddleware for MemoryMiddleware {
     async fn before_run(
         &self,
         conversation: &mut Vec<LlmMessage>,
-        _ctx: &RunCtx<'_>,
+        ctx: &RunCtx<'_>,
     ) -> Result<Flow, LlmError> {
         // Vector recall runs for Vector | Both. Graph-only mode auto-recall needs entity linking
         // (deferred to control-plane extraction) — the seam's neighbors() is available meanwhile.
         if !matches!(self.policy.mode, RecallMode::Vector | RecallMode::Both) {
             return Ok(Flow::Continue);
         }
-        let Some(seed_text) = conversation.first().map(|m| m.content.clone()) else {
-            return Ok(Flow::Continue);
+        // Phase B durable recall: if the control plane seeded `__memoryRecall` with items it recalled
+        // from the persistent store (Neo4j) pre-run, prefer those (cross-process, durable). When the
+        // channel is absent we fall back to the in-process store (the OSS default). Either way recall
+        // only mutates the SEED — no runtime state change (determinism preserved).
+        let recalled = {
+            let durable = read_recall_channel(ctx.channels);
+            if !durable.is_empty() {
+                durable
+            } else {
+                let Some(seed_text) = conversation.first().map(|m| m.content.clone()) else {
+                    return Ok(Flow::Continue);
+                };
+                // Fail-open throughout: a recall failure must not sink the run.
+                let Some(query) = self.embed_one(&seed_text).await else {
+                    return Ok(Flow::Continue);
+                };
+                match self
+                    .store
+                    .recall_by_vector(&self.namespace, &query, self.policy.top_k)
+                    .await
+                {
+                    Ok(hits) if !hits.is_empty() => {
+                        hits.into_iter().map(|hit| hit.text).collect::<Vec<_>>()
+                    }
+                    _ => return Ok(Flow::Continue),
+                }
+            }
         };
-        // Fail-open throughout: a recall failure must not sink the run.
-        let Some(query) = self.embed_one(&seed_text).await else {
-            return Ok(Flow::Continue);
-        };
-        let hits = match self
-            .store
-            .recall_by_vector(&self.namespace, &query, self.policy.top_k)
-            .await
-        {
-            Ok(hits) if !hits.is_empty() => hits,
-            _ => return Ok(Flow::Continue),
-        };
-        let recalled = hits
+        let recalled = recalled
             .iter()
-            .map(|hit| format!("- {}", hit.text))
+            .map(|text| format!("- {text}"))
             .collect::<Vec<_>>()
             .join("\n");
         let block = format!(
@@ -197,6 +233,35 @@ mod tests {
         assert!(conversation[0]
             .content
             .contains("Input: what is the capital of France?"));
+    }
+
+    #[tokio::test]
+    async fn durable_recall_channel_injects_without_touching_the_store() {
+        // Empty in-process store: only the control-plane-seeded `__memoryRecall` channel can supply
+        // recalled items (Phase B — durable Neo4j recall happens in the control plane, not here).
+        let store = Arc::new(InMemoryMemoryStore::new());
+        let mw = MemoryMiddleware::new(
+            store,
+            Arc::new(MockEmbedder),
+            "tenant:t1:agent:a",
+            None,
+            RetrievalPolicy::default(),
+        );
+        let approved = HashSet::new();
+        let mut channels = BTreeMap::new();
+        channels.insert(
+            MEMORY_RECALL_CHANNEL.to_owned(),
+            serde_json::json!(["the user prefers metric units", "deploy target is Scaleway"]),
+        );
+        let mut conversation = vec![LlmMessage::text("user", "Input: what units?")];
+        mw.before_run(&mut conversation, &ctx(&approved, &channels))
+            .await
+            .unwrap();
+        assert!(conversation[0].content.contains("Relevant memory"));
+        assert!(conversation[0].content.contains("prefers metric units"));
+        assert!(conversation[0].content.contains("Scaleway"));
+        // Original seed preserved after the recalled block.
+        assert!(conversation[0].content.contains("Input: what units?"));
     }
 
     #[tokio::test]

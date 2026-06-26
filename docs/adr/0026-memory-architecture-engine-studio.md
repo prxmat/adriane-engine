@@ -146,6 +146,25 @@ The first OSS-engine slice landed (the seams + in-memory defaults + the loop wir
 - **D5 — provenance on every write IN-SCOPE; LLM entity extraction DEFERRED** to the control plane (sub-phase C): this increment ships entity TYPES + provenance + heuristic persist (the run's reasoning) — **no LLM claim-writing in the OSS engine**.
 - OSS default persistence is the **process-global in-memory store** (recall works across runs intra-process); cross-process durability + the native vector index = Neo4j, control-plane.
 
+## Engine increment shipped — phase B durable-recall channel (2026-06-26, Mathieu GO "1b")
+
+Sub-phase B's engine half: a **reserved input channel** lets the control plane supply the durable
+recall that the in-process store cannot (cross-process Neo4j hits). Minimal + additive — one read in
+`MemoryMiddleware::before_run`, no new wire shape, no binding change (channels already flow through
+runtime state):
+
+- **`__memoryRecall`** (`crate::memory::MEMORY_RECALL_CHANNEL`) — a JSON array of strings. When the
+  control plane recalls from Neo4j pre-run and seeds this channel into the initial state, `before_run`
+  injects **those** items into the seed (the durable path) and **skips** the in-process store recall.
+  Absent the channel, recall falls back to the in-process store (the unchanged OSS default). Tolerant:
+  a missing/malformed channel → empty list (fail-open). Recall still mutates **only the seed** — no
+  runtime-state change, determinism preserved.
+- **Write path stays control-plane, NO engine change**: the control plane reads the run's reasoning
+  from the outcome state post-run and persists it to Neo4j (`(:MemoryItem)` + vector index). The
+  engine's `after_run` heuristic persist to the in-process store is untouched (OSS default).
+- Gated on the **1.6.0** napi/SDK republish (the channel read ships in `adriane-agents-core`); seeding
+  `__memoryRecall` against an older engine is harmless (the channel is simply ignored).
+
 ## Sub-phasing (each ships + is reviewed independently; governed parts get the closest review)
 
 - **A — Neo4j + durable stores** (control plane, behind seams). Stand up Neo4j (Community, self-hosted) + vector index; migrate the KB out of Postgres; back the `KnowledgeStore` + `BaseStore` (M3) seam impls with Neo4j. No engine seam-shape change. Highest scale unlock + the substrate for the entity graph.
