@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use adriane_agents_core::{
-    agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem,
+    agent_node_handler, map_node_handler, register_fs_tools, ApprovalRequestItem, BrainMiddleware,
     CompressMiddleware, ContextBudgetMiddleware, EventSink, InMemoryToolRegistry, MemoryMiddleware,
     MiddlewareStack, ReActAgent, RedactMiddleware, ReflectionMiddleware, SkillMiddleware,
     StructuredOutputMiddleware, TerseMiddleware, ToolDefinition, APPROVED_TOOLS_CHANNEL,
@@ -566,6 +566,12 @@ fn build_agent_middleware(
             policy,
         )));
     }
+    // ADR 0046 S4: governed-brain context. Always installed (no overlay) + sealed (push_governed): it
+    // injects the `__brainRecall` channel the control plane seeds (the tenant's active entity graph,
+    // recalled tenant-scoped) into the agent seed. A strict no-op when the channel is absent, so the
+    // control plane alone governs WHETHER a run gets brain context. Read-only — brain writes stay in the
+    // control plane (ADR 0046 S2). Replay-safe: the seeded set is journaled in entry state.
+    stack.push_governed(Arc::new(BrainMiddleware::new()));
     // ADR 0035 phase 12: governed skills (progressive disclosure). Installed in the EFFICIENCY
     // layer (so the governed layer — redaction/approval/fs — sees the pre-skill world) but
     // bridge-injected FIRST (before any SDK-resolved efficiency middleware), so it precedes a

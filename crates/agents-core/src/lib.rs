@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod brain;
 pub mod fs_tools;
 pub mod memory;
 pub mod middleware;
@@ -23,6 +24,7 @@ pub mod todos;
 pub mod tools;
 pub mod working_memory;
 
+pub use brain::{BrainMiddleware, BRAIN_RECALL_CHANNEL};
 pub use fs_tools::{fs_tools, register_fs_tools};
 pub use memory::MemoryMiddleware;
 pub use middleware::{
