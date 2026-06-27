@@ -196,6 +196,7 @@ mod tests {
             todos: None,
             usage: None,
             structured_output: None,
+            memory_writes: None,
         }
     }
 

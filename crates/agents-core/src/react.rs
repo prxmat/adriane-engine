@@ -21,6 +21,7 @@ use adriane_llm_gateway::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::memory_tools::{MemoryWrite, REMEMBER_MEMORY_TOOL};
 use crate::middleware::{Flow, MiddlewareStack, RunCtx, ToolCallCtx, ToolControl};
 use crate::todos::{TodoItem, WRITE_TODOS_TOOL};
 use crate::tools::InMemoryToolRegistry;
@@ -98,6 +99,11 @@ pub struct AgentResult {
     /// attaches it in `after_run`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_output: Option<Value>,
+    /// Durable memory write intents from this run's `rememberMemory` tool calls (ADR 0045 Stage 1b).
+    /// Additive + optional (`skip_serializing_if`). The node handler patches them into the reserved
+    /// `__memoryWrites` channel so the control plane persists them durably (Neo4j supersede/forget).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_writes: Option<Vec<MemoryWrite>>,
 }
 
 /// Outcome of the shared tool-execution path (native and `ACTION:` calls).
@@ -241,6 +247,7 @@ impl ReActAgent {
         // The latest `writeTodos` result this run (ADR 0022/0023). The node handler
         // sinks it into the durable todos channel.
         let mut last_todos: Option<Vec<TodoItem>> = None;
+        let mut memory_writes: Vec<MemoryWrite> = Vec::new();
         // ADR 0028 phase 7a: token usage summed across this run's LLM calls.
         let mut usage = LlmUsage::default();
         let tool_defs = self.build_tool_defs();
@@ -297,6 +304,11 @@ impl ReActAgent {
                 todos: last_todos,
                 usage: Some(usage),
                 structured_output: None,
+                memory_writes: if memory_writes.is_empty() {
+                    None
+                } else {
+                    Some(memory_writes.clone())
+                },
             });
         }
 
@@ -389,6 +401,7 @@ impl ReActAgent {
                             &mut approval_requests,
                             &mut conversation,
                             &mut last_todos,
+                            &mut memory_writes,
                         )
                         .await?;
                     if outcome == ToolOutcome::Approval {
@@ -413,6 +426,7 @@ impl ReActAgent {
                         &mut approval_requests,
                         &mut conversation,
                         &mut last_todos,
+                        &mut memory_writes,
                     )
                     .await?;
                 if outcome == ToolOutcome::Approval {
@@ -442,6 +456,11 @@ impl ReActAgent {
             todos: last_todos,
             usage: Some(usage),
             structured_output: None,
+            memory_writes: if memory_writes.is_empty() {
+                None
+            } else {
+                Some(memory_writes)
+            },
         };
         // ADR 0025: `after_run` — finalize / reflection / metadata (empty stack = no-op).
         self.middleware
@@ -478,6 +497,9 @@ impl ReActAgent {
         // When the tool is `writeTodos`, its normalized list is captured here so the
         // node handler can persist it into the durable todos channel (ADR 0022/0023).
         last_todos: &mut Option<Vec<TodoItem>>,
+        // `rememberMemory` write intents are accumulated here for the node handler to patch into
+        // the durable `__memoryWrites` channel (ADR 0045 Stage 1b).
+        memory_writes: &mut Vec<MemoryWrite>,
     ) -> Result<ToolOutcome, LlmError> {
         let resolved = self.tools.as_ref().and_then(|tools| tools.resolve(name));
         let Some((definition, handler)) = resolved else {
@@ -527,6 +549,20 @@ impl ReActAgent {
                 if name == WRITE_TODOS_TOOL {
                     if let Ok(todos) = serde_json::from_value::<Vec<TodoItem>>(value.clone()) {
                         *last_todos = Some(todos);
+                    }
+                }
+                // `rememberMemory` returns the durable key — capture the write intent (key + the
+                // remembered text) for the node handler to drain into `__memoryWrites`.
+                if name == REMEMBER_MEMORY_TOOL {
+                    if let (Some(key), Some(text)) = (
+                        value.get("key").and_then(Value::as_str),
+                        input_for_after.get("text").and_then(Value::as_str),
+                    ) {
+                        memory_writes.push(MemoryWrite {
+                            op: "remember".to_owned(),
+                            key: key.to_owned(),
+                            text: text.to_owned(),
+                        });
                     }
                 }
                 value
@@ -1105,6 +1141,7 @@ mod tests {
             todos: None,
             usage: None,
             structured_output: None,
+            memory_writes: None,
         };
         let wire = serde_json::to_string(&result).expect("serializes");
         assert!(wire.contains("\"approvalRequests\""));
