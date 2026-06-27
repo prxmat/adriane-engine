@@ -14,6 +14,7 @@ use adriane_graph_core::GraphState;
 use adriane_graph_runtime::{NodeHandler, NodeOutput};
 use serde_json::Value;
 
+use crate::memory_tools::MEMORY_WRITES_CHANNEL;
 use crate::react::ReActAgent;
 
 /// Channel holding the names of tools whose human approval has been granted. The
@@ -62,6 +63,14 @@ pub fn agent_node_handler(
                         .todos
                         .as_ref()
                         .map(|todos| serde_json::to_value(todos).unwrap_or(Value::Null));
+                    // ADR 0045 Stage 1b: the agent's durable memory write intents → the reserved
+                    // `__memoryWrites` channel (fixed name, like `__memoryRecall`) for the control
+                    // plane to drain into its durable store. Captured before `result` is consumed.
+                    let memory_writes_value = result
+                        .memory_writes
+                        .as_ref()
+                        .filter(|writes| !writes.is_empty())
+                        .map(|writes| serde_json::to_value(writes).unwrap_or(Value::Null));
                     let value = serde_json::to_value(&result).unwrap_or(Value::Null);
                     let mut patch = BTreeMap::new();
                     patch.insert(output_channel, value);
@@ -69,6 +78,9 @@ pub fn agent_node_handler(
                     // suspension too (they are persisted even on the interrupt path).
                     if let (Some(channel), Some(todos)) = (todos_channel, todos_value) {
                         patch.insert(channel, todos);
+                    }
+                    if let Some(writes) = memory_writes_value {
+                        patch.insert(MEMORY_WRITES_CHANNEL.to_owned(), writes);
                     }
                     if suspend_for_approval && requires_review {
                         NodeOutput::interrupt(AGENT_APPROVAL_INTERRUPT, patch)
