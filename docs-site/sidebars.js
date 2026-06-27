@@ -102,6 +102,7 @@ const sidebars = {
       type: "category",
       label: "Govern",
       items: [
+        "governance/the-moat",
         "governance/approval-decision",
         "governance/governance-model",
         "governance/approval-gates",
