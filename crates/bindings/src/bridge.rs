@@ -981,6 +981,23 @@ fn build_react_agent(
         );
     }
 
+    // ADR 0045 Stage 1b: a memory-enabled agent (it carries a `memory` overlay) gets the built-in
+    // `recallMemory` / `rememberMemory` tools, sealed with the SAME store/embedder/namespace/
+    // principal as its MemoryMiddleware (never user data) — recall/persist tenant-scoped by
+    // construction. The in-process write is best-effort; the durable write drains from the
+    // `__memoryWrites` channel (control-plane half). Mirrors the fs-tools auto-injection above.
+    if let Some(mem) = &agent_spec.memory {
+        let store: Arc<dyn MemoryStore> = MEMORY_STORE.clone();
+        for (definition, handler) in adriane_agents_core::build_memory_tools(
+            store,
+            Arc::new(MockEmbedder),
+            mem.namespace.clone(),
+            Some(format!("agent:{node_id}")),
+        ) {
+            registry.register(definition, handler);
+        }
+    }
+
     // Drive the agent with the RESOLVED provider/model so the request's provider
     // slot matches the adapter the gateway registered (otherwise a tier-resolved
     // mistral request could be issued against an anthropic slot with no adapter).

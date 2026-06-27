@@ -11,6 +11,7 @@
 
 pub mod fs_tools;
 pub mod memory;
+pub mod memory_tools;
 pub mod middleware;
 pub mod node;
 pub mod plan_execute;
@@ -25,6 +26,10 @@ pub mod working_memory;
 
 pub use fs_tools::{fs_tools, register_fs_tools};
 pub use memory::MemoryMiddleware;
+pub use memory_tools::{
+    build_memory_tools, MemoryWrite, MEMORY_WRITES_CHANNEL, RECALL_MEMORY_TOOL,
+    REMEMBER_MEMORY_TOOL,
+};
 pub use middleware::{
     AgentMiddleware, CompressMiddleware, ContextBudgetMiddleware, Flow, MiddlewareStack,
     RedactMiddleware, ReflectionMiddleware, RunCtx, StructuredOutputMiddleware, TerseMiddleware,
