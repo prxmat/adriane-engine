@@ -57,12 +57,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 0.1.0 ships the 3 natively-built targets. Cross targets — x86_64-apple-darwin
-        # (macos-13 Intel) and aarch64-unknown-linux-gnu (zig/manylinux cross, fails on the
-        # out-of-tree crates/* path deps) — are deferred to 0.1.1. See RELEASING.md.
+        # Each target builds NATIVELY on a matching host (no cross-compile): zig/manylinux cross
+        # of aarch64-linux failed on the out-of-tree crates/* path deps, so we use GitHub's native
+        # arm64 Linux runner instead. linux-arm64 unblocks Apple-Silicon Docker (the host arch of a
+        # local linux/arm64 container) + ARM cloud. x86_64-apple-darwin (Intel Mac) stays deferred.
         include:
           - { host: macos-latest, target: aarch64-apple-darwin }
           - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { host: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
           - { host: windows-latest, target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v4
