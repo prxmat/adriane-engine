@@ -171,10 +171,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3 natively-built targets for 0.1.0 (cross targets deferred to 0.1.1, see above).
+        # Each target builds natively on a matching host (maturin manylinux:auto). linux-arm64 uses
+        # GitHub's native arm64 runner — mirrors the napi matrix; x86_64-apple-darwin stays deferred.
         include:
           - { host: macos-latest, target: aarch64-apple-darwin }
           - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { host: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
           - { host: windows-latest, target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v4
@@ -215,3 +217,28 @@ jobs:
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+
+  # 4. Attach the built native binaries (.node + .whl) to the GitHub Release for the tag, so each
+  #    release ships downloadable, independently-verifiable artifacts alongside the npm/PyPI packages
+  #    (e.g. for the offline `@adriane-ai/verify` audit-capsule check). Tag-triggered only — a manual
+  #    workflow_dispatch has no release to attach to. Needs contents:write (the global default is read).
+  gh-release-assets:
+    name: attach release assets
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [npm-publish, pypi-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true # flatten every napi-* and wheels-* artifact into one dir
+      - name: Attach binaries to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*.node
+            release-assets/*.whl
+          generate_release_notes: true
+          fail_on_unmatched_files: true
