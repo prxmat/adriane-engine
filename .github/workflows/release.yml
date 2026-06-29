@@ -41,7 +41,7 @@ jobs:
           fi
           TAG="${GITHUB_REF_NAME#v}"
           fail=0
-          for f in packages/graph-sdk/package.json packages/adriane-cli/package.json crates/bindings/package.json; do
+          for f in packages/graph-sdk/package.json packages/adriane-cli/package.json packages/verify/package.json crates/bindings/package.json; do
             v=$(node -p "require('./$f').version")
             if [[ "$v" != "$TAG" ]]; then echo "::error::$f version $v != tag $TAG"; fail=1; fi
           done
@@ -145,6 +145,14 @@ jobs:
         run: |
           pnpm --filter @adriane-ai/cli build
           pnpm --filter @adriane-ai/cli publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # The offline Certificate-of-Execution verifier (npx @adriane-ai/verify). Depends on graph-sdk
+      # (workspace:* → the version published just above), so it publishes after it.
+      - name: Build + publish @adriane-ai/verify
+        run: |
+          pnpm --filter @adriane-ai/verify build
+          pnpm --filter @adriane-ai/verify publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       # contracts + config: the shared DTO/Zod boundary + env parsing the control plane consumes
