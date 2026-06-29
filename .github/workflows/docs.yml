@@ -39,7 +39,7 @@ jobs:
           # Create + configure the Pages site (source: GitHub Actions) on first run,
           # so no manual Settings -> Pages toggle is needed.
           enablement: true
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs-site/build
 
