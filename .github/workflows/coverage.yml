@@ -34,6 +34,15 @@ jobs:
       - name: Build napi addon
         working-directory: crates/bindings
         run: pnpm exec napi build --platform
+      # @adriane-ai/verify imports the @adriane-ai/graph-sdk BUNDLE (dist), not its source — so its
+      # vitest project needs the bundle present, AND graph-sdk's dist re-exports @adriane-ai/model-core
+      # (its one external, non-inlined dep) which must also be built. The unit job gets the whole dist
+      # chain via turbo's ^build; the raw `vitest run --coverage` here does not, so build graph-sdk +
+      # its dependencies through turbo (which honours ^build → model-core first) before the run.
+      # --force: model-core#build has a misconfigured `outputs` key (turbo warns it captures no
+      # files), so a turbo cache HIT would restore an empty dist. Force a real build so dist/ exists.
+      - name: Build graph-sdk + deps (resolved by @adriane-ai/verify tests)
+        run: pnpm exec turbo run build --filter=@adriane-ai/graph-sdk --force
       - name: Run tests with coverage
         run: pnpm test:coverage
       - uses: actions/upload-artifact@v4
