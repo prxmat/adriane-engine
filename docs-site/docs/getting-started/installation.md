@@ -23,6 +23,14 @@ hyphen, so this is the standard pip↔import split, the same as `pip install sci
 `import sklearn`.
 :::
 
+:::caution One engine, two SDKs — but not byte-identical
+The Rust engine is shared, so graphs, runs, governance, and replay behave the same in both. A few
+**authoring conveniences are TypeScript-only** today (e.g. JS callbacks like streaming `stream()` and
+in-process `conditionalEdge` predicates); the Python SDK is JSON-in/JSON-out over the same engine.
+If you're on Python, skim **[One engine, two languages](/docs/sdk-parity/one-engine-two-languages)**
+first so nothing surprises you.
+:::
+
 ## TypeScript
 
 ```bash

@@ -65,7 +65,11 @@ flowchart LR
 - A **human gate** that suspends the run instead of blocking a thread.
 - A **checkpoint** taken after every node, which is what makes `resume` exact.
 
-## Next
+## Next — climb the ladder
 
-- [Your first run](/docs/getting-started/your-first-run) — channels, reducers, action nodes, and conditional routing, built from scratch.
-- [Why Adriane](/docs/introduction/why-adriane) — what the runtime guarantees and why governed, resumable graphs.
+You ran a graph that **suspends**. Two short rungs to the full picture:
+
+1. ➡️ **[Add a real agent](/docs/getting-started/agent-quickstart)** — make a node *think*, in any model (~30 seconds).
+2. **[Govern it](/docs/getting-started/governance-quickstart)** — gate a sensitive tool, approve it, get a signed, replayable attestation.
+
+Then go wider: [Your first run](/docs/getting-started/your-first-run) (build from scratch) · [Why Adriane](/docs/introduction/why-adriane) (the thesis).

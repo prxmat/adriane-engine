@@ -15,6 +15,8 @@ const sidebars = {
       items: [
         "introduction/why-adriane",
         "getting-started/quickstart",
+        "getting-started/agent-quickstart",
+        "getting-started/governance-quickstart",
         "getting-started/installation",
         "getting-started/your-first-run",
         "introduction/comparison",
