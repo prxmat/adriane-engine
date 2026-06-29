@@ -34,6 +34,11 @@ jobs:
       - name: Build napi addon
         working-directory: crates/bindings
         run: pnpm exec napi build --platform
+      # @adriane-ai/verify imports the @adriane-ai/graph-sdk BUNDLE (dist), not its source — so its
+      # vitest project needs the bundle present. The unit job gets it via turbo's ^build; the raw
+      # `vitest run --coverage` here does not, so build it explicitly before the coverage run.
+      - name: Build graph-sdk bundle (resolved by @adriane-ai/verify tests)
+        run: pnpm --filter @adriane-ai/graph-sdk build
       - name: Run tests with coverage
         run: pnpm test:coverage
       - uses: actions/upload-artifact@v4

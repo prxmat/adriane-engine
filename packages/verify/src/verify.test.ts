@@ -15,9 +15,7 @@ const buildCapsule = async (): Promise<Capsule> => {
   process.env.ADRIANE_LLM_RECORD ??= "1";
   const def = exampleGraphs().find((g) => g.slug === "approval-demo")?.definition;
   if (def === undefined) throw new Error("approval-demo example graph not found");
-  const runId = "verify-test-run";
   const outcome = await runCatalogGraph(def, {
-    runId,
     initialData: { input: "Refund ORD-8830 (duplicate charge)." },
     onEvent: () => {},
     providerKeys: {},
@@ -26,7 +24,7 @@ const buildCapsule = async (): Promise<Capsule> => {
   const body = {
     schemaVersion: "1",
     reproduction: {
-      entryCheckpointId: `${runId}:entry`,
+      entryCheckpointId: "verify-test-run:entry",
       entryState: outcome.entryState,
       journal: JSON.parse(outcome.replayJournal ?? "{}"),
       graphDefinition: def
