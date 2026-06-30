@@ -40,7 +40,7 @@ use crate::types::{
 };
 
 /// Model used when the request does not name a Gemini model.
-pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.0-flash";
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
 
 const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
