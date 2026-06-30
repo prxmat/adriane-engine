@@ -1,4 +1,4 @@
-import yaml from "js-yaml";
+import { load } from "js-yaml";
 import type { GraphDefinition } from "@adriane-ai/graph-core";
 
 import { buildGraphAST } from "../parser/build-graph-ast";
@@ -10,7 +10,7 @@ export const compileGraphFile = (
   content: string,
   file: string
 ): { result?: GraphDefinition; diagnostics: Diagnostic[] } => {
-  const raw = yaml.load(content);
+  const raw = load(content);
   const ast = buildGraphAST(raw, file);
   const diagnostics = validateGraphAST(ast);
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {

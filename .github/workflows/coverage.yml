@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -31,9 +31,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The SDK is Rust-only (no TS fallback): tests run graphs on the native engine, so
       # build the napi addon first — `@adriane-ai/napi` loads it from crates/bindings.
+      # Build via cargo (scripts/build-napi.sh), NOT `napi build` (@napi-rs/cli v2), which cannot
+      # compile a napi-derive-3 crate. The CLI v3 migration is a release-pipeline follow-up.
       - name: Build napi addon
-        working-directory: crates/bindings
-        run: pnpm exec napi build --platform
+        run: bash scripts/build-napi.sh
       # @adriane-ai/verify imports the @adriane-ai/graph-sdk BUNDLE (dist), not its source — so its
       # vitest project needs the bundle present, AND graph-sdk's dist re-exports @adriane-ai/model-core
       # (its one external, non-inlined dep) which must also be built. The unit job gets the whole dist

@@ -42,7 +42,7 @@
     "@adriane-ai/model-core": "workspace:*",
     "@adriane-ai/napi": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "pg": "^8.13.1",
+    "pg": "^8.22.0",
     "zod": "^3.24.4"
   },
   "devDependencies": {
