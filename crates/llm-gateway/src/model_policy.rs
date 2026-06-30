@@ -104,10 +104,10 @@ impl Default for ModelPolicy {
         table.insert(
             LlmProvider::Google,
             tier_map(&[
-                (ModelTier::Frontier, "gemini-1.5-pro"),
-                (ModelTier::Balanced, "gemini-2.0-flash"),
-                (ModelTier::Fast, "gemini-2.0-flash"),
-                (ModelTier::Creative, "gemini-2.0-flash"),
+                (ModelTier::Frontier, "gemini-2.5-pro"),
+                (ModelTier::Balanced, "gemini-2.5-flash"),
+                (ModelTier::Fast, "gemini-2.5-flash"),
+                (ModelTier::Creative, "gemini-2.5-flash"),
             ]),
         );
         table.insert(
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(openai.model, "gpt-4o-mini");
 
         let google = policy.resolve(ModelTier::Frontier, &[LlmProvider::Google], None, None);
-        assert_eq!(google.model, "gemini-1.5-pro");
+        assert_eq!(google.model, "gemini-2.5-pro");
 
         let openrouter =
             policy.resolve(ModelTier::Frontier, &[LlmProvider::Openrouter], None, None);
