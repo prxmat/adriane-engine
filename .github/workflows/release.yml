@@ -80,17 +80,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: ${{ matrix.target }}
-      - if: ${{ matrix.zig }}
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
       - run: pnpm install --frozen-lockfile
       - name: napi build (release, per-platform)
         working-directory: crates/bindings
         run: >
           pnpm exec napi build --platform --release
           --target ${{ matrix.target }}
-          ${{ matrix.zig && '--zig' || '' }}
           --js napi-generated.js --dts napi-generated.d.ts
       - uses: actions/upload-artifact@v4
         with:
@@ -123,7 +118,7 @@ jobs:
         run: pnpm exec napi artifacts -d artifacts-dl
       - name: Publish @adriane-ai/napi-<triple> packages + update optionalDependencies
         working-directory: crates/bindings
-        run: pnpm exec napi prepublish -t npm --skip-gh-release
+        run: pnpm exec napi pre-publish --tag-style npm --no-gh-release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish @adriane-ai/napi (main package)
