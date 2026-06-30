@@ -24,8 +24,13 @@ adriane-llm-gateway = { path = "../llm-gateway" }
 adriane-memory = { path = "../memory" }
 adriane-skills = { path = "../skills" }
 async-trait = "0.1"
-napi = { version = "2", default-features = false, features = ["napi8", "async", "tokio_rt"] }
-napi-derive = "2"
+# `dyn-symbols` (on by default in napi 3, but we disable defaults to pin the N-API
+# version) resolves the N-API host symbols dynamically via libloading at runtime
+# instead of as link-time externs — so the cdylib loads them from the Node host AND
+# the crate's own `cargo test` binary links cleanly outside Node (napi 2 did not gate
+# this behind a feature; napi 3 does).
+napi = { version = "3", default-features = false, features = ["napi8", "async", "tokio_rt", "dyn-symbols"] }
+napi-derive = "3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

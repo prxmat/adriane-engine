@@ -7,10 +7,11 @@
 //! - The whole thing runs inside an **async** napi fn, so the JS main thread is free
 //!   to service the TSFN callbacks while the Rust run future is parked.
 //! - Every JS seam is an **async** JS callback (it returns a `Promise`). Rust calls
-//!   it with [`ThreadsafeFunction::call_async::<Promise<String>>`] — which resolves
-//!   to a napi [`Promise<String>`] — and then `.await`s that promise to its
-//!   JS-resolved value. Node handlers and tool `execute` fns are async on the Rust
-//!   side too, so they simply `.await` both stages inline.
+//!   it with [`ThreadsafeFunction::call_async`] — whose `Return = Promise<String>`
+//!   comes from the TSFN generics in napi 3 — which resolves to a napi
+//!   [`Promise<String>`], and then `.await`s that promise to its JS-resolved value.
+//!   Node handlers and tool `execute` fns are async on the Rust side too, so they
+//!   simply `.await` both stages inline.
 //! - Condition predicates are **synchronous** by the runtime contract
 //!   (`Fn(&GraphState) -> bool`), so the closure itself cannot `.await`. It still
 //!   drives an **async** (Promise-returning) JS predicate: it `spawn`s the
@@ -54,15 +55,20 @@ use adriane_memory::{InMemoryMemoryStore, MemoryStore, MockEmbedder, RecallMode,
 use adriane_skills::{InMemorySkillStore, SkillStore};
 use async_trait::async_trait;
 use napi::bindgen_prelude::Promise;
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::Status;
 use serde_json::{json, Value};
 
 use crate::spec::{AgentSpec, ApprovedTool, EngineSpec, FsPolicyRule, RunOutcome};
 
-/// A TSFN that takes one JS string argument. We use the `Fatal` error strategy so
-/// the JS callback receives just `(payloadString)` (no leading error arg) and a
-/// throw surfaces as a fatal napi exception rather than a silently-handled error.
-type StringTsfn = ThreadsafeFunction<String, ErrorStrategy::Fatal>;
+/// A TSFN that takes one JS string argument. napi 3 dropped `ErrorStrategy`; the
+/// napi-2 `Fatal` behavior is the `CalleeHandled = false` const-generic (5th param):
+/// the JS callback receives just `(payloadString)` (no leading error arg), `.call(...)`
+/// takes a bare `String`, and a throw surfaces as a fatal napi exception rather than a
+/// silently-handled error. `Return = Promise<String>` is the value the async seams
+/// await (`call_async(..).await?.await?`); the fire-and-forget `on_event` never awaits
+/// it. `CallJsBackArgs` stays the default `T` so the payload marshals as one JS string.
+type StringTsfn = ThreadsafeFunction<String, Promise<String>, String, Status, false>;
 
 /// Which entry point the caller asked for.
 #[derive(Clone, Debug)]
@@ -196,28 +202,32 @@ impl ReplayMode {
     }
 }
 
-/// The three JS callbacks, as TSFNs cloned into every seam closure.
+/// The three JS callbacks, shared into every seam closure. napi 3's
+/// `ThreadsafeFunction` is no longer `Clone` (napi 2 was), so each is held behind an
+/// `Arc`; cloning an `Arc` shares the SAME underlying threadsafe-function handle (which
+/// is itself `Arc`-refcounted), preserving the napi-2 "clone the TSFN into each closure"
+/// semantics — same JS callback, refcounted alive until the last clone drops.
 #[derive(Clone)]
 pub struct JsCallbacks {
     /// `(payloadJson) -> updateJson` — JS node handlers (`kind:"node"`) and JS tool
     /// `execute` fns (`kind:"tool"`). The return is the channel-update JSON (node)
     /// or the tool-result JSON (tool).
-    on_node: StringTsfn,
+    on_node: Arc<StringTsfn>,
     /// `(payloadJson) -> boolean` — named condition predicates.
-    on_condition: StringTsfn,
+    on_condition: Arc<StringTsfn>,
     /// `(payloadJson)` — fire-and-forget run-lifecycle event sink.
-    on_event: StringTsfn,
+    on_event: Arc<StringTsfn>,
 }
 
 impl JsCallbacks {
-    /// Wrap the three already-converted TSFNs. The conversion from `JsFunction`
-    /// happens in napi's `FromNapiValue` for `ThreadsafeFunction`, which maps each
-    /// `String` payload into a single JS string argument.
+    /// Wrap the three already-converted TSFNs in `Arc`s. The conversion from
+    /// `JsFunction` happens in napi's `FromNapiValue` for `ThreadsafeFunction`, which
+    /// maps each `String` payload into a single JS string argument.
     pub fn new(on_node: StringTsfn, on_condition: StringTsfn, on_event: StringTsfn) -> Self {
         JsCallbacks {
-            on_node,
-            on_condition,
-            on_event,
+            on_node: Arc::new(on_node),
+            on_condition: Arc::new(on_condition),
+            on_event: Arc::new(on_event),
         }
     }
 }
@@ -871,7 +881,7 @@ fn now_string() -> String {
 /// enters the in-memory events vector, a checkpoint, or the durable journal. Built only when
 /// the run opted into streaming (`EngineSpec::stream_tokens`).
 struct TokenStreamSink {
-    on_event: StringTsfn,
+    on_event: Arc<StringTsfn>,
     run_id: RunId,
     node_id: NodeId,
 }
@@ -1475,13 +1485,14 @@ fn parse_provider(provider: &str) -> LlmProvider {
 // ---------------------------------------------------------------------------
 
 /// Call an **async** JS string callback from an async context and await its result.
-/// The JS callback returns a `Promise<string>`: `call_async::<Promise<String>>`
-/// resolves the (synchronously returned) promise object, and the inner `.await`
+/// The JS callback returns a `Promise<string>`: napi 3's `call_async` resolves the
+/// (synchronously returned) promise object — the `Return = Promise<String>` type now
+/// comes from the TSFN's generics rather than a turbofish — and the inner `.await`
 /// drives that promise to its JS-resolved string. (`Result` is shadowed by the napi
 /// prelude here, so the std one is explicit.)
 async fn call_js_string(tsfn: &StringTsfn, payload: Value) -> std::result::Result<String, String> {
-    let promise = tsfn
-        .call_async::<Promise<String>>(payload.to_string())
+    let promise: Promise<String> = tsfn
+        .call_async(payload.to_string())
         .await
         .map_err(|error| error.to_string())?;
     promise.await.map_err(|error| error.to_string())
@@ -1495,8 +1506,13 @@ async fn call_js_string(tsfn: &StringTsfn, payload: Value) -> std::result::Resul
 /// other worker threads while this one waits, avoiding starvation. The JS callback
 /// resolves its `Promise` to a boolean-ish value, serialized as a JSON string
 /// (`"true"`/`"false"`, or any JSON whose truthiness we read).
-fn call_js_bool_awaiting(tsfn: &StringTsfn, payload: Value) -> std::result::Result<bool, String> {
-    let tsfn = tsfn.clone();
+fn call_js_bool_awaiting(
+    tsfn: &Arc<StringTsfn>,
+    payload: Value,
+) -> std::result::Result<bool, String> {
+    // Arc-clone the shared TSFN so the spawned `'static` task owns a handle to the same
+    // underlying JS callback (napi 3's TSFN is not `Clone`; the `Arc` is — see `JsCallbacks`).
+    let tsfn = Arc::clone(tsfn);
     let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<String, String>>(1);
     tokio::task::block_in_place(move || {
         napi::bindgen_prelude::spawn(async move {

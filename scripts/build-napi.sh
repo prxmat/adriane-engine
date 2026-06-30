@@ -24,4 +24,12 @@ esac
 DEST="bindings/adriane_napi.node"
 cp "target/debug/${LIB_NAME}" "$DEST"
 
+# On Apple Silicon, copying a freshly-linked Mach-O dylib to a new path invalidates its
+# linker ad-hoc code signature, so dyld SIGKILLs the process with "Code Signature
+# Invalid" the moment Node dlopen()s it. Re-sign the copy ad-hoc to make it loadable.
+# (The `napi build` CLI does this for us; a plain `cp` does not.) No-op off macOS.
+if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - "$DEST"
+fi
+
 echo "adriane-napi dev build OK -> $(pwd)/${DEST}"

@@ -20,10 +20,11 @@
 //!    `Send` (see `graph-runtime`), which is what lets napi's tokio runtime drive it.
 //!
 //! The JS seam callbacks are **async**: `on_node` and `on_condition` return a
-//! `Promise`, and Rust *awaits* it. `ThreadsafeFunction::call_async::<Promise<T>>`
-//! resolves the synchronously-returned promise object, and a further `.await` drives
-//! that promise to its JS-resolved value (napi's `Promise<T>` implements both
-//! `FromNapiValue` and `Future`). So `on_node` resolves to a JSON string and
+//! `Promise`, and Rust *awaits* it. `ThreadsafeFunction::call_async` (napi 3 takes the
+//! `Return = Promise<String>` from the TSFN generics, not a turbofish) resolves the
+//! synchronously-returned promise object, and a further `.await` drives that promise to
+//! its JS-resolved value (napi's `Promise<T>` implements both `FromNapiValue` and
+//! `Future`). So `on_node` resolves to a JSON string and
 //! `on_condition` to a boolean-ish JSON string, each *after* any JS `await` inside
 //! the callback. `on_event` stays fire-and-forget (no return awaited).
 
@@ -37,16 +38,25 @@ use std::collections::BTreeMap;
 use adriane_graph_adriane::compile_graph_yaml;
 use adriane_graph_core::{validate_graph, GraphDefinition};
 use adriane_llm_gateway::{LlmGateway, LlmRequest};
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction};
+use napi::bindgen_prelude::Promise;
+use napi::threadsafe_function::ThreadsafeFunction;
+use napi::Status;
 use napi_derive::napi;
 use serde_json::Value;
 
 /// A JS callback taking one string argument. Declared as a napi `ThreadsafeFunction`
 /// (which is `Send + Sync`) so the async run future can capture it across `.await`
 /// points — a bare `JsFunction` is `!Send` and would make the future non-`Send`.
-/// `ErrorStrategy::Fatal` means JS receives `(payloadString)` with no leading error
-/// argument, and a JS throw surfaces as a fatal napi exception.
-type StringCallback = ThreadsafeFunction<String, ErrorStrategy::Fatal>;
+///
+/// napi 3 removed `ErrorStrategy`; the napi-2 `Fatal` behavior is now the
+/// `CalleeHandled = false` const-generic (the 5th type param): JS receives
+/// `(payloadString)` with no leading error argument, `.call(...)` takes a bare
+/// `String` (not a `Result`), and a JS throw surfaces as a fatal napi exception.
+/// `Return = Promise<String>` is what the async seams (`on_node`/`on_condition`)
+/// await; `on_event` is fire-and-forget and never awaits it. `CallJsBackArgs`
+/// stays the default `T` (`String`) so the napi-generated marshalling passes the
+/// payload as a single JS string argument.
+type StringCallback = ThreadsafeFunction<String, Promise<String>, String, Status, false>;
 
 /// Version of the bound Rust engine.
 #[napi]
