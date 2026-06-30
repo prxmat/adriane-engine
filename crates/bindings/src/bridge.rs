@@ -921,7 +921,7 @@ fn build_react_agent(
     // Resolve the concrete model BEFORE building the gateway, so the registered
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
     // mistral-only env -> mistral-small-latest through the Mistral adapter).
-    let resolved = resolve_agent_model(agent_spec);
+    let resolved = resolve_agent_model(agent_spec, &spec.provider_keys);
     // ADR 0025 phase 3b: the gateway is now the BARE provider router; PII redaction +
     // prompt compression are agent middleware on the stack (built below), not gateway
     // wrappers. The RedactingGateway/CompressingGateway structs remain for non-agent callers.
@@ -1141,7 +1141,7 @@ fn js_tool_handler(tool_name: String, callbacks: &JsCallbacks) -> adriane_agents
 ///   provider is returned.
 /// - Otherwise (neither model nor tier), the agent's nominal provider is used with
 ///   no pinned model, leaving model selection to the adapter's own default.
-fn resolve_agent_model(agent_spec: &AgentSpec) -> ModelChoice {
+fn resolve_agent_model(agent_spec: &AgentSpec, keys: &BTreeMap<String, String>) -> ModelChoice {
     if let Some(model) = &agent_spec.model {
         return ModelChoice {
             provider: parse_provider(&agent_spec.provider),
@@ -1151,14 +1151,53 @@ fn resolve_agent_model(agent_spec: &AgentSpec) -> ModelChoice {
     }
     if let Some(tier) = agent_spec.tier {
         let policy = ModelPolicy::default();
-        let available = policy.available_from_env();
-        return policy.resolve(tier, &available, None, None);
+        // Availability = env credentials UNION control-plane provider_keys (ADR 0010), so a tenant
+        // key supplied only via EngineSpec.provider_keys still makes its provider usable (no mock).
+        let available = available_from_keys_or_env(&policy, keys);
+        // Honor the agent's DECLARED provider when it names an available one: pin it as the
+        // override so the tier maps onto ITS model column instead of the env preference order —
+        // otherwise provider:"mistral" gets silently re-routed to a higher-preference provider
+        // (e.g. Google) and a deprecated default model. Blank/unavailable declaration falls back to
+        // preference order over `available`.
+        let declared = parse_provider(&agent_spec.provider);
+        let override_provider =
+            if !agent_spec.provider.trim().is_empty() && available.contains(&declared) {
+                Some(declared)
+            } else {
+                None
+            };
+        return policy.resolve(tier, &available, override_provider, None);
     }
     ModelChoice {
         provider: parse_provider(&agent_spec.provider),
         model: String::new(),
         recommended: false,
     }
+}
+
+/// Providers usable for this run: those with a tenant key in `keys` (ADR 0010) OR an env
+/// credential, in policy preference order. Tenant-key-first, env fallback — the same precedence
+/// `register_provider_adapter::key_for` applies when it actually builds the adapter.
+fn available_from_keys_or_env(
+    policy: &ModelPolicy,
+    keys: &BTreeMap<String, String>,
+) -> Vec<LlmProvider> {
+    let mut available = policy.available_from_env();
+    for (id, provider) in [
+        ("anthropic", LlmProvider::Anthropic),
+        ("openai", LlmProvider::Openai),
+        ("google", LlmProvider::Google),
+        ("mistral", LlmProvider::Mistral),
+        ("openrouter", LlmProvider::Openrouter),
+        ("minimax", LlmProvider::Minimax),
+        ("huggingface", LlmProvider::Huggingface),
+    ] {
+        let has_key = keys.get(id).is_some_and(|v| !v.is_empty());
+        if has_key && !available.contains(&provider) {
+            available.push(provider);
+        }
+    }
+    available
 }
 
 /// Build the gateway that backs the agent, registering an adapter that matches the
@@ -1713,7 +1752,7 @@ mod tests {
 
         let gateway = build_gateway(
             &agent_spec,
-            &resolve_agent_model(&agent_spec),
+            &resolve_agent_model(&agent_spec, &BTreeMap::new()),
             &BTreeMap::new(),
             None,
             &ReplayMode::Live,
@@ -1937,7 +1976,7 @@ mod tests {
         };
         let gateway = build_gateway(
             &agent_spec,
-            &resolve_agent_model(&agent_spec),
+            &resolve_agent_model(&agent_spec, &BTreeMap::new()),
             &BTreeMap::new(),
             None,
             &ReplayMode::Live,
@@ -2101,7 +2140,7 @@ mod tests {
             memory: None,
             skills: None,
         };
-        let resolved = resolve_agent_model(&agent_spec);
+        let resolved = resolve_agent_model(&agent_spec, &BTreeMap::new());
         assert_eq!(resolved.provider, LlmProvider::Anthropic);
         assert_eq!(resolved.model, "claude-pinned");
         assert!(!resolved.recommended);
@@ -2137,7 +2176,7 @@ mod tests {
         std::env::remove_var("ADRIANE_USE_OLLAMA");
 
         let agent_spec = AgentSpec {
-            provider: "anthropic".to_owned(), // nominal hint; tier resolution ignores it
+            provider: "anthropic".to_owned(), // declared but unavailable (no key) → preference order over the available set
             model: None,
             tier: Some(adriane_llm_gateway::ModelTier::Fast),
             system: None,
@@ -2155,7 +2194,7 @@ mod tests {
             memory: None,
             skills: None,
         };
-        let resolved = resolve_agent_model(&agent_spec);
+        let resolved = resolve_agent_model(&agent_spec, &BTreeMap::new());
         assert_eq!(resolved.provider, LlmProvider::Mistral);
         assert_eq!(resolved.model, "mistral-small-latest");
         assert!(resolved.recommended);
@@ -2173,6 +2212,62 @@ mod tests {
 
         // Restore env so other tests see a pristine environment.
         restore_env("MISTRAL_API_KEY", prev_mistral);
+        restore_env("ANTHROPIC_API_KEY", prev_anthropic);
+        restore_env("ADRIANE_USE_OLLAMA", prev_ollama);
+    }
+
+    /// REGRESSION (the engine LLM-routing fix): with BOTH GEMINI_API_KEY and MISTRAL_API_KEY set, a
+    /// `balanced`-tier agent that DECLARES provider:"mistral" must resolve to Mistral — not Google,
+    /// which sorts ahead of Mistral in the policy preference order and would otherwise hijack it to
+    /// the (deprecated) gemini default. Also asserts a Mistral key supplied ONLY via provider_keys
+    /// (env-less, ADR 0010) resolves to Mistral, never the 0-token Mock.
+    #[test]
+    fn declared_provider_wins_over_preference_and_provider_keys_count() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev_mistral = std::env::var("MISTRAL_API_KEY").ok();
+        let prev_gemini = std::env::var("GEMINI_API_KEY").ok();
+        let prev_anthropic = std::env::var("ANTHROPIC_API_KEY").ok();
+        let prev_ollama = std::env::var("ADRIANE_USE_OLLAMA").ok();
+
+        std::env::set_var("MISTRAL_API_KEY", "test-mistral");
+        std::env::set_var("GEMINI_API_KEY", "test-gemini");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ADRIANE_USE_OLLAMA");
+
+        let agent_spec = AgentSpec {
+            provider: "mistral".to_owned(),
+            model: None,
+            tier: Some(adriane_llm_gateway::ModelTier::Balanced),
+            system: None,
+            tool_names: vec![],
+            max_iterations: None,
+            suspend_for_approval: false,
+            approval_tool_names: vec![],
+            output_channel: None,
+            output_style: None,
+            context_budget: None,
+            todos_channel: None,
+            enable_fs: false,
+            resolved_middleware: vec![],
+            input_blocks_channel: None,
+            memory: None,
+            skills: None,
+        };
+        // env path: both keys present → the declared Mistral wins over Google's higher preference.
+        let from_env = resolve_agent_model(&agent_spec, &BTreeMap::new());
+        assert_eq!(from_env.provider, LlmProvider::Mistral);
+        assert_eq!(from_env.model, "mistral-medium-latest");
+
+        // provider_keys-only path: env-less Mistral key still resolves to Mistral (not Mock).
+        std::env::remove_var("MISTRAL_API_KEY");
+        std::env::remove_var("GEMINI_API_KEY");
+        let mut keys = BTreeMap::new();
+        keys.insert("mistral".to_owned(), "k".to_owned());
+        let from_keys = resolve_agent_model(&agent_spec, &keys);
+        assert_eq!(from_keys.provider, LlmProvider::Mistral);
+
+        restore_env("MISTRAL_API_KEY", prev_mistral);
+        restore_env("GEMINI_API_KEY", prev_gemini);
         restore_env("ANTHROPIC_API_KEY", prev_anthropic);
         restore_env("ADRIANE_USE_OLLAMA", prev_ollama);
     }
@@ -2223,7 +2318,7 @@ mod tests {
             skills: None,
         };
 
-        let resolved = resolve_agent_model(&agent_spec);
+        let resolved = resolve_agent_model(&agent_spec, &BTreeMap::new());
         assert_eq!(
             resolved.provider,
             LlmProvider::Mock,
