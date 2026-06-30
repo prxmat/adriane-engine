@@ -16,28 +16,23 @@
     "access": "public"
   },
   "napi": {
-    "name": "adriane_napi",
-    "package": {
-      "name": "@adriane-ai/napi"
-    },
-    "triples": {
-      "defaults": false,
-      "additional": [
-        "x86_64-apple-darwin",
-        "aarch64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
-        "aarch64-unknown-linux-gnu",
-        "x86_64-pc-windows-msvc"
-      ]
-    }
+    "binaryName": "adriane_napi",
+    "packageName": "@adriane-ai/napi",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
   },
   "scripts": {
     "build:napi": "napi build --platform --release --js napi-generated.js --dts napi-generated.d.ts",
     "build:napi:debug": "napi build --platform --js napi-generated.js --dts napi-generated.d.ts",
     "artifacts": "napi artifacts",
-    "prepublish:napi": "napi prepublish -t npm"
+    "prepublish:napi": "napi pre-publish --tag-style npm"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.4"
+    "@napi-rs/cli": "^3.0.0"
   }
 }
