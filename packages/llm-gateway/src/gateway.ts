@@ -27,7 +27,7 @@ const LLMToolDefSchema = z.object({
 });
 
 const LLMRequestSchema = z.object({
-  provider: z.enum(["openai", "anthropic", "mistral"]),
+  provider: z.enum(["openai", "anthropic", "mistral", "google"]),
   model: z.string().min(1),
   messages: z.array(LLMMessageSchema).min(1),
   system: z.string().optional(),
