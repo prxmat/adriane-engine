@@ -255,6 +255,21 @@ describe("OpenAICompatibleProviderAdapter", () => {
     expect(calls[0]?.model).toBe("gemini-2.5-flash");
   });
 
+  it(".openai() registers under 'openai' with the OpenAI baseUrl + default model", async () => {
+    const adapter = OpenAICompatibleProviderAdapter.openai("sk-test");
+    expect(adapter.provider).toBe("openai");
+
+    const { port, calls } = recordingPort(textCompletion());
+    const injected = new OpenAICompatibleProviderAdapter({
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o",
+      port
+    });
+    await injected.complete(baseRequest({ model: "react-agent" }));
+    expect(calls[0]?.model).toBe("gpt-4o");
+  });
+
   it(".ollama() registers under 'mistral' and defaults to the local model", async () => {
     const adapter = OpenAICompatibleProviderAdapter.ollama();
     // Registers under the mistral key so it shares the gateway slot with Mistral cloud.

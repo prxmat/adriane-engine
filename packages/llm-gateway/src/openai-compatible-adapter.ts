@@ -17,6 +17,8 @@ const OLLAMA_DEFAULT_MODEL = "mistral";
 // registered under the first-class `google` provider (LLM_PROVIDERS). Bearer-keyed (GEMINI_API_KEY).
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
 const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_DEFAULT_MODEL = "gpt-4o";
 
 /**
  * The OpenAI `/v1/chat/completions` request body the adapter assembles. This is the
@@ -122,6 +124,16 @@ export class OpenAICompatibleProviderAdapter implements LLMProviderAdapter {
       provider: "google",
       baseUrl: GEMINI_BASE_URL,
       defaultModel: model ?? GEMINI_DEFAULT_MODEL,
+      ...(apiKey !== undefined ? { apiKey } : {})
+    });
+  }
+
+  /** OpenAI cloud (the canonical OpenAI-compatible API); registers under the `openai` provider. */
+  public static openai(apiKey?: string, model?: string): OpenAICompatibleProviderAdapter {
+    return new OpenAICompatibleProviderAdapter({
+      provider: "openai",
+      baseUrl: OPENAI_BASE_URL,
+      defaultModel: model ?? OPENAI_DEFAULT_MODEL,
       ...(apiKey !== undefined ? { apiKey } : {})
     });
   }
