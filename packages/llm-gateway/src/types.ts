@@ -1,4 +1,4 @@
-export const LLM_PROVIDERS = ["openai", "anthropic", "mistral", "ollama", "mock"] as const;
+export const LLM_PROVIDERS = ["openai", "anthropic", "mistral", "google", "ollama", "mock"] as const;
 export type LLMProvider = (typeof LLM_PROVIDERS)[number];
 
 export type LLMModel = string;
