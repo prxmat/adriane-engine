@@ -80,7 +80,10 @@ export const AgentNodeMetadataSchema = z.object({
       z.discriminatedUnion("kind", [
         z.object({ kind: z.literal("compress") }),
         z.object({ kind: z.literal("terse") }),
-        z.object({ kind: z.literal("contextBudget"), params: z.object({ chars: z.number().int().min(1) }) }),
+        z.object({
+          kind: z.literal("contextBudget"),
+          params: z.object({ chars: z.number().int().min(1) })
+        }),
         z.object({
           kind: z.literal("reflection"),
           params: z.object({ threshold: z.number().min(0).max(1).optional() }).optional()
@@ -102,19 +105,38 @@ export const AgentNodeMetadataSchema = z.object({
 });
 
 /**
- * The slice of `node.metadata` the catalog carrier owns. Both keys are optional;
- * a node carries at most one (a component OR an agent). Other metadata keys are
- * untouched.
+ * A catalog MAP-AGENTS carrier (ADR 0027 phase 4b — dynamic fan-out): run `subAgent` once per item
+ * in the `overChannel` array and collect the per-item results (in input order) into `joinAt`. The
+ * sub-agent is itself an agent carrier (same shape as a plain agent node → deepagents parity: skills,
+ * memory, fs, planning all apply to each spawn). Mirrors the engine `MapAgentSpec`.
+ */
+export const MapAgentNodeMetadataSchema = z.object({
+  /** Channel holding the array of items to fan the sub-agent out over. */
+  overChannel: z.string().min(1),
+  /** Channel the array of per-item results lands in (one entry per item, in input order). */
+  joinAt: z.string().min(1),
+  /** The sub-agent run per item — a full agent carrier. */
+  subAgent: AgentNodeMetadataSchema,
+  /** When true, a spawn that needs approval suspends the whole map (default false). */
+  suspendForApproval: z.boolean().optional()
+});
+
+/**
+ * The slice of `node.metadata` the catalog carrier owns. All keys are optional;
+ * a node carries at most one (a component OR an agent OR a mapAgents fan-out).
+ * Other metadata keys are untouched.
  */
 export const CatalogNodeMetadataSchema = z
   .object({
     component: ComponentNodeMetadataSchema.optional(),
-    agent: AgentNodeMetadataSchema.optional()
+    agent: AgentNodeMetadataSchema.optional(),
+    mapAgents: MapAgentNodeMetadataSchema.optional()
   })
   .passthrough();
 
 export type ComponentNodeMetadata = z.infer<typeof ComponentNodeMetadataSchema>;
 export type AgentNodeMetadata = z.infer<typeof AgentNodeMetadataSchema>;
+export type MapAgentNodeMetadata = z.infer<typeof MapAgentNodeMetadataSchema>;
 export type CatalogNodeMetadata = z.infer<typeof CatalogNodeMetadataSchema>;
 
 /** Narrow an open metadata bag to its component carrier, if present and valid. */
@@ -136,5 +158,16 @@ export const readAgentMetadata = (
     return undefined;
   }
   const parsed = AgentNodeMetadataSchema.safeParse(metadata.agent);
+  return parsed.success ? parsed.data : undefined;
+};
+
+/** Narrow an open metadata bag to its mapAgents (dynamic fan-out) carrier, if present and valid. */
+export const readMapAgentMetadata = (
+  metadata: Record<string, unknown> | undefined
+): MapAgentNodeMetadata | undefined => {
+  if (metadata === undefined) {
+    return undefined;
+  }
+  const parsed = MapAgentNodeMetadataSchema.safeParse(metadata.mapAgents);
   return parsed.success ? parsed.data : undefined;
 };

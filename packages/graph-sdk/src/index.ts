@@ -107,7 +107,11 @@ export type { PrebuiltOptions, RagAnswererOptions } from "./prebuilt-agents.js";
 
 // Real embeddings + a vector store + a semantic (vector-store) retrieval connector.
 // Exported SDK helpers — NOT catalog component kinds — all injectable for offline tests.
-export { createEmbeddings, MissingEmbeddingsKeyError, EmbeddingsResponseError } from "./embeddings.js";
+export {
+  createEmbeddings,
+  MissingEmbeddingsKeyError,
+  EmbeddingsResponseError
+} from "./embeddings.js";
 export type {
   Embeddings,
   EmbeddingsTransport,
@@ -180,6 +184,7 @@ export {
   isCatalogGraph,
   readComponentCarrier,
   readAgentCarrier,
+  readMapAgentCarrier,
   RustEngineUnavailableError
 } from "./run-catalog-graph.js";
 
@@ -191,7 +196,8 @@ export type {
   CatalogRunOutcome,
   RunCatalogGraphOptions,
   ComponentCarrier,
-  AgentCarrier
+  AgentCarrier,
+  MapAgentCarrier
 } from "./run-catalog-graph.js";
 
 export type {
@@ -320,7 +326,13 @@ export type { ToolRegistry, ToolDefinition, ToolId, AgentResult } from "@adriane
 
 // graph-core — graph-definition types + the validator.
 export { validateGraph, GraphStateSchema, GraphValidationError } from "@adriane-ai/graph-core";
-export type { NodeType, NodeDefinition, EdgeDefinition, EdgeId, GraphId } from "@adriane-ai/graph-core";
+export type {
+  NodeType,
+  NodeDefinition,
+  EdgeDefinition,
+  EdgeId,
+  GraphId
+} from "@adriane-ai/graph-core";
 
 // graph-runtime — engine primitives + checkpoint/interrupt types.
 export {
@@ -329,7 +341,12 @@ export {
   InMemoryEventBus,
   InMemoryNodeRegistry
 } from "@adriane-ai/graph-runtime";
-export type { Checkpointer, Checkpoint, CheckpointId, InterruptConfig } from "@adriane-ai/graph-runtime";
+export type {
+  Checkpointer,
+  Checkpoint,
+  CheckpointId,
+  InterruptConfig
+} from "@adriane-ai/graph-runtime";
 
 // agents-core — the ReAct agent (the control plane builds governed agents over it).
 export { ReActAgent } from "@adriane-ai/agents-core";
@@ -359,7 +376,12 @@ export type {
   AttestationRecord
 } from "@adriane-ai/approval-engine";
 export { InMemoryArtifactStore } from "@adriane-ai/artifact-store";
-export type { ArtifactStore, Artifact, ArtifactId, ArtifactVersion } from "@adriane-ai/artifact-store";
+export type {
+  ArtifactStore,
+  Artifact,
+  ArtifactId,
+  ArtifactVersion
+} from "@adriane-ai/artifact-store";
 
 // DSL compilers (graph-adriane + lang-adriane) — re-exported as the sanctioned YAML-string compile
 // entry point (their @deprecated notes, ADR 0003, say "compile via @adriane-ai/graph-sdk"). Bundled

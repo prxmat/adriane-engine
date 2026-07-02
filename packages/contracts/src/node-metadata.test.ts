@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { AgentNodeMetadataSchema, readAgentMetadata } from "./node-metadata.js";
+import {
+  AgentNodeMetadataSchema,
+  MapAgentNodeMetadataSchema,
+  readAgentMetadata,
+  readMapAgentMetadata
+} from "./node-metadata.js";
 
 /**
  * The agent carrier is the API↔Studio boundary for a persisted agent node. The
@@ -52,14 +57,20 @@ describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
         { kind: "contextBudget", params: { chars: 4000 } }
       ]
     });
-    expect(parsed.resolvedMiddleware?.map((m) => m.kind)).toEqual(["compress", "terse", "contextBudget"]);
+    expect(parsed.resolvedMiddleware?.map((m) => m.kind)).toEqual([
+      "compress",
+      "terse",
+      "contextBudget"
+    ]);
   });
 
   it("rejects a GOVERNANCE kind in resolvedMiddleware by construction (the persisted reject gate)", () => {
     // A governance kind is not in the efficiency-only discriminated union → safeParse fails →
     // readAgentMetadata drops the whole malformed agent. An ungoverned stack is unrepresentable.
     for (const kind of ["redact", "approvalGate", "fsPolicy"]) {
-      expect(AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind }] }).success).toBe(false);
+      expect(AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind }] }).success).toBe(
+        false
+      );
       expect(
         readAgentMetadata({ agent: { provider: "anthropic", resolvedMiddleware: [{ kind }] } })
       ).toBeUndefined();
@@ -74,9 +85,9 @@ describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
 
   // ADR 0025 phase 3e — reflection variant.
   it("accepts a reflection entry (bare and with a threshold), rejects an out-of-range threshold", () => {
-    expect(AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind: "reflection" }] }).success).toBe(
-      true
-    );
+    expect(
+      AgentNodeMetadataSchema.safeParse({ resolvedMiddleware: [{ kind: "reflection" }] }).success
+    ).toBe(true);
     expect(
       AgentNodeMetadataSchema.safeParse({
         resolvedMiddleware: [{ kind: "reflection", params: { threshold: 0.9 } }]
@@ -87,5 +98,41 @@ describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
         resolvedMiddleware: [{ kind: "reflection", params: { threshold: 1.5 } }]
       }).success
     ).toBe(false);
+  });
+});
+
+// ADR 0027 phase 4b / ADR 0049 — the mapAgents (dynamic fan-out) carrier.
+describe("@adriane-ai/contracts — MapAgentNodeMetadataSchema", () => {
+  it("keeps overChannel/joinAt/subAgent through a parse round-trip", () => {
+    const parsed = MapAgentNodeMetadataSchema.parse({
+      overChannel: "items",
+      joinAt: "results",
+      subAgent: { provider: "anthropic", system: "Summarize the item.", enableFs: true },
+      suspendForApproval: true
+    });
+    expect(parsed.overChannel).toBe("items");
+    expect(parsed.joinAt).toBe("results");
+    expect(parsed.subAgent.system).toBe("Summarize the item.");
+    expect(parsed.subAgent.enableFs).toBe(true);
+    expect(parsed.suspendForApproval).toBe(true);
+  });
+
+  it("requires overChannel, joinAt and subAgent", () => {
+    expect(MapAgentNodeMetadataSchema.safeParse({ joinAt: "r", subAgent: {} }).success).toBe(false);
+    expect(MapAgentNodeMetadataSchema.safeParse({ overChannel: "i", subAgent: {} }).success).toBe(
+      false
+    );
+    expect(MapAgentNodeMetadataSchema.safeParse({ overChannel: "i", joinAt: "r" }).success).toBe(
+      false
+    );
+  });
+
+  it("readMapAgentMetadata narrows the carrier off an open metadata bag", () => {
+    const meta = readMapAgentMetadata({
+      mapAgents: { overChannel: "items", joinAt: "results", subAgent: { provider: "anthropic" } }
+    });
+    expect(meta?.overChannel).toBe("items");
+    expect(readMapAgentMetadata({ agent: { provider: "anthropic" } })).toBeUndefined();
+    expect(readMapAgentMetadata(undefined)).toBeUndefined();
   });
 });
