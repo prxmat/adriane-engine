@@ -7,6 +7,7 @@ use adriane_agents_core::ApprovalRequestItem;
 use adriane_fs_backend::FsPermVerb;
 use adriane_graph_core::{GraphDefinition, GraphState};
 use adriane_llm_gateway::ModelTier;
+use adriane_skills::Skill;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -274,6 +275,11 @@ pub struct EngineSpec {
     /// fail-closed default (read-only everywhere; writes need an explicit rule).
     #[serde(default)]
     pub fs_policy: Vec<FsPolicyRule>,
+    /// The tenant's governed skills for this run (ADR 0049 B-3). The control plane passes its skill
+    /// store here; the bridge builds a run-scoped, tenant-isolated `InMemorySkillStore` from it that
+    /// every agent's `SkillMiddleware` selects from. Empty = the OSS shared in-memory store (no skills).
+    #[serde(default)]
+    pub skills: Vec<Skill>,
 }
 
 /// What a run/resume/approve call returns to JS: the final state plus, when
