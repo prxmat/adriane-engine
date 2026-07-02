@@ -144,6 +144,15 @@ impl InMemorySkillStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Build a store pre-populated from a fixed set — the control plane's per-run tenant skills
+    /// (ADR 0049 B-3). Sync (no async `register` loop) so the napi bridge can construct a run-scoped,
+    /// tenant-isolated store inline while assembling the runtime.
+    pub fn from_skills(skills: Vec<Skill>) -> Self {
+        Self {
+            skills: Mutex::new(skills),
+        }
+    }
 }
 
 /// Split a `"name@version"` reference; the last `@` separates them (versions have no `@`).

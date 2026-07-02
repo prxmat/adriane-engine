@@ -526,6 +526,7 @@ fn build_agent_middleware(
     provider: LlmProvider,
     model: &str,
     node_id: &str,
+    skill_store: &Arc<dyn SkillStore>,
 ) -> MiddlewareStack {
     let mut stack = MiddlewareStack::new();
     // GOVERNED — sealed; never fed from spec/user data. Ordering on the request path is the
@@ -590,7 +591,7 @@ fn build_agent_middleware(
     // set. Applies to sub-agents too (same build path → deepagents parity). OSS default = the
     // shared in-memory registry + MockEmbedder (the control plane injects a Postgres store).
     if let Some(sk) = &agent_spec.skills {
-        let store: Arc<dyn SkillStore> = SKILL_STORE.clone();
+        let store: Arc<dyn SkillStore> = skill_store.clone();
         stack.push_efficiency(Arc::new(SkillMiddleware::new(
             store,
             Arc::new(MockEmbedder),
@@ -1038,12 +1039,20 @@ fn build_react_agent(
     // SDK-resolved efficiency list (compress / terse / context-budget / reflection). The
     // approval gate is intrinsic to the stack and applies regardless. The gateway is threaded
     // in for the reflection critique call (it uses the agent's own provider + model).
+    // ADR 0049 B-3: a run-scoped skill store from the control plane's tenant skills (tenant-isolated;
+    // empty spec.skills → the OSS shared in-memory store). Each agent's SkillMiddleware selects from it.
+    let skill_store: Arc<dyn SkillStore> = if spec.skills.is_empty() {
+        SKILL_STORE.clone()
+    } else {
+        Arc::new(InMemorySkillStore::from_skills(spec.skills.clone()))
+    };
     agent = agent.with_middleware(build_agent_middleware(
         agent_spec,
         &gateway,
         resolved.provider,
         &resolved.model,
         node_id,
+        &skill_store,
     ));
 
     // ADR 0033 phase 13: opt-in token streaming. When the run requested it, install an
@@ -1836,7 +1845,14 @@ mod tests {
         };
         let gateway: Arc<dyn LlmGateway> = Arc::new(DefaultLlmGateway::new());
         let build = |spec: &crate::spec::AgentSpec| {
-            build_agent_middleware(spec, &gateway, LlmProvider::Anthropic, "m", "test-node")
+            build_agent_middleware(
+                spec,
+                &gateway,
+                LlmProvider::Anthropic,
+                "m",
+                "test-node",
+                &(Arc::new(InMemorySkillStore::new()) as Arc<dyn SkillStore>),
+            )
         };
 
         // NB: the stack is never fully empty now — the ADR 0032 secrets floor is an always-on
@@ -1917,8 +1933,14 @@ mod tests {
         let gateway: Arc<dyn LlmGateway> = Arc::new(DefaultLlmGateway::new());
         let spec: crate::spec::AgentSpec =
             serde_json::from_value(json!({ "provider": "anthropic" })).expect("spec parses");
-        let stack =
-            build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m", "test-node");
+        let stack = build_agent_middleware(
+            &spec,
+            &gateway,
+            LlmProvider::Anthropic,
+            "m",
+            "test-node",
+            &(Arc::new(InMemorySkillStore::new()) as Arc<dyn SkillStore>),
+        );
         assert!(
             !stack.is_empty(),
             "the secrets floor is always governed-present"
@@ -1941,8 +1963,14 @@ mod tests {
             "memory": { "namespace": "tenant:t1:agent:a", "topK": 3, "recall": "vector" }
         }))
         .expect("spec parses");
-        let stack =
-            build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m", "assistant");
+        let stack = build_agent_middleware(
+            &spec,
+            &gateway,
+            LlmProvider::Anthropic,
+            "m",
+            "assistant",
+            &(Arc::new(InMemorySkillStore::new()) as Arc<dyn SkillStore>),
+        );
         assert!(!stack.is_empty());
         assert_eq!(stack.efficiency_len(), 0);
     }
@@ -1958,8 +1986,14 @@ mod tests {
             "skills": { "namespace": "skill:t1:org", "required": ["house-style@1.0.0"], "advisoryK": 2 }
         }))
         .expect("spec parses");
-        let stack =
-            build_agent_middleware(&spec, &gateway, LlmProvider::Anthropic, "m", "assistant");
+        let stack = build_agent_middleware(
+            &spec,
+            &gateway,
+            LlmProvider::Anthropic,
+            "m",
+            "assistant",
+            &(Arc::new(InMemorySkillStore::new()) as Arc<dyn SkillStore>),
+        );
         // One efficiency middleware (the skills loader); no resolved_middleware was requested.
         assert_eq!(stack.efficiency_len(), 1);
     }
@@ -2060,6 +2094,7 @@ mod tests {
             map_agents: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
             fs_policy: vec![],
+            skills: vec![],
             js_node_ids: vec![],
             js_tool_names: vec![],
         };
@@ -2639,6 +2674,7 @@ mod tests {
             map_agents: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
             fs_policy: vec![],
+            skills: vec![],
             js_node_ids: vec![],
             js_tool_names: vec![],
         };
@@ -2707,6 +2743,7 @@ mod tests {
             map_agents: BTreeMap::new(),
             provider_keys: BTreeMap::new(),
             fs_policy: vec![],
+            skills: vec![],
             js_node_ids: vec![],
             js_tool_names: vec![],
         };
