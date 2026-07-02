@@ -72,6 +72,21 @@ export type SkillConfig = {
   advisoryK?: number;
 };
 
+/**
+ * One skill RECORD supplied by the control plane for a run (ADR 0049 B-3) — the store contents the
+ * engine builds its run-scoped `SkillStore` from. Matches Rust `Skill` (camelCase). `description` is the
+ * always-resident L1 index; `body` is the on-demand L2; `requires` are approval-gated capability keys.
+ */
+export type SkillRecord = {
+  name: string;
+  version: string;
+  namespace: string;
+  description: string;
+  body?: string;
+  requires?: string[];
+  resources?: Array<{ kind?: string; ref: string }>;
+};
+
 /** Config for {@link GraphBuilder.agentNode}. */
 export type AgentNodeConfig = {
   /**

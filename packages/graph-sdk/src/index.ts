@@ -229,6 +229,7 @@ export type {
   RustMapAgentConfig,
   RustToolBinding,
   SkillConfig,
+  SkillRecord,
   StreamAgentConfig,
   TaskNodeConfig,
   ToolNodeConfig

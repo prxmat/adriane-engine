@@ -11,7 +11,8 @@ import type {
   MemoryConfig,
   RustAgentConfig,
   RustMapAgentConfig,
-  SkillConfig
+  SkillConfig,
+  SkillRecord
 } from "./agent-node.js";
 import type { RustComponentConfig } from "./components.js";
 import type { ChannelValues, TypedGraphState } from "./typed.js";
@@ -168,6 +169,12 @@ export type RustRunnerParts<TState extends ChannelValues> = {
    * read-only everywhere.
    */
   fsPolicy?: FsPolicyRule[];
+  /**
+   * The tenant's governed skills for this run (ADR 0049 B-3) → Rust `EngineSpec.skills`. The engine
+   * builds a run-scoped, tenant-isolated skill store from these; each agent's SkillMiddleware selects
+   * from it. Omitted/empty → the OSS shared in-memory store (no skills).
+   */
+  skills?: SkillRecord[];
 };
 
 /** The `agents` map serialized for the wire (matches Rust `AgentSpec`, camelCase). */
@@ -278,6 +285,8 @@ type EngineSpecWire = {
   providerKeys: Record<string, string>;
   /** Per-path filesystem permission rules (ADR 0024 phase 2b); empty = fail-closed read-only. */
   fsPolicy: FsPolicyRule[];
+  /** The tenant's governed skills (ADR 0049 B-3) → Rust `EngineSpec.skills`; empty = OSS shared store. */
+  skills: SkillRecord[];
 };
 
 /** The `RunOutcome` shape the Rust bridge serializes back. */
@@ -503,6 +512,7 @@ export class RustGraphRunner<TState extends ChannelValues> {
     | "jsToolNames"
     | "providerKeys"
     | "fsPolicy"
+    | "skills"
   > {
     return {
       graph: this.parts.definition,
@@ -513,7 +523,8 @@ export class RustGraphRunner<TState extends ChannelValues> {
       jsNodeIds: [...this.parts.jsNodeIds],
       jsToolNames: [...this.parts.jsToolNames],
       providerKeys: this.parts.providerKeys ?? {},
-      fsPolicy: this.parts.fsPolicy ?? []
+      fsPolicy: this.parts.fsPolicy ?? [],
+      skills: this.parts.skills ?? []
     };
   }
 
