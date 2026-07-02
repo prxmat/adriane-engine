@@ -32,7 +32,13 @@ import type { ModelTier } from "@adriane-ai/llm-gateway";
 // (and a `pg` dependency) into consumers such as the Studio bundle.
 import type { ApprovalEngine } from "@adriane-ai/approval-engine";
 
-import type { EfficiencyMiddlewareSpec, FsPolicyRule, RustAgentConfig, SkillRecord } from "./agent-node.js";
+import type {
+  EfficiencyMiddlewareSpec,
+  FsPolicyRule,
+  RustAgentConfig,
+  RustMapAgentConfig,
+  SkillRecord
+} from "./agent-node.js";
 import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
 import type { RustComponentConfig, ComponentKind } from "./components.js";
 import {
@@ -80,6 +86,18 @@ export type AgentCarrier = {
    * the legacy `outputStyle`/`contextBudget` knobs above, so old graphs keep their behaviour).
    */
   resolvedMiddleware?: EfficiencyMiddlewareSpec[];
+};
+
+/**
+ * The mapAgents carrier on `node.metadata.mapAgents` (ADR 0027 phase 4b — dynamic fan-out). Mirrors
+ * the contracts schema: run `subAgent` once per item in `overChannel` and collect the per-item results
+ * (input order) into `joinAt`. The sub-agent is a full agent carrier → skills/memory/fs/planning apply.
+ */
+export type MapAgentCarrier = {
+  overChannel: string;
+  joinAt: string;
+  subAgent: AgentCarrier;
+  suspendForApproval?: boolean;
 };
 
 /** Outcome of a catalog-graph run: the terminal/suspended state and a flat status. */
@@ -190,6 +208,26 @@ export const readAgentCarrier = (
   return agent as AgentCarrier;
 };
 
+/** Narrow a node's open metadata bag to its mapAgents (dynamic fan-out) carrier, if present + valid. */
+export const readMapAgentCarrier = (
+  metadata: Record<string, unknown> | undefined
+): MapAgentCarrier | undefined => {
+  const map = metadata?.mapAgents;
+  if (!isRecord(map)) {
+    return undefined;
+  }
+  const { overChannel, joinAt, subAgent } = map;
+  if (typeof overChannel !== "string" || overChannel.length === 0) return undefined;
+  if (typeof joinAt !== "string" || joinAt.length === 0) return undefined;
+  if (!isRecord(subAgent)) return undefined;
+  return {
+    overChannel,
+    joinAt,
+    subAgent: subAgent as AgentCarrier,
+    suspendForApproval: map.suspendForApproval === true
+  };
+};
+
 /**
  * Project an {@link AgentCarrier} into the wire {@link RustAgentConfig} the bridge
  * consumes. `usesApprovalEngine` reflects whether the run was given an
@@ -197,7 +235,10 @@ export const readAgentCarrier = (
  * (the flag does not re-route it), but the run is governed — the seam files a request
  * per gated tool when the run suspends (see {@link fileApprovalRequests}).
  */
-const carrierToAgentConfig = (carrier: AgentCarrier, usesApprovalEngine: boolean): RustAgentConfig => ({
+const carrierToAgentConfig = (
+  carrier: AgentCarrier,
+  usesApprovalEngine: boolean
+): RustAgentConfig => ({
   provider: carrier.provider ?? "anthropic",
   model: carrier.model,
   tier: carrier.tier,
@@ -248,6 +289,7 @@ const assembleParts = (
 ): RustRunnerParts<ChannelValues> => {
   const components = new Map<string, RustComponentConfig>();
   const agents = new Map<string, RustAgentConfig>();
+  const mapAgents = new Map<string, RustMapAgentConfig>();
   const jsNodeIds = new Set<string>();
 
   for (const node of definition.nodes) {
@@ -255,6 +297,18 @@ const assembleParts = (
     const component = readComponentCarrier(node.metadata);
     if (component !== undefined) {
       components.set(id, { kind: component.kind as ComponentKind, params: component.params });
+      continue;
+    }
+    // A mapAgents carrier takes precedence over a plain agent carrier (a fan-out node is not itself a
+    // top-level agent) — the bridge routes it via EngineSpec.map_agents, keyed by node id.
+    const mapAgent = readMapAgentCarrier(node.metadata);
+    if (mapAgent !== undefined) {
+      mapAgents.set(id, {
+        overChannel: mapAgent.overChannel,
+        joinAt: mapAgent.joinAt,
+        agent: carrierToAgentConfig(mapAgent.subAgent, usesApprovalEngine),
+        suspendForApproval: mapAgent.suspendForApproval === true
+      });
       continue;
     }
     const agent = readAgentCarrier(node.metadata);
@@ -275,14 +329,16 @@ const assembleParts = (
     definition,
     // Catalog graphs (assembled from node-metadata carriers) carry no subgraph nodes.
     subgraphs: [],
-    nodeFns: new Map(jsNodeIds.size === 0 ? [] : [...jsNodeIds].map((id) => [id, async () => ({})])),
+    nodeFns: new Map(
+      jsNodeIds.size === 0 ? [] : [...jsNodeIds].map((id) => [id, async () => ({})])
+    ),
     toolFns: new Map(),
     conditions: new Map(),
     agents,
     components,
-    // mapAgents carrier on the catalog path is a follow-up (ADR 0027 phase 4b); the live
-    // builder path is the supported surface today.
-    mapAgents: new Map(),
+    // ADR 0027 phase 4b / ADR 0049 — the catalog path now reads a `mapAgents` carrier (a dynamic
+    // fan-out node), at parity with the in-process builder path.
+    mapAgents,
     jsNodeIds,
     jsToolNames: new Set(),
     providerKeys,
@@ -305,7 +361,13 @@ export const runCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy, options.skills)
+    assembleParts(
+      definition,
+      options.approvalEngine !== undefined,
+      options.providerKeys,
+      options.fsPolicy,
+      options.skills
+    )
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
@@ -336,7 +398,10 @@ export const runCatalogGraph = async (
 export const resumeCatalogGraph = async (
   definition: GraphDefinition,
   state: GraphState,
-  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy" | "skills"> & {
+  options: Pick<
+    RunCatalogGraphOptions,
+    "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy" | "skills"
+  > & {
     /**
      * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
      * resolvedBy }` provenance. Passed straight through to the Rust bridge, which
@@ -353,7 +418,13 @@ export const resumeCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy, options.skills)
+    assembleParts(
+      definition,
+      options.approvalEngine !== undefined,
+      options.providerKeys,
+      options.fsPolicy,
+      options.skills
+    )
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
@@ -361,7 +432,10 @@ export const resumeCatalogGraph = async (
   if (options.onEvent !== undefined) {
     runner.subscribe(options.onEvent);
   }
-  const resumed = (await runner.resume(state, options.approvedTools ?? [])) as unknown as GraphState;
+  const resumed = (await runner.resume(
+    state,
+    options.approvedTools ?? []
+  )) as unknown as GraphState;
   // A resume can itself hit a NEW approval gate; file requests for that suspension too.
   const governed = await fileApprovalRequests(
     definition,
@@ -405,7 +479,11 @@ export const replayCatalogGraph = async (
   if (options.onEvent !== undefined) {
     runner.subscribe(options.onEvent);
   }
-  const replayed = (await runner.replay(state, checkpointId, replayJournal)) as unknown as GraphState;
+  const replayed = (await runner.replay(
+    state,
+    checkpointId,
+    replayJournal
+  )) as unknown as GraphState;
   // The replay re-suspends at the first gate (no approvals seeded): `pendingApprovals` are the
   // subjects the deterministic re-execution requested — what verify-replay compares to the chain.
   return {
