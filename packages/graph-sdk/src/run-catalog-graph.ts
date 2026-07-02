@@ -32,7 +32,7 @@ import type { ModelTier } from "@adriane-ai/llm-gateway";
 // (and a `pg` dependency) into consumers such as the Studio bundle.
 import type { ApprovalEngine } from "@adriane-ai/approval-engine";
 
-import type { EfficiencyMiddlewareSpec, FsPolicyRule, RustAgentConfig } from "./agent-node.js";
+import type { EfficiencyMiddlewareSpec, FsPolicyRule, RustAgentConfig, SkillRecord } from "./agent-node.js";
 import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
 import type { RustComponentConfig, ComponentKind } from "./components.js";
 import {
@@ -142,6 +142,12 @@ export type RunCatalogGraphOptions = {
    * read-only everywhere.
    */
   fsPolicy?: FsPolicyRule[];
+  /**
+   * The tenant's governed skills for this run (ADR 0049 B-3) — the control plane's skill store. The
+   * engine builds a run-scoped, tenant-isolated store from these and each agent's SkillMiddleware
+   * selects from it. Omit/empty → the OSS shared in-memory store (no skills).
+   */
+  skills?: SkillRecord[];
 };
 
 /** Raised when the native engine is unavailable — catalog graphs require it. */
@@ -237,7 +243,8 @@ const assembleParts = (
   definition: GraphDefinition,
   usesApprovalEngine: boolean,
   providerKeys: Record<string, string> | undefined,
-  fsPolicy: FsPolicyRule[] | undefined
+  fsPolicy: FsPolicyRule[] | undefined,
+  skills: SkillRecord[] | undefined
 ): RustRunnerParts<ChannelValues> => {
   const components = new Map<string, RustComponentConfig>();
   const agents = new Map<string, RustAgentConfig>();
@@ -279,7 +286,8 @@ const assembleParts = (
     jsNodeIds,
     jsToolNames: new Set(),
     providerKeys,
-    fsPolicy
+    fsPolicy,
+    skills
   };
 };
 
@@ -297,7 +305,7 @@ export const runCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy)
+    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy, options.skills)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
@@ -328,7 +336,7 @@ export const runCatalogGraph = async (
 export const resumeCatalogGraph = async (
   definition: GraphDefinition,
   state: GraphState,
-  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy"> & {
+  options: Pick<RunCatalogGraphOptions, "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy" | "skills"> & {
     /**
      * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
      * resolvedBy }` provenance. Passed straight through to the Rust bridge, which
@@ -345,7 +353,7 @@ export const resumeCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy)
+    assembleParts(definition, options.approvalEngine !== undefined, options.providerKeys, options.fsPolicy, options.skills)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
@@ -382,14 +390,14 @@ export const replayCatalogGraph = async (
   state: GraphState,
   checkpointId: string,
   replayJournal: string,
-  options: Pick<RunCatalogGraphOptions, "onEvent" | "providerKeys" | "fsPolicy"> = {}
+  options: Pick<RunCatalogGraphOptions, "onEvent" | "providerKeys" | "fsPolicy" | "skills"> = {}
 ): Promise<CatalogRunOutcome> => {
   if (!rustEngineAvailable()) {
     throw new RustEngineUnavailableError();
   }
   // No approval engine on replay — it is read-only EVIDENCE and must never open a new gate.
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, false, options.providerKeys, options.fsPolicy)
+    assembleParts(definition, false, options.providerKeys, options.fsPolicy, options.skills)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
