@@ -70,6 +70,41 @@ public enum Adriane {
         return try unwrap(result)
     }
 
+    public static func engineRunJson(specJson: String, callbacks: AdrianeCallbacks) throws -> String {
+        let result = specJson.withCString { adriane_engine_run_json($0, callbacks) }
+        return try unwrap(result)
+    }
+
+    public static func engineResumeJson(specJson: String, callbacks: AdrianeCallbacks) throws -> String {
+        let result = specJson.withCString { adriane_engine_resume_json($0, callbacks) }
+        return try unwrap(result)
+    }
+
+    public static func engineApproveAndResumeJson(specJson: String, callbacks: AdrianeCallbacks) throws -> String {
+        let result = specJson.withCString { adriane_engine_approve_and_resume_json($0, callbacks) }
+        return try unwrap(result)
+    }
+
+    public static func engineSignalJson(specJson: String, signalName: String, payloadJson: String, callbacks: AdrianeCallbacks) throws -> String {
+        let result = specJson.withCString { specPtr in
+            signalName.withCString { signalPtr in
+                payloadJson.withCString { payloadPtr in
+                    adriane_engine_signal_json(specPtr, signalPtr, payloadPtr, callbacks)
+                }
+            }
+        }
+        return try unwrap(result)
+    }
+
+    public static func engineReplayJson(specJson: String, checkpointId: String, callbacks: AdrianeCallbacks) throws -> String {
+        let result = specJson.withCString { specPtr in
+            checkpointId.withCString { checkpointPtr in
+                adriane_engine_replay_json(specPtr, checkpointPtr, callbacks)
+            }
+        }
+        return try unwrap(result)
+    }
+
     private static func unwrap(_ result: AdrianeResult) throws -> String {
         defer { adriane_result_free(result) }
         if result.code == 0 {

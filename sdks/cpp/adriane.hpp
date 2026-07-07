@@ -80,4 +80,31 @@ inline std::string run_prebuilt_json(
   return unwrap(adriane_run_prebuilt_json(name.c_str(), input_json.c_str(), options_json));
 }
 
+inline std::string engine_run_json(const std::string& spec_json, AdrianeCallbacks callbacks) {
+  return unwrap(adriane_engine_run_json(spec_json.c_str(), callbacks));
+}
+
+inline std::string engine_resume_json(const std::string& spec_json, AdrianeCallbacks callbacks) {
+  return unwrap(adriane_engine_resume_json(spec_json.c_str(), callbacks));
+}
+
+inline std::string engine_approve_and_resume_json(const std::string& spec_json, AdrianeCallbacks callbacks) {
+  return unwrap(adriane_engine_approve_and_resume_json(spec_json.c_str(), callbacks));
+}
+
+inline std::string engine_signal_json(
+    const std::string& spec_json,
+    const std::string& signal_name,
+    const std::string& payload_json,
+    AdrianeCallbacks callbacks) {
+  return unwrap(adriane_engine_signal_json(spec_json.c_str(), signal_name.c_str(), payload_json.c_str(), callbacks));
+}
+
+inline std::string engine_replay_json(
+    const std::string& spec_json,
+    const std::string& checkpoint_id,
+    AdrianeCallbacks callbacks) {
+  return unwrap(adriane_engine_replay_json(spec_json.c_str(), checkpoint_id.c_str(), callbacks));
+}
+
 }  // namespace adriane

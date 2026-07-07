@@ -60,11 +60,10 @@ A few entries deserve a footnote rather than a checkmark:
 
 The "one engine, many SDKs" row is genuine: the graph model, validator, DSL compiler, model
 policy, catalogs, native component runs, and prebuilt-agent runs live **once in Rust** and the SDKs
-call into that code. But the surfaces are deliberately not symmetric yet: TypeScript bridges
-callbacks (custom node handlers, condition predicates, streaming), while Python and the C-ABI
-SDKs expose the callback-neutral JSON/YAML surface. The full contract is in
-[one engine, many languages](/docs/sdk-parity/one-engine-two-languages). Read it before assuming
-every SDK can do everything TypeScript can today.
+call into that code. The C ABI now also exposes the callback runtime shape for custom nodes,
+host tools, predicates, lifecycle events, resume, signals, and replay. Python is still the
+asymmetric surface: its PyO3 binding remains JSON-in/JSON-out until it gets a callback runtime.
+The full contract is in [one engine, many languages](/docs/sdk-parity/one-engine-two-languages).
 
 ## Benchmarks — speed & tokens
 

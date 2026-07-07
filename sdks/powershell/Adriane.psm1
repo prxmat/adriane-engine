@@ -17,6 +17,24 @@ public static class AdrianeNative {
     public IntPtr Error;
   }
 
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+  public delegate int AdrianeStringCallback(
+    IntPtr payloadJson,
+    IntPtr userData,
+    out IntPtr value,
+    out IntPtr error);
+
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+  public delegate void AdrianeEventCallback(IntPtr payloadJson, IntPtr userData);
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct AdrianeCallbacks {
+    public IntPtr UserData;
+    public AdrianeStringCallback OnNode;
+    public AdrianeStringCallback OnCondition;
+    public AdrianeEventCallback OnEvent;
+  }
+
   public static string PtrToUtf8(IntPtr ptr) {
     if (ptr == IntPtr.Zero) {
       return "";
@@ -50,6 +68,16 @@ public static class AdrianeNative {
   public static extern AdrianeResult adriane_run_component_json(string kind, string paramsJson, string channelsJson);
   [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
   public static extern AdrianeResult adriane_run_prebuilt_json(string name, string inputJson, string optionsJson);
+  [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
+  public static extern AdrianeResult adriane_engine_run_json(string specJson, AdrianeCallbacks callbacks);
+  [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
+  public static extern AdrianeResult adriane_engine_resume_json(string specJson, AdrianeCallbacks callbacks);
+  [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
+  public static extern AdrianeResult adriane_engine_approve_and_resume_json(string specJson, AdrianeCallbacks callbacks);
+  [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
+  public static extern AdrianeResult adriane_engine_signal_json(string specJson, string signalName, string payloadJson, AdrianeCallbacks callbacks);
+  [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
+  public static extern AdrianeResult adriane_engine_replay_json(string specJson, string checkpointId, AdrianeCallbacks callbacks);
   [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
   public static extern void adriane_string_free(IntPtr ptr);
   [DllImport("$NativeLibrary", CallingConvention = CallingConvention.Cdecl)]
@@ -126,6 +154,31 @@ function Invoke-AdrianePrebuiltJson {
   ConvertFrom-AdrianeResult ([AdrianeNative]::adriane_run_prebuilt_json($Name, $InputJson, $OptionsJson))
 }
 
+function Invoke-AdrianeEngineRunJson {
+  param([string] $SpecJson, [AdrianeNative+AdrianeCallbacks] $Callbacks)
+  ConvertFrom-AdrianeResult ([AdrianeNative]::adriane_engine_run_json($SpecJson, $Callbacks))
+}
+
+function Invoke-AdrianeEngineResumeJson {
+  param([string] $SpecJson, [AdrianeNative+AdrianeCallbacks] $Callbacks)
+  ConvertFrom-AdrianeResult ([AdrianeNative]::adriane_engine_resume_json($SpecJson, $Callbacks))
+}
+
+function Invoke-AdrianeEngineApproveAndResumeJson {
+  param([string] $SpecJson, [AdrianeNative+AdrianeCallbacks] $Callbacks)
+  ConvertFrom-AdrianeResult ([AdrianeNative]::adriane_engine_approve_and_resume_json($SpecJson, $Callbacks))
+}
+
+function Invoke-AdrianeEngineSignalJson {
+  param([string] $SpecJson, [string] $SignalName, [string] $PayloadJson, [AdrianeNative+AdrianeCallbacks] $Callbacks)
+  ConvertFrom-AdrianeResult ([AdrianeNative]::adriane_engine_signal_json($SpecJson, $SignalName, $PayloadJson, $Callbacks))
+}
+
+function Invoke-AdrianeEngineReplayJson {
+  param([string] $SpecJson, [string] $CheckpointId, [AdrianeNative+AdrianeCallbacks] $Callbacks)
+  ConvertFrom-AdrianeResult ([AdrianeNative]::adriane_engine_replay_json($SpecJson, $CheckpointId, $Callbacks))
+}
+
 Export-ModuleMember -Function `
   Get-AdrianeEngineVersion, `
   Test-AdrianeGraphJson, `
@@ -135,4 +188,9 @@ Export-ModuleMember -Function `
   Get-AdrianeComponentsJson, `
   Get-AdrianePrebuiltJson, `
   Invoke-AdrianeComponentJson, `
-  Invoke-AdrianePrebuiltJson
+  Invoke-AdrianePrebuiltJson, `
+  Invoke-AdrianeEngineRunJson, `
+  Invoke-AdrianeEngineResumeJson, `
+  Invoke-AdrianeEngineApproveAndResumeJson, `
+  Invoke-AdrianeEngineSignalJson, `
+  Invoke-AdrianeEngineReplayJson

@@ -7,9 +7,8 @@ description: The Rust engine parity contract for TypeScript, Python, and the C-A
 # One engine, many languages
 
 Adriane is **one Rust engine** with multiple SDK surfaces. This page is the parity contract:
-what is guaranteed identical, what is already exposed through the shared C ABI, and which
-TypeScript features still require the next callback-runtime bridge before every SDK can expose
-them faithfully.
+what is guaranteed identical, what is exposed through the shared C ABI, and which pieces still
+need idiomatic SDK wrappers around that ABI.
 
 ## Shared engine contract
 
@@ -32,9 +31,8 @@ There is no second implementation to drift. This is the whole point of the desig
 | Python | Python | PyO3 wheel with JSON-in / JSON-out helpers |
 | C ABI SDKs | Ruby, PHP, Lua, PowerShell, Go, C, C++, Zig, Swift, Objective-C, Java, Kotlin, Scala, C#, Elixir | `crates/c-api` shared dynamic library |
 
-The C ABI SDKs intentionally start from the same callback-neutral surface that Python exposes.
-That gives every language the real Rust engine without inventing a runtime bridge thirteen
-times.
+The C ABI SDKs share the callback-neutral helpers and the callback-capable runtime entry points.
+That gives every language the real Rust engine without inventing a runtime bridge per language.
 
 ## Feature parity matrix
 
@@ -48,31 +46,34 @@ times.
 | List prebuilt agents | Yes | Yes | Yes |
 | Run native component | Yes | Yes | Yes |
 | Run prebuilt micro-agent | Yes | Yes | Yes |
-| Fluent graph builder | Yes | Planned | Planned |
-| Host-language custom node handlers | Yes | Needs callback bridge | Needs callback bridge |
-| Host-language conditional predicates | Yes | Needs callback bridge | Needs callback bridge |
-| Streaming graph events | Yes | Needs callback bridge | Needs callback bridge |
-| Checkpointer interface / resume / approval helpers | Yes | Needs callback bridge | Needs callback bridge |
+| Engine run from `EngineSpec` | Yes | Planned | Yes, C ABI |
+| Resume / approve / signal / replay | Yes | Planned | Yes, C ABI |
+| Host-language custom node handlers | Yes | Planned | Yes, C ABI callbacks |
+| Host-language tool handlers | Yes | Planned | Yes, C ABI callbacks |
+| Host-language conditional predicates | Yes | Planned | Yes, C ABI callbacks |
+| Streaming lifecycle/token events | Yes | Planned | Yes, C ABI callbacks |
+| Fluent graph builder | Yes | Planned | Planned SDK ergonomics |
+| Checkpointer interface helpers | Yes | Planned | Planned SDK ergonomics over serialized `GraphState` |
 
 The parity target is not optional: every TypeScript capability should either exist in each SDK
-or be tracked as a bridge gap. The current C ABI covers the stable, callback-neutral part of the
-engine first. The remaining TypeScript-only features all share the same root requirement: Rust
-must be able to call safely back into the host language for handlers, predicates, streaming
-events, and checkpoint lifecycle hooks.
+or be tracked as an SDK gap. The C ABI now covers both the callback-neutral engine surface and the
+runtime callback surface. The remaining work is mostly language ergonomics: builders, typed
+helpers, package publishing, and native checkpointer adapters around the serialized run state.
 
 ## Callback boundary
 
-Custom node handlers, conditional predicates, tool approval flows, and streaming are not simple
-JSON functions. They require long-lived host callbacks, runtime ownership rules, threading
-rules, error propagation, and allocator boundaries. TypeScript already has that through N-API.
-The polyglot SDKs need a C callback runtime contract before those features can be exposed
-without pretending that each language is identical.
+Custom node handlers, host tool handlers, conditional predicates, tool approval flows, and
+streaming are not simple JSON functions. They require host callbacks, runtime ownership rules,
+threading rules, error propagation, and allocator boundaries. TypeScript has that through N-API;
+the C ABI now exposes the same runtime shape through `AdrianeCallbacks`.
 
-Until that callback bridge exists, use:
+At the ABI level, use:
 
 - **TypeScript** for full custom graph execution, streaming, human gates, and checkpointers.
-- **Python or C ABI SDKs** for validation, DSL compilation, model policy, catalogs, native
-  components, and prebuilt micro-agent runs.
+- **C ABI SDKs** for the same runtime shape when a language adapter can provide thread-safe
+  callback functions.
+- **Python** for validation, DSL compilation, model policy, catalogs, native components, and
+  prebuilt micro-agent runs until its PyO3 layer grows the same callback runtime.
 
 ## Next
 

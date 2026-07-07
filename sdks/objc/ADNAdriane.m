@@ -56,6 +56,33 @@ static NSString * const ADNAdrianeErrorDomain = @"ai.adriane";
   return [self unwrap:adriane_run_prebuilt_json(name.UTF8String, inputJSON.UTF8String, optionsJSON.UTF8String) error:error];
 }
 
++ (nullable NSString *)engineRunJSON:(NSString *)specJSON callbacks:(AdrianeCallbacks)callbacks error:(NSError **)error {
+  return [self unwrap:adriane_engine_run_json(specJSON.UTF8String, callbacks) error:error];
+}
+
++ (nullable NSString *)engineResumeJSON:(NSString *)specJSON callbacks:(AdrianeCallbacks)callbacks error:(NSError **)error {
+  return [self unwrap:adriane_engine_resume_json(specJSON.UTF8String, callbacks) error:error];
+}
+
++ (nullable NSString *)engineApproveAndResumeJSON:(NSString *)specJSON callbacks:(AdrianeCallbacks)callbacks error:(NSError **)error {
+  return [self unwrap:adriane_engine_approve_and_resume_json(specJSON.UTF8String, callbacks) error:error];
+}
+
++ (nullable NSString *)engineSignalJSON:(NSString *)specJSON
+                             signalName:(NSString *)signalName
+                            payloadJSON:(NSString *)payloadJSON
+                              callbacks:(AdrianeCallbacks)callbacks
+                                   error:(NSError **)error {
+  return [self unwrap:adriane_engine_signal_json(specJSON.UTF8String, signalName.UTF8String, payloadJSON.UTF8String, callbacks) error:error];
+}
+
++ (nullable NSString *)engineReplayJSON:(NSString *)specJSON
+                           checkpointID:(NSString *)checkpointID
+                              callbacks:(AdrianeCallbacks)callbacks
+                                   error:(NSError **)error {
+  return [self unwrap:adriane_engine_replay_json(specJSON.UTF8String, checkpointID.UTF8String, callbacks) error:error];
+}
+
 + (nullable NSString *)unwrap:(AdrianeResult)result error:(NSError **)error {
   if (result.code == ADRIANE_OK) {
     NSString *value = result.value == NULL ? @"" : [NSString stringWithUTF8String:result.value];

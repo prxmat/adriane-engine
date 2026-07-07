@@ -1,11 +1,17 @@
 package ai.adriane;
 
+import com.sun.jna.Callback;
 import com.sun.jna.Library;
+import com.sun.jna.Memory;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
 import com.sun.jna.Structure;
+import com.sun.jna.ptr.PointerByReference;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 public final class Adriane {
@@ -31,6 +37,97 @@ public final class Adriane {
     }
   }
 
+  public static final class AdrianeCallbackResult {
+    private static final List<Memory> CALLBACK_STRINGS = Collections.synchronizedList(new ArrayList<>());
+
+    public final int code;
+    public final Pointer value;
+    public final Pointer error;
+
+    private AdrianeCallbackResult(int code, Pointer value, Pointer error) {
+      this.code = code;
+      this.value = value;
+      this.error = error;
+    }
+
+    public static AdrianeCallbackResult ok(String value) {
+      return new AdrianeCallbackResult(0, callbackString(value), null);
+    }
+
+    public static AdrianeCallbackResult error(String message) {
+      return new AdrianeCallbackResult(3, null, callbackString(message));
+    }
+
+    int writeTo(PointerByReference valueOut, PointerByReference errorOut) {
+      valueOut.setValue(value);
+      errorOut.setValue(error);
+      return code;
+    }
+
+    private static Pointer callbackString(String value) {
+      if (value == null) {
+        value = "";
+      }
+      byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+      Memory memory = new Memory(bytes.length + 1L);
+      memory.write(0, bytes, 0, bytes.length);
+      memory.setByte(bytes.length, (byte) 0);
+      CALLBACK_STRINGS.add(memory);
+      return memory;
+    }
+  }
+
+  @FunctionalInterface
+  public interface HostStringCallback {
+    AdrianeCallbackResult invoke(String payloadJson, Pointer userData);
+  }
+
+  public interface StringCallback extends Callback {
+    int invoke(String payloadJson, Pointer userData, PointerByReference value, PointerByReference error);
+  }
+
+  public interface EventCallback extends Callback {
+    void invoke(String payloadJson, Pointer userData);
+  }
+
+  public static final class AdrianeCallbacks extends Structure implements Structure.ByValue {
+    public Pointer userData;
+    public StringCallback onNode;
+    public StringCallback onCondition;
+    public EventCallback onEvent;
+
+    public AdrianeCallbacks() {
+      this.userData = null;
+    }
+
+    public AdrianeCallbacks(HostStringCallback onNode, HostStringCallback onCondition, EventCallback onEvent) {
+      this.userData = null;
+      this.onNode = stringCallback(onNode);
+      this.onCondition = stringCallback(onCondition);
+      this.onEvent = onEvent;
+    }
+
+    @Override
+    protected List<String> getFieldOrder() {
+      return Arrays.asList("userData", "onNode", "onCondition", "onEvent");
+    }
+  }
+
+  private static StringCallback stringCallback(HostStringCallback callback) {
+    return (payloadJson, userData, value, error) -> {
+      try {
+        AdrianeCallbackResult result = callback.invoke(payloadJson, userData);
+        if (result == null) {
+          result = AdrianeCallbackResult.error("callback returned null");
+        }
+        return result.writeTo(value, error);
+      } catch (RuntimeException ex) {
+        String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+        return AdrianeCallbackResult.error(message).writeTo(value, error);
+      }
+    };
+  }
+
   private interface NativeAdriane extends Library {
     NativeAdriane INSTANCE = Native.load(
         System.getenv().getOrDefault("ADRIANE_C_API_LIB", "adriane_c_api"),
@@ -46,6 +143,11 @@ public final class Adriane {
     AdrianeResult adriane_list_prebuilt_json();
     AdrianeResult adriane_run_component_json(String kind, String paramsJson, String channelsJson);
     AdrianeResult adriane_run_prebuilt_json(String name, String inputJson, String optionsJson);
+    AdrianeResult adriane_engine_run_json(String specJson, AdrianeCallbacks callbacks);
+    AdrianeResult adriane_engine_resume_json(String specJson, AdrianeCallbacks callbacks);
+    AdrianeResult adriane_engine_approve_and_resume_json(String specJson, AdrianeCallbacks callbacks);
+    AdrianeResult adriane_engine_signal_json(String specJson, String signalName, String payloadJson, AdrianeCallbacks callbacks);
+    AdrianeResult adriane_engine_replay_json(String specJson, String checkpointId, AdrianeCallbacks callbacks);
     void adriane_string_free(Pointer ptr);
     void adriane_result_free(AdrianeResult result);
   }
@@ -92,6 +194,26 @@ public final class Adriane {
 
   public static String runPrebuiltJson(String name, String inputJson, String optionsJson) {
     return unwrap(NativeAdriane.INSTANCE.adriane_run_prebuilt_json(name, inputJson, optionsJson));
+  }
+
+  public static String engineRunJson(String specJson, AdrianeCallbacks callbacks) {
+    return unwrap(NativeAdriane.INSTANCE.adriane_engine_run_json(specJson, callbacks));
+  }
+
+  public static String engineResumeJson(String specJson, AdrianeCallbacks callbacks) {
+    return unwrap(NativeAdriane.INSTANCE.adriane_engine_resume_json(specJson, callbacks));
+  }
+
+  public static String engineApproveAndResumeJson(String specJson, AdrianeCallbacks callbacks) {
+    return unwrap(NativeAdriane.INSTANCE.adriane_engine_approve_and_resume_json(specJson, callbacks));
+  }
+
+  public static String engineSignalJson(String specJson, String signalName, String payloadJson, AdrianeCallbacks callbacks) {
+    return unwrap(NativeAdriane.INSTANCE.adriane_engine_signal_json(specJson, signalName, payloadJson, callbacks));
+  }
+
+  public static String engineReplayJson(String specJson, String checkpointId, AdrianeCallbacks callbacks) {
+    return unwrap(NativeAdriane.INSTANCE.adriane_engine_replay_json(specJson, checkpointId, callbacks));
   }
 
   private static String unwrap(AdrianeResult result) {

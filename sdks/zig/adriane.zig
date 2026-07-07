@@ -6,6 +6,21 @@ pub const AdrianeResult = extern struct {
     err: ?[*:0]u8,
 };
 
+pub const AdrianeStringCallback = ?*const fn (
+    payload_json: [*:0]const u8,
+    user_data: ?*anyopaque,
+    value: *?[*:0]const u8,
+    err: *?[*:0]const u8,
+) callconv(.C) c_int;
+pub const AdrianeEventCallback = ?*const fn (payload_json: [*:0]const u8, user_data: ?*anyopaque) callconv(.C) void;
+
+pub const AdrianeCallbacks = extern struct {
+    user_data: ?*anyopaque,
+    on_node: AdrianeStringCallback,
+    on_condition: AdrianeStringCallback,
+    on_event: AdrianeEventCallback,
+};
+
 extern fn adriane_engine_version() ?[*:0]u8;
 extern fn adriane_validate_graph_json(definition_json: [*:0]const u8) AdrianeResult;
 extern fn adriane_compile_graph_yaml_json(yaml: [*:0]const u8) AdrianeResult;
@@ -15,6 +30,11 @@ extern fn adriane_list_components_json() AdrianeResult;
 extern fn adriane_list_prebuilt_json() AdrianeResult;
 extern fn adriane_run_component_json(kind: [*:0]const u8, params_json: [*:0]const u8, channels_json: [*:0]const u8) AdrianeResult;
 extern fn adriane_run_prebuilt_json(name: [*:0]const u8, input_json: [*:0]const u8, options_json: ?[*:0]const u8) AdrianeResult;
+extern fn adriane_engine_run_json(spec_json: [*:0]const u8, callbacks: AdrianeCallbacks) AdrianeResult;
+extern fn adriane_engine_resume_json(spec_json: [*:0]const u8, callbacks: AdrianeCallbacks) AdrianeResult;
+extern fn adriane_engine_approve_and_resume_json(spec_json: [*:0]const u8, callbacks: AdrianeCallbacks) AdrianeResult;
+extern fn adriane_engine_signal_json(spec_json: [*:0]const u8, signal_name: [*:0]const u8, payload_json: [*:0]const u8, callbacks: AdrianeCallbacks) AdrianeResult;
+extern fn adriane_engine_replay_json(spec_json: [*:0]const u8, checkpoint_id: [*:0]const u8, callbacks: AdrianeCallbacks) AdrianeResult;
 extern fn adriane_string_free(ptr: ?[*:0]u8) void;
 extern fn adriane_result_free(result: AdrianeResult) void;
 
@@ -84,6 +104,37 @@ pub fn runPrebuiltJson(
         allocator,
         adriane_run_prebuilt_json(name.ptr, input_json.ptr, if (options_json) |value| value.ptr else null),
     );
+}
+
+pub fn engineRunJson(allocator: std.mem.Allocator, spec_json: [:0]const u8, callbacks: AdrianeCallbacks) ![]u8 {
+    return unwrap(allocator, adriane_engine_run_json(spec_json.ptr, callbacks));
+}
+
+pub fn engineResumeJson(allocator: std.mem.Allocator, spec_json: [:0]const u8, callbacks: AdrianeCallbacks) ![]u8 {
+    return unwrap(allocator, adriane_engine_resume_json(spec_json.ptr, callbacks));
+}
+
+pub fn engineApproveAndResumeJson(allocator: std.mem.Allocator, spec_json: [:0]const u8, callbacks: AdrianeCallbacks) ![]u8 {
+    return unwrap(allocator, adriane_engine_approve_and_resume_json(spec_json.ptr, callbacks));
+}
+
+pub fn engineSignalJson(
+    allocator: std.mem.Allocator,
+    spec_json: [:0]const u8,
+    signal_name: [:0]const u8,
+    payload_json: [:0]const u8,
+    callbacks: AdrianeCallbacks,
+) ![]u8 {
+    return unwrap(allocator, adriane_engine_signal_json(spec_json.ptr, signal_name.ptr, payload_json.ptr, callbacks));
+}
+
+pub fn engineReplayJson(
+    allocator: std.mem.Allocator,
+    spec_json: [:0]const u8,
+    checkpoint_id: [:0]const u8,
+    callbacks: AdrianeCallbacks,
+) ![]u8 {
+    return unwrap(allocator, adriane_engine_replay_json(spec_json.ptr, checkpoint_id.ptr, callbacks));
 }
 
 fn unwrap(allocator: std.mem.Allocator, result: AdrianeResult) ![]u8 {

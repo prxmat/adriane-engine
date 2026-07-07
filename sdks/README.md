@@ -1,9 +1,9 @@
 # Adriane polyglot SDKs
 
 Adriane SDKs are thin surfaces over one Rust engine. The TypeScript SDK keeps its
-N-API bridge because it supports callback-heavy graph execution. Python currently
-uses PyO3 for wheels. New SDKs should start from the stable C ABI in
-`crates/c-api` unless they need host callbacks.
+N-API bridge for Node packaging and async JS callback ergonomics. Python uses
+PyO3 for wheels. The remaining SDKs start from the stable C ABI in `crates/c-api`,
+including the callback-capable runtime entry points.
 
 ## Binding strategy
 
@@ -18,9 +18,9 @@ uses PyO3 for wheels. New SDKs should start from the stable C ABI in
 | JVM / .NET | Java, Kotlin, Scala, C# | C ABI through JNA/JNI or P/Invoke |
 | BEAM | Elixir | C ABI through a small NIF or port driver |
 
-## Initial stable surface
+## Stable surface
 
-The first cross-language contract is deliberately small:
+The callback-neutral contract is:
 
 - `engine_version`
 - `validate_graph_json`
@@ -34,8 +34,19 @@ The first cross-language contract is deliberately small:
 
 This gives every SDK the same validator, DSL compiler, model policy, catalogs,
 native component runs, and prebuilt-agent runs immediately, without duplicating
-the engine. Runtime execution with custom host callbacks remains on N-API until
-the runtime has a callback-neutral C contract.
+the engine.
+
+The callback-capable runtime contract is:
+
+- `engine_run_json`
+- `engine_resume_json`
+- `engine_approve_and_resume_json`
+- `engine_signal_json`
+- `engine_replay_json`
+
+These functions consume the same `EngineSpec` JSON used by the TypeScript N-API
+bridge and call host callbacks for custom nodes, host-backed tools, conditional
+predicates, and lifecycle/token events.
 
 ## Memory contract
 
@@ -44,6 +55,12 @@ must copy it into their native string type, then call `adriane_string_free` or
 `adriane_result_free`.
 
 Never free Adriane-owned strings with a host allocator.
+
+Callback results are different: string callbacks return an integer status and
+fill borrowed `value` / `error` output pointers owned by the host. The C ABI
+copies them during the callback call and never frees them. Callback adapters must
+keep those pointers valid until the callback returns and must be safe to invoke
+from runtime worker threads.
 
 ## Layout
 

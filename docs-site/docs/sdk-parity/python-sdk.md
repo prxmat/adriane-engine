@@ -151,9 +151,9 @@ Three typed errors, all `ValueError` subclasses:
 
 :::note Why no custom nodes yet
 The binding is JSON-in / JSON-out with no Python callbacks crossing into Rust, so the Python
-surface is validation, compilation, single-component runs, and prebuilt-agent runs. The full
-TypeScript custom-node graph surface needs the callback-runtime bridge described in
-[one engine, many languages](./one-engine-two-languages).
+surface is validation, compilation, single-component runs, and prebuilt-agent runs. The C ABI now
+has the callback runtime; Python still needs an equivalent PyO3 callback layer before custom
+Python node handlers and streaming can match TypeScript.
 :::
 
 ## Next

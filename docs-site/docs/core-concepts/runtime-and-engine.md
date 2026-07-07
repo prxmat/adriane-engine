@@ -61,7 +61,7 @@ event emission. The bridge is detailed in
 - **In Python**, the engine is always there too; the wheel ships it, so there is nothing to
   install separately.
 - **In C-ABI SDKs**, the wrapper loads the shared Rust dynamic library and exposes the same
-  callback-neutral JSON/YAML surface.
+  JSON/YAML helpers plus the callback-capable runtime ABI.
 - **Across SDKs**, a graph that validates or compiles one way validates and compiles the same
   way in the others, because the same Rust code answers in every binding.
 

@@ -13,4 +13,14 @@ object AdrianeKt {
         Adriane.runComponentJson(kind, paramsJson, channelsJson)
     fun runPrebuiltJson(name: String, inputJson: String, optionsJson: String? = null): String =
         Adriane.runPrebuiltJson(name, inputJson, optionsJson)
+    fun engineRunJson(specJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+        Adriane.engineRunJson(specJson, callbacks)
+    fun engineResumeJson(specJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+        Adriane.engineResumeJson(specJson, callbacks)
+    fun engineApproveAndResumeJson(specJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+        Adriane.engineApproveAndResumeJson(specJson, callbacks)
+    fun engineSignalJson(specJson: String, signalName: String, payloadJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+        Adriane.engineSignalJson(specJson, signalName, payloadJson, callbacks)
+    fun engineReplayJson(specJson: String, checkpointId: String, callbacks: Adriane.AdrianeCallbacks): String =
+        Adriane.engineReplayJson(specJson, checkpointId, callbacks)
 }

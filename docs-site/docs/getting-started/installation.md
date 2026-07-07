@@ -26,9 +26,9 @@ hyphen, so this is the standard pip↔import split, the same as `pip install sci
 :::caution One engine, many SDKs, not byte-identical surfaces
 The Rust engine is shared, so validation, DSL compilation, model policy, catalogs, native
 component runs, and prebuilt-agent runs come from the same code. The callback-heavy TypeScript
-features, such as custom node handlers, streaming `stream()`, checkpointers, and in-process
-`conditionalEdge` predicates, still require a callback bridge before Python and the C-ABI SDKs
-can expose them. Skim **[One engine, many languages](/docs/sdk-parity/one-engine-two-languages)**
+features, such as custom node handlers, streaming `stream()`, and in-process `conditionalEdge`
+predicates, are available through N-API and the C callback ABI. Python remains JSON-in/JSON-out
+until its PyO3 layer gets the same callback runtime. Skim **[One engine, many languages](/docs/sdk-parity/one-engine-two-languages)**
 first so the parity boundaries are explicit.
 :::
 

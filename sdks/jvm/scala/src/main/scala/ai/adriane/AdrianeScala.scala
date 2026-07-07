@@ -13,4 +13,14 @@ object AdrianeScala {
     Adriane.runComponentJson(kind, paramsJson, channelsJson)
   def runPrebuiltJson(name: String, inputJson: String, optionsJson: String = null): String =
     Adriane.runPrebuiltJson(name, inputJson, optionsJson)
+  def engineRunJson(specJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+    Adriane.engineRunJson(specJson, callbacks)
+  def engineResumeJson(specJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+    Adriane.engineResumeJson(specJson, callbacks)
+  def engineApproveAndResumeJson(specJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+    Adriane.engineApproveAndResumeJson(specJson, callbacks)
+  def engineSignalJson(specJson: String, signalName: String, payloadJson: String, callbacks: Adriane.AdrianeCallbacks): String =
+    Adriane.engineSignalJson(specJson, signalName, payloadJson, callbacks)
+  def engineReplayJson(specJson: String, checkpointId: String, callbacks: Adriane.AdrianeCallbacks): String =
+    Adriane.engineReplayJson(specJson, checkpointId, callbacks)
 }

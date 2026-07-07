@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import "../../crates/c-api/include/adriane.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -22,6 +23,18 @@ NS_ASSUME_NONNULL_BEGIN
                                      inputJSON:(NSString *)inputJSON
                                    optionsJSON:(nullable NSString *)optionsJSON
                                          error:(NSError **)error;
++ (nullable NSString *)engineRunJSON:(NSString *)specJSON callbacks:(AdrianeCallbacks)callbacks error:(NSError **)error;
++ (nullable NSString *)engineResumeJSON:(NSString *)specJSON callbacks:(AdrianeCallbacks)callbacks error:(NSError **)error;
++ (nullable NSString *)engineApproveAndResumeJSON:(NSString *)specJSON callbacks:(AdrianeCallbacks)callbacks error:(NSError **)error;
++ (nullable NSString *)engineSignalJSON:(NSString *)specJSON
+                             signalName:(NSString *)signalName
+                            payloadJSON:(NSString *)payloadJSON
+                              callbacks:(AdrianeCallbacks)callbacks
+                                   error:(NSError **)error;
++ (nullable NSString *)engineReplayJSON:(NSString *)specJSON
+                           checkpointID:(NSString *)checkpointID
+                              callbacks:(AdrianeCallbacks)callbacks
+                                   error:(NSError **)error;
 
 @end
 

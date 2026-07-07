@@ -96,9 +96,9 @@ See [streaming and events](/docs/building/streaming-and-events).
 ## Custom node handlers
 
 A custom node is just an async function over the typed state, returning a partial channel map.
-This is the capability the callback-neutral SDKs do not expose yet: Python and the C-ABI SDKs
-do not call back into host-language handlers. In TypeScript the engine bridges back into your
-JavaScript on every node.
+In TypeScript the engine bridges back into your JavaScript on every node through N-API. The C ABI
+now exposes the same runtime shape through `AdrianeCallbacks`; Python remains JSON-in / JSON-out
+until its PyO3 layer grows callbacks.
 
 ```ts
 .node("score", async (_input, state, ctx) => {

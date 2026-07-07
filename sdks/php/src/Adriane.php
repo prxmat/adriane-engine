@@ -19,6 +19,16 @@ typedef struct AdrianeResult {
   char *error;
 } AdrianeResult;
 
+typedef int (*AdrianeStringCallback)(const char *payload_json, void *user_data, const char **value, const char **error);
+typedef void (*AdrianeEventCallback)(const char *payload_json, void *user_data);
+
+typedef struct AdrianeCallbacks {
+  void *user_data;
+  AdrianeStringCallback on_node;
+  AdrianeStringCallback on_condition;
+  AdrianeEventCallback on_event;
+} AdrianeCallbacks;
+
 char *adriane_engine_version(void);
 AdrianeResult adriane_validate_graph_json(const char *definition_json);
 AdrianeResult adriane_compile_graph_yaml_json(const char *yaml);
@@ -28,6 +38,11 @@ AdrianeResult adriane_list_components_json(void);
 AdrianeResult adriane_list_prebuilt_json(void);
 AdrianeResult adriane_run_component_json(const char *kind, const char *params_json, const char *channels_json);
 AdrianeResult adriane_run_prebuilt_json(const char *name, const char *input_json, const char *options_json);
+AdrianeResult adriane_engine_run_json(const char *spec_json, AdrianeCallbacks callbacks);
+AdrianeResult adriane_engine_resume_json(const char *spec_json, AdrianeCallbacks callbacks);
+AdrianeResult adriane_engine_approve_and_resume_json(const char *spec_json, AdrianeCallbacks callbacks);
+AdrianeResult adriane_engine_signal_json(const char *spec_json, const char *signal_name, const char *payload_json, AdrianeCallbacks callbacks);
+AdrianeResult adriane_engine_replay_json(const char *spec_json, const char *checkpoint_id, AdrianeCallbacks callbacks);
 void adriane_string_free(char *ptr);
 void adriane_result_free(AdrianeResult result);
 CDEF;
@@ -86,6 +101,31 @@ CDEF;
     public function runPrebuiltJson(string $name, string $inputJson, ?string $optionsJson = null): string
     {
         return $this->unwrap($this->ffi->adriane_run_prebuilt_json($name, $inputJson, $optionsJson));
+    }
+
+    public function engineRunJson(string $specJson, \FFI\CData $callbacks): string
+    {
+        return $this->unwrap($this->ffi->adriane_engine_run_json($specJson, $callbacks));
+    }
+
+    public function engineResumeJson(string $specJson, \FFI\CData $callbacks): string
+    {
+        return $this->unwrap($this->ffi->adriane_engine_resume_json($specJson, $callbacks));
+    }
+
+    public function engineApproveAndResumeJson(string $specJson, \FFI\CData $callbacks): string
+    {
+        return $this->unwrap($this->ffi->adriane_engine_approve_and_resume_json($specJson, $callbacks));
+    }
+
+    public function engineSignalJson(string $specJson, string $signalName, string $payloadJson, \FFI\CData $callbacks): string
+    {
+        return $this->unwrap($this->ffi->adriane_engine_signal_json($specJson, $signalName, $payloadJson, $callbacks));
+    }
+
+    public function engineReplayJson(string $specJson, string $checkpointId, \FFI\CData $callbacks): string
+    {
+        return $this->unwrap($this->ffi->adriane_engine_replay_json($specJson, $checkpointId, $callbacks));
     }
 
     private function unwrap(\FFI\CData $result): string

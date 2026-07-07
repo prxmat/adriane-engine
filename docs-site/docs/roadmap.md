@@ -32,7 +32,7 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | Recursion limit | Stable | `RecursionLimitError` bounds cyclic runs. |
 | One Rust engine + TypeScript SDK (`@adriane-ai/graph-sdk`) | Stable | The Rust engine (`@adriane-ai/napi`) is a **required** dependency. |
 | TypeScript engine path (dev/test/uncovered platforms) | Stable | Not deprecated — it's the fallback when the native addon is absent. |
-| Python SDK (`pip install adriane-ai` -> `import adriane_ai`) | Experimental | JSON-in/JSON-out: validate, compile, model policy, component & prebuilt runs. Custom Python nodes and streaming require the callback bridge. See [one engine, many languages](/docs/sdk-parity/one-engine-two-languages). |
+| Python SDK (`pip install adriane-ai` -> `import adriane_ai`) | Experimental | JSON-in/JSON-out: validate, compile, model policy, component & prebuilt runs. Custom Python nodes and streaming still need a PyO3 callback runtime. See [one engine, many languages](/docs/sdk-parity/one-engine-two-languages). |
 | Adriane DSL (compile graph/agent/chain YAML) | Experimental | Compiles from the same Rust compiler across TypeScript, Python, and C-ABI SDKs. |
 | Multi-provider LLM gateway (Anthropic, Gemini, OpenAI-compatible family, local) | Stable | Native Anthropic & Gemini + OpenAI-compatible OpenAI/OpenRouter/MiniMax/Hugging&nbsp;Face/Mistral + local Ollama/LM&nbsp;Studio; env-selected (BYOM). New in 0.2.0. See [Providers](/docs/building/providers). |
 | Semantic retrieval (`semanticRetriever` component) | Experimental | Real-embedding cosine retrieval over a supplied corpus + query vector (vs the mock-embedding `retriever`). New in 0.2.0. |
@@ -45,7 +45,7 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | Open Knowledge Format (`@adriane-ai/okf`) | Stable | Markdown + shallow-YAML frontmatter parser/serializer; byte-compatible TS + Rust. New in 1.0.0. See [OKF](/docs/knowledge/open-knowledge-format). |
 | Knowledge base + graph (`@adriane-ai/knowledge`) | Stable | KB/KG model, pure graph ops, and the `KnowledgeStore` seam (+ in-memory). New in 1.0.0. See [Knowledge base and graph](/docs/knowledge/knowledge-base-and-graph). |
 | Control plane, worker fleet & governance UI | Adriane Studio (commercial) | The control-plane API, the BullMQ worker fleet, durable Postgres checkpointing, and the governance Studio UI are **Adriane Studio**, the managed platform — not part of this open engine repo. The engine is a library you embed; there is no server to run for the engine itself. |
-| Polyglot SDKs beyond TS/Python | Experimental | C-ABI starter SDKs exist for Ruby, PHP, Lua, PowerShell, Go, C, C++, Zig, Swift, Objective-C, Java, Kotlin, Scala, C#, and Elixir. They expose the callback-neutral engine surface; full TypeScript callback parity is still the next bridge layer. |
+| Polyglot SDKs beyond TS/Python | Experimental | C-ABI starter SDKs exist for Ruby, PHP, Lua, PowerShell, Go, C, C++, Zig, Swift, Objective-C, Java, Kotlin, Scala, C#, and Elixir. The ABI exposes callback-neutral helpers plus callback-capable run/resume/approve/signal/replay; idiomatic builders and typed helpers are the remaining SDK work. |
 
 :::note Now executed
 `fanOut` and `subgraphId` were schema-only slots in earlier releases; as of 1.0.0 the runtime

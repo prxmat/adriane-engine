@@ -13,6 +13,16 @@ module Adriane
            :error, :pointer
   end
 
+  callback :string_callback, [:string, :pointer, :pointer, :pointer], :int
+  callback :event_callback, [:string, :pointer], :void
+
+  class Callbacks < FFI::Struct
+    layout :user_data, :pointer,
+           :on_node, :string_callback,
+           :on_condition, :string_callback,
+           :on_event, :event_callback
+  end
+
   attach_function :native_engine_version, :adriane_engine_version, [], :pointer
   attach_function :native_validate_graph_json, :adriane_validate_graph_json, [:string], Result.by_value
   attach_function :native_compile_graph_yaml_json, :adriane_compile_graph_yaml_json, [:string], Result.by_value
@@ -22,6 +32,11 @@ module Adriane
   attach_function :native_list_prebuilt_json, :adriane_list_prebuilt_json, [], Result.by_value
   attach_function :native_run_component_json, :adriane_run_component_json, [:string, :string, :string], Result.by_value
   attach_function :native_run_prebuilt_json, :adriane_run_prebuilt_json, [:string, :string, :pointer], Result.by_value
+  attach_function :native_engine_run_json, :adriane_engine_run_json, [:string, Callbacks.by_value], Result.by_value
+  attach_function :native_engine_resume_json, :adriane_engine_resume_json, [:string, Callbacks.by_value], Result.by_value
+  attach_function :native_engine_approve_and_resume_json, :adriane_engine_approve_and_resume_json, [:string, Callbacks.by_value], Result.by_value
+  attach_function :native_engine_signal_json, :adriane_engine_signal_json, [:string, :string, :string, Callbacks.by_value], Result.by_value
+  attach_function :native_engine_replay_json, :adriane_engine_replay_json, [:string, :string, Callbacks.by_value], Result.by_value
   attach_function :native_string_free, :adriane_string_free, [:pointer], :void
   attach_function :native_result_free, :adriane_result_free, [Result.by_value], :void
 
@@ -69,6 +84,26 @@ module Adriane
   def run_prebuilt_json(name, input_json, options_json: nil)
     options = optional_string_pointer(options_json)
     unwrap(native_run_prebuilt_json(name, input_json, options))
+  end
+
+  def engine_run_json(spec_json, callbacks)
+    unwrap(native_engine_run_json(spec_json, callbacks))
+  end
+
+  def engine_resume_json(spec_json, callbacks)
+    unwrap(native_engine_resume_json(spec_json, callbacks))
+  end
+
+  def engine_approve_and_resume_json(spec_json, callbacks)
+    unwrap(native_engine_approve_and_resume_json(spec_json, callbacks))
+  end
+
+  def engine_signal_json(spec_json, signal_name, payload_json, callbacks)
+    unwrap(native_engine_signal_json(spec_json, signal_name, payload_json, callbacks))
+  end
+
+  def engine_replay_json(spec_json, checkpoint_id, callbacks)
+    unwrap(native_engine_replay_json(spec_json, checkpoint_id, callbacks))
   end
 
   def optional_string_pointer(value)

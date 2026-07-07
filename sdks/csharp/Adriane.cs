@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
 namespace Adriane;
@@ -21,6 +22,89 @@ public static class Adriane
         public int Code;
         public IntPtr Value;
         public IntPtr Error;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int AdrianeStringCallback(
+        IntPtr payloadJson,
+        IntPtr userData,
+        out IntPtr value,
+        out IntPtr error);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void AdrianeEventCallback(IntPtr payloadJson, IntPtr userData);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct AdrianeCallbacks
+    {
+        public IntPtr UserData;
+        public AdrianeStringCallback? OnNode;
+        public AdrianeStringCallback? OnCondition;
+        public AdrianeEventCallback? OnEvent;
+    }
+
+    public sealed class EngineCallbacks : IDisposable
+    {
+        private readonly ConcurrentBag<IntPtr> allocations = new();
+        private readonly Func<string, string> onNode;
+        private readonly Func<string, string> onCondition;
+        private readonly Action<string>? onEvent;
+
+        private readonly AdrianeStringCallback nativeNode;
+        private readonly AdrianeStringCallback nativeCondition;
+        private readonly AdrianeEventCallback nativeEvent;
+
+        public EngineCallbacks(
+            Func<string, string> onNode,
+            Func<string, string> onCondition,
+            Action<string>? onEvent = null)
+        {
+            this.onNode = onNode;
+            this.onCondition = onCondition;
+            this.onEvent = onEvent;
+            nativeNode = (IntPtr payload, IntPtr userData, out IntPtr value, out IntPtr error) =>
+                InvokeString(payload, this.onNode, out value, out error);
+            nativeCondition = (IntPtr payload, IntPtr userData, out IntPtr value, out IntPtr error) =>
+                InvokeString(payload, this.onCondition, out value, out error);
+            nativeEvent = (payload, _) => this.onEvent?.Invoke(Marshal.PtrToStringUTF8(payload) ?? string.Empty);
+        }
+
+        internal AdrianeCallbacks ToNative() => new()
+        {
+            UserData = IntPtr.Zero,
+            OnNode = nativeNode,
+            OnCondition = nativeCondition,
+            OnEvent = nativeEvent,
+        };
+
+        private int InvokeString(IntPtr payload, Func<string, string> callback, out IntPtr value, out IntPtr error)
+        {
+            try
+            {
+                var result = callback(Marshal.PtrToStringUTF8(payload) ?? string.Empty);
+                var ptr = Marshal.StringToCoTaskMemUTF8(result);
+                allocations.Add(ptr);
+                value = ptr;
+                error = IntPtr.Zero;
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                var ptr = Marshal.StringToCoTaskMemUTF8(ex.Message);
+                allocations.Add(ptr);
+                value = IntPtr.Zero;
+                error = ptr;
+                return 3;
+            }
+        }
+
+        public void Dispose()
+        {
+            while (allocations.TryTake(out var ptr))
+            {
+                Marshal.FreeCoTaskMem(ptr);
+            }
+        }
     }
 
     private const string Library = "adriane_c_api";
@@ -67,6 +151,21 @@ public static class Adriane
     private static extern AdrianeResult adriane_run_prebuilt_json(string name, string inputJson, string? optionsJson);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    private static extern AdrianeResult adriane_engine_run_json(string specJson, AdrianeCallbacks callbacks);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    private static extern AdrianeResult adriane_engine_resume_json(string specJson, AdrianeCallbacks callbacks);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    private static extern AdrianeResult adriane_engine_approve_and_resume_json(string specJson, AdrianeCallbacks callbacks);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    private static extern AdrianeResult adriane_engine_signal_json(string specJson, string signalName, string payloadJson, AdrianeCallbacks callbacks);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    private static extern AdrianeResult adriane_engine_replay_json(string specJson, string checkpointId, AdrianeCallbacks callbacks);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern void adriane_string_free(IntPtr ptr);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
@@ -108,6 +207,21 @@ public static class Adriane
 
     public static string RunPrebuiltJson(string name, string inputJson, string? optionsJson = null) =>
         Unwrap(adriane_run_prebuilt_json(name, inputJson, optionsJson));
+
+    public static string EngineRunJson(string specJson, EngineCallbacks callbacks) =>
+        Unwrap(adriane_engine_run_json(specJson, callbacks.ToNative()));
+
+    public static string EngineResumeJson(string specJson, EngineCallbacks callbacks) =>
+        Unwrap(adriane_engine_resume_json(specJson, callbacks.ToNative()));
+
+    public static string EngineApproveAndResumeJson(string specJson, EngineCallbacks callbacks) =>
+        Unwrap(adriane_engine_approve_and_resume_json(specJson, callbacks.ToNative()));
+
+    public static string EngineSignalJson(string specJson, string signalName, string payloadJson, EngineCallbacks callbacks) =>
+        Unwrap(adriane_engine_signal_json(specJson, signalName, payloadJson, callbacks.ToNative()));
+
+    public static string EngineReplayJson(string specJson, string checkpointId, EngineCallbacks callbacks) =>
+        Unwrap(adriane_engine_replay_json(specJson, checkpointId, callbacks.ToNative()));
 
     private static string Unwrap(AdrianeResult result)
     {

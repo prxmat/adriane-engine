@@ -7,11 +7,16 @@
 
 #![deny(clippy::all)]
 
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
+use std::sync::OnceLock;
 
+use adriane_runtime_bridge::{BridgeResult, Entry, HostCallbacks, SharedCallbacks};
 use adriane_sdk_core as core;
+use async_trait::async_trait;
+use serde_json::Value;
+use tokio::runtime::{Builder, Runtime};
 
 /// Call completed successfully.
 pub const ADRIANE_OK: c_int = 0;
@@ -55,6 +60,119 @@ impl AdrianeResult {
             error: into_c_string(error.into()),
         }
     }
+}
+
+pub type AdrianeStringCallback = Option<
+    unsafe extern "C" fn(
+        payload_json: *const c_char,
+        user_data: *mut c_void,
+        value: *mut *const c_char,
+        error: *mut *const c_char,
+    ) -> c_int,
+>;
+pub type AdrianeEventCallback =
+    Option<unsafe extern "C" fn(payload_json: *const c_char, user_data: *mut c_void)>;
+
+#[repr(C)]
+pub struct AdrianeCallbacks {
+    pub user_data: *mut c_void,
+    pub on_node: AdrianeStringCallback,
+    pub on_condition: AdrianeStringCallback,
+    pub on_event: AdrianeEventCallback,
+}
+
+#[derive(Clone, Copy)]
+struct CCallbacks {
+    user_data: usize,
+    on_node: AdrianeStringCallback,
+    on_condition: AdrianeStringCallback,
+    on_event: AdrianeEventCallback,
+}
+
+unsafe impl Send for CCallbacks {}
+unsafe impl Sync for CCallbacks {}
+
+impl From<AdrianeCallbacks> for CCallbacks {
+    fn from(callbacks: AdrianeCallbacks) -> Self {
+        Self {
+            user_data: callbacks.user_data as usize,
+            on_node: callbacks.on_node,
+            on_condition: callbacks.on_condition,
+            on_event: callbacks.on_event,
+        }
+    }
+}
+
+#[async_trait]
+impl HostCallbacks for CCallbacks {
+    async fn on_node(&self, payload: Value) -> BridgeResult<String> {
+        self.call_string(self.on_node, payload.to_string(), "on_node")
+    }
+
+    fn on_condition(&self, payload: Value) -> BridgeResult<bool> {
+        self.call_string(self.on_condition, payload.to_string(), "on_condition")
+            .map(|text| adriane_runtime_bridge::parse_bool(&text))
+    }
+
+    fn on_event(&self, payload_json: String) {
+        let Some(callback) = self.on_event else {
+            return;
+        };
+        let payload = CString::new(payload_json.replace('\0', "\\0"))
+            .expect("internal NULs were escaped before building CString");
+        unsafe {
+            callback(payload.as_ptr(), self.user_data as *mut c_void);
+        }
+    }
+}
+
+impl CCallbacks {
+    fn call_string(
+        &self,
+        callback: AdrianeStringCallback,
+        payload_json: String,
+        name: &str,
+    ) -> BridgeResult<String> {
+        let callback = callback.ok_or_else(|| format!("{name} callback is null"))?;
+        let payload = CString::new(payload_json.replace('\0', "\\0"))
+            .expect("internal NULs were escaped before building CString");
+        let mut value = ptr::null();
+        let mut error = ptr::null();
+        let code = unsafe {
+            callback(
+                payload.as_ptr(),
+                self.user_data as *mut c_void,
+                &mut value,
+                &mut error,
+            )
+        };
+        copy_callback_result(code, value, error, name)
+    }
+}
+
+fn copy_callback_result(
+    code: c_int,
+    value: *const c_char,
+    error: *const c_char,
+    name: &str,
+) -> BridgeResult<String> {
+    if code == ADRIANE_OK {
+        if value.is_null() {
+            return Err(format!("{name} callback returned null value"));
+        }
+        return unsafe { borrowed_c_str(value) }
+            .map(str::to_owned)
+            .map_err(|error| format!("{name} callback returned invalid value: {error}"));
+    }
+
+    let message = if error.is_null() {
+        format!("{name} callback failed with code {code}")
+    } else {
+        unsafe { borrowed_c_str(error) }
+            .map(str::to_owned)
+            .unwrap_or_else(|error| format!("{name} callback error was invalid UTF-8: {error}"))
+    };
+    Err(message)
 }
 
 /// Version of the bound Rust engine.
@@ -207,6 +325,100 @@ pub unsafe extern "C" fn adriane_run_prebuilt_json(
     from_core(core::run_prebuilt(name, input, options))
 }
 
+/// Start a callback-capable engine run from an EngineSpec JSON document.
+///
+/// The spec wire shape is the same one used by the TypeScript N-API bridge.
+/// Callback pointers may be invoked from runtime worker threads and must remain
+/// valid until this function returns.
+///
+/// # Safety
+///
+/// `spec_json` must be a valid, null-terminated UTF-8 C string pointer. Callback
+/// function pointers, when present, must be valid for the full duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn adriane_engine_run_json(
+    spec_json: *const c_char,
+    callbacks: AdrianeCallbacks,
+) -> AdrianeResult {
+    unsafe { run_engine_entry(spec_json, callbacks, Entry::Start) }
+}
+
+/// Resume a callback-capable run from `spec_json.state`.
+///
+/// # Safety
+///
+/// Same requirements as [`adriane_engine_run_json`].
+#[no_mangle]
+pub unsafe extern "C" fn adriane_engine_resume_json(
+    spec_json: *const c_char,
+    callbacks: AdrianeCallbacks,
+) -> AdrianeResult {
+    unsafe { run_engine_entry(spec_json, callbacks, Entry::Resume) }
+}
+
+/// Approve host-provided tools carried in `spec_json.approvedTools`, then resume.
+///
+/// # Safety
+///
+/// Same requirements as [`adriane_engine_run_json`].
+#[no_mangle]
+pub unsafe extern "C" fn adriane_engine_approve_and_resume_json(
+    spec_json: *const c_char,
+    callbacks: AdrianeCallbacks,
+) -> AdrianeResult {
+    unsafe { run_engine_entry(spec_json, callbacks, Entry::Approve) }
+}
+
+/// Deliver an external signal payload, then resume the suspended run.
+///
+/// # Safety
+///
+/// All string pointers must be valid, null-terminated UTF-8 C strings. Callback
+/// function pointers, when present, must be valid for the full duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn adriane_engine_signal_json(
+    spec_json: *const c_char,
+    signal_name: *const c_char,
+    payload_json: *const c_char,
+    callbacks: AdrianeCallbacks,
+) -> AdrianeResult {
+    let name = match unsafe { read_required_c_str(signal_name) } {
+        Ok(value) => value.to_owned(),
+        Err(result) => return result,
+    };
+    let payload = match unsafe { read_required_c_str(payload_json) } {
+        Ok(value) => match serde_json::from_str::<Value>(value) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return AdrianeResult::err(
+                    ADRIANE_ERR_INPUT,
+                    format!("invalid signal payload JSON: {error}"),
+                )
+            }
+        },
+        Err(result) => return result,
+    };
+    unsafe { run_engine_entry(spec_json, callbacks, Entry::Signal { name, payload }) }
+}
+
+/// Replay a recorded run from `checkpoint_id`.
+///
+/// # Safety
+///
+/// Same requirements as [`adriane_engine_run_json`].
+#[no_mangle]
+pub unsafe extern "C" fn adriane_engine_replay_json(
+    spec_json: *const c_char,
+    checkpoint_id: *const c_char,
+    callbacks: AdrianeCallbacks,
+) -> AdrianeResult {
+    let checkpoint_id = match unsafe { read_required_c_str(checkpoint_id) } {
+        Ok(value) => value.to_owned(),
+        Err(result) => return result,
+    };
+    unsafe { run_engine_entry(spec_json, callbacks, Entry::Replay { checkpoint_id }) }
+}
+
 /// Free a string returned by the Adriane C ABI.
 ///
 /// Passing `NULL` is allowed.
@@ -257,6 +469,32 @@ unsafe fn with_c_str(
     }
 }
 
+unsafe fn run_engine_entry(
+    spec_json: *const c_char,
+    callbacks: AdrianeCallbacks,
+    entry: Entry,
+) -> AdrianeResult {
+    let spec = match unsafe { read_required_c_str(spec_json) } {
+        Ok(value) => value.to_owned(),
+        Err(result) => return result,
+    };
+    let callbacks: SharedCallbacks = std::sync::Arc::new(CCallbacks::from(callbacks));
+    match runtime().block_on(adriane_runtime_bridge::run(spec, callbacks, entry)) {
+        Ok(value) => AdrianeResult::ok(value),
+        Err(error) => AdrianeResult::err(ADRIANE_ERR_INPUT, error),
+    }
+}
+
+fn runtime() -> &'static Runtime {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to initialize Adriane C ABI runtime")
+    })
+}
+
 unsafe fn read_required_c_str<'a>(input: *const c_char) -> Result<&'a str, AdrianeResult> {
     if input.is_null() {
         return Err(AdrianeResult::err(
@@ -271,6 +509,10 @@ unsafe fn read_required_c_str<'a>(input: *const c_char) -> Result<&'a str, Adria
             format!("input is not valid UTF-8: {error}"),
         )
     })
+}
+
+unsafe fn borrowed_c_str<'a>(input: *const c_char) -> Result<&'a str, std::str::Utf8Error> {
+    unsafe { CStr::from_ptr(input) }.to_str()
 }
 
 unsafe fn read_optional_c_str<'a>(input: *const c_char) -> Result<Option<&'a str>, AdrianeResult> {
@@ -297,6 +539,7 @@ fn into_c_string(value: String) -> *mut c_char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn returns_version_string() {
@@ -390,6 +633,109 @@ mod tests {
         assert_eq!(result.code, ADRIANE_OK);
         let output = unsafe { CStr::from_ptr(result.value) }.to_str().unwrap();
         assert_eq!(output, "{\"prompt\":\"Hello Ada!\"}");
+
+        unsafe {
+            adriane_result_free(result);
+        }
+    }
+
+    struct CallbackCounters {
+        nodes: AtomicUsize,
+        conditions: AtomicUsize,
+        events: AtomicUsize,
+    }
+
+    unsafe extern "C" fn node_callback(
+        payload_json: *const c_char,
+        user_data: *mut c_void,
+        value: *mut *const c_char,
+        error: *mut *const c_char,
+    ) -> c_int {
+        let counters = unsafe { &*(user_data as *const CallbackCounters) };
+        counters.nodes.fetch_add(1, Ordering::SeqCst);
+        let payload = unsafe { CStr::from_ptr(payload_json) }.to_str().unwrap();
+        let output = if payload.contains("\"nodeId\":\"finish\"") {
+            c"{\"done\":true}".as_ptr()
+        } else {
+            c"{\"seen\":\"start\"}".as_ptr()
+        };
+        unsafe {
+            *value = output;
+            *error = ptr::null();
+        }
+        ADRIANE_OK
+    }
+
+    unsafe extern "C" fn condition_callback(
+        _payload_json: *const c_char,
+        user_data: *mut c_void,
+        value: *mut *const c_char,
+        error: *mut *const c_char,
+    ) -> c_int {
+        let counters = unsafe { &*(user_data as *const CallbackCounters) };
+        counters.conditions.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            *value = c"true".as_ptr();
+            *error = ptr::null();
+        }
+        ADRIANE_OK
+    }
+
+    unsafe extern "C" fn event_callback(_payload_json: *const c_char, user_data: *mut c_void) {
+        let counters = unsafe { &*(user_data as *const CallbackCounters) };
+        counters.events.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn runs_callback_graph_through_c_abi() {
+        let spec = CString::new(
+            r#"{
+              "graph": {
+                "id": "callback-graph",
+                "version": "1.0.0",
+                "name": "Callback graph",
+                "entryNodeId": "start",
+                "channels": {
+                  "seen": { "type": "string", "reducer": "replace" },
+                  "done": { "type": "boolean", "reducer": "replace" }
+                },
+                "nodes": [
+                  { "id": "start", "type": "action", "label": "Start" },
+                  { "id": "finish", "type": "action", "label": "Finish" }
+                ],
+                "edges": [
+                  { "id": "e1", "from": "start", "to": "finish", "type": "conditional", "condition": "go" }
+                ]
+              },
+              "runId": "run-c",
+              "jsNodeIds": ["start", "finish"]
+            }"#,
+        )
+        .unwrap();
+        let counters = CallbackCounters {
+            nodes: AtomicUsize::new(0),
+            conditions: AtomicUsize::new(0),
+            events: AtomicUsize::new(0),
+        };
+        let callbacks = AdrianeCallbacks {
+            user_data: (&counters as *const CallbackCounters).cast_mut().cast(),
+            on_node: Some(node_callback),
+            on_condition: Some(condition_callback),
+            on_event: Some(event_callback),
+        };
+
+        let result = unsafe { adriane_engine_run_json(spec.as_ptr(), callbacks) };
+
+        assert_eq!(result.code, ADRIANE_OK);
+        assert!(!result.value.is_null());
+        let output = unsafe { CStr::from_ptr(result.value) }.to_str().unwrap();
+        let json: serde_json::Value = serde_json::from_str(output).unwrap();
+        assert_eq!(json["status"], "completed");
+        assert_eq!(json["state"]["channels"]["seen"], "start");
+        assert_eq!(json["state"]["channels"]["done"], true);
+        assert_eq!(counters.nodes.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.conditions.load(Ordering::SeqCst), 1);
+        assert!(counters.events.load(Ordering::SeqCst) >= 3);
 
         unsafe {
             adriane_result_free(result);
