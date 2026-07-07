@@ -32,8 +32,8 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | Recursion limit | Stable | `RecursionLimitError` bounds cyclic runs. |
 | One Rust engine + TypeScript SDK (`@adriane-ai/graph-sdk`) | Stable | The Rust engine (`@adriane-ai/napi`) is a **required** dependency. |
 | TypeScript engine path (dev/test/uncovered platforms) | Stable | Not deprecated — it's the fallback when the native addon is absent. |
-| Python SDK (`pip install adriane-ai` → `import adriane_ai`) | Experimental | JSON-in/JSON-out: validate, compile, model policy, component & prebuilt runs. **No custom Python nodes, no streaming** — by design. See [one engine, two languages](/docs/sdk-parity/one-engine-two-languages). |
-| Adriane DSL (compile graph/agent/chain YAML) | Experimental | Compiles in both SDKs from the same Rust compiler. |
+| Python SDK (`pip install adriane-ai` -> `import adriane_ai`) | Experimental | JSON-in/JSON-out: validate, compile, model policy, component & prebuilt runs. Custom Python nodes and streaming require the callback bridge. See [one engine, many languages](/docs/sdk-parity/one-engine-two-languages). |
+| Adriane DSL (compile graph/agent/chain YAML) | Experimental | Compiles from the same Rust compiler across TypeScript, Python, and C-ABI SDKs. |
 | Multi-provider LLM gateway (Anthropic, Gemini, OpenAI-compatible family, local) | Stable | Native Anthropic & Gemini + OpenAI-compatible OpenAI/OpenRouter/MiniMax/Hugging&nbsp;Face/Mistral + local Ollama/LM&nbsp;Studio; env-selected (BYOM). New in 0.2.0. See [Providers](/docs/building/providers). |
 | Semantic retrieval (`semanticRetriever` component) | Experimental | Real-embedding cosine retrieval over a supplied corpus + query vector (vs the mock-embedding `retriever`). New in 0.2.0. |
 | MCP server (tools + knowledge-base resources) | Experimental | Run agents/graphs as MCP tools and read a knowledge base as MCP resources, over stdio. New in 0.2.0. See [MCP server](/docs/building/mcp-server). |
@@ -45,7 +45,7 @@ Legend: **Stable** = relied on, contract-tested · **Experimental** = works, sur
 | Open Knowledge Format (`@adriane-ai/okf`) | Stable | Markdown + shallow-YAML frontmatter parser/serializer; byte-compatible TS + Rust. New in 1.0.0. See [OKF](/docs/knowledge/open-knowledge-format). |
 | Knowledge base + graph (`@adriane-ai/knowledge`) | Stable | KB/KG model, pure graph ops, and the `KnowledgeStore` seam (+ in-memory). New in 1.0.0. See [Knowledge base and graph](/docs/knowledge/knowledge-base-and-graph). |
 | Control plane, worker fleet & governance UI | Adriane Studio (commercial) | The control-plane API, the BullMQ worker fleet, durable Postgres checkpointing, and the governance Studio UI are **Adriane Studio**, the managed platform — not part of this open engine repo. The engine is a library you embed; there is no server to run for the engine itself. |
-| Polyglot SDKs beyond TS/Python (Go, Java, PHP, .NET, Ruby, native Rust) | Planned | The architecture is built for this; none are shipped. See below. |
+| Polyglot SDKs beyond TS/Python | Experimental | C-ABI starter SDKs exist for Ruby, PHP, Lua, PowerShell, Go, C, C++, Zig, Swift, Objective-C, Java, Kotlin, Scala, C#, and Elixir. They expose the callback-neutral engine surface; full TypeScript callback parity is still the next bridge layer. |
 
 :::note Now executed
 `fanOut` and `subgraphId` were schema-only slots in earlier releases; as of 1.0.0 the runtime
@@ -61,23 +61,25 @@ a second implementation to drift.
 
 ### Polyglot SDKs
 
-This is already real for two languages and is the clearest path forward:
+This is now real for TypeScript, Python, and C-ABI starter SDKs:
 
 ```mermaid
 flowchart TB
   core["Rust engine core<br/>(graph model · validator · DSL compiler · governance)"]
-  napi["napi binding"] --> ts["TypeScript SDK ✅ shipped"]
-  pyo3["pyo3 binding"] --> py["Python SDK 🟡 experimental"]
-  future["future thin bindings"] --> rest["Go · Java · PHP · .NET · Ruby · native Rust SDK<br/>📋 planned"]
+  napi["napi binding"] --> ts["TypeScript SDK shipped"]
+  pyo3["pyo3 binding"] --> py["Python SDK experimental"]
+  cabi["C ABI binding"] --> rest["Ruby · PHP · Lua · PowerShell · Go · C/C++ · Zig · Swift · ObjC · JVM · C# · Elixir<br/>starter SDKs"]
   core --> napi
   core --> pyo3
-  core --> future
+  core --> cabi
 ```
 
 The TypeScript SDK rides a [napi](/docs/architecture/napi-bridge) binding; the Python SDK rides a
-pyo3 binding. The same pattern — a thin, JSON-shaped binding over the Rust core — is what makes
-Go, Java, PHP, .NET, Ruby, and a native Rust SDK *tractable* rather than rewrites. They are
-**planned, not shipped**; the design exists to make them additive.
+pyo3 binding; the newer polyglot SDKs ride the shared [C ABI](/docs/sdk-parity/polyglot-c-abi).
+That keeps Go, Java/Kotlin/Scala, PHP, .NET, Ruby, Lua, PowerShell, Swift, Objective-C, Zig, C++,
+and Elixir additive wrappers instead of rewrites. The current shared surface is JSON/YAML
+validation, compilation, model policy, catalogs, native components, and prebuilt-agent runs; the
+callback runtime is the remaining bridge for full TypeScript feature parity.
 
 ### Durable timers and signals — delivered in 1.0.0
 
@@ -119,4 +121,4 @@ runtime actually does.
 
 - [How Adriane compares](/docs/introduction/comparison) — vs LangGraph, Temporal, Haystack.
 - [Architecture overview](/docs/architecture/overview) — including the reserved `fanOut`/`subgraph` slots.
-- [One engine, two languages](/docs/sdk-parity/one-engine-two-languages) — the parity contract.
+- [One engine, many languages](/docs/sdk-parity/one-engine-two-languages) — the parity contract.

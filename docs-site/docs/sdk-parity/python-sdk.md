@@ -149,14 +149,14 @@ Three typed errors, all `ValueError` subclasses:
 - `RunError` — an unknown component kind / agent name, invalid params/input, or a runtime
   failure reported by the engine.
 
-:::note Why no custom nodes
-The binding is JSON-in / JSON-out with no Python callbacks crossing into Rust — so the Python
-surface is validation, compilation, single-component runs, and prebuilt-agent runs, rather than
-the callback-driven custom-node graphs the TypeScript SDK builds. See
-[one engine, two languages](./one-engine-two-languages).
+:::note Why no custom nodes yet
+The binding is JSON-in / JSON-out with no Python callbacks crossing into Rust, so the Python
+surface is validation, compilation, single-component runs, and prebuilt-agent runs. The full
+TypeScript custom-node graph surface needs the callback-runtime bridge described in
+[one engine, many languages](./one-engine-two-languages).
 :::
 
 ## Next
 
 - [The Adriane DSL](/docs/dsl/graph-yaml-syntax) — author graphs as YAML from either language.
-- [One engine, two languages](./one-engine-two-languages)
+- [One engine, many languages](./one-engine-two-languages)

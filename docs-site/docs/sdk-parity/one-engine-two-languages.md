@@ -1,64 +1,81 @@
 ---
 sidebar_position: 1
-title: One engine, two languages
-description: The same Rust core under TypeScript and Python — what's shared, what differs, and why.
+title: One engine, many languages
+description: The Rust engine parity contract for TypeScript, Python, and the C-ABI SDKs.
 ---
 
-# One engine, two languages
+# One engine, many languages
 
-Adriane is **one Rust engine** with **two SDK surfaces**. This page is the contract between
-them: what is guaranteed identical, where the surfaces deliberately differ, and why.
+Adriane is **one Rust engine** with multiple SDK surfaces. This page is the parity contract:
+what is guaranteed identical, what is already exposed through the shared C ABI, and which
+TypeScript features still require the next callback-runtime bridge before every SDK can expose
+them faithfully.
 
-## What's shared — the engine
+## Shared engine contract
 
 The graph model, the validator, the DSL compiler, the model policy, and the component and
-prebuilt catalogs live once, in Rust. Both SDKs call into that same code:
+prebuilt catalogs live once, in Rust. SDKs call into that same code:
 
-- A graph that **validates** in TypeScript validates identically in Python.
-- A DSL document that **compiles** one way compiles the same way in the other.
+- A graph that **validates** in one SDK validates identically in the others.
+- A DSL document that **compiles** in one SDK compiles the same way in the others.
 - `resolve_model` / model-policy decisions are the same given the same environment.
 - The component and prebuilt catalogs are the same lists.
+- Native component and prebuilt-agent runs execute in Rust, not as per-language rewrites.
 
 There is no second implementation to drift. This is the whole point of the design.
 
-## What differs — the surface
+## SDK families
 
-| | TypeScript (`@adriane-ai/graph-sdk`) | Python (`adriane-ai`) |
+| Family | Languages | Binding |
 | --- | --- | --- |
-| Install / import | `npm i @adriane-ai/graph-sdk` · `import { createGraph } from "@adriane-ai/graph-sdk"` | `pip install adriane-ai` · `import adriane_ai` |
-| Rust engine | required dependency (`@adriane-ai/napi`), installed with the SDK | built into the wheel, always present |
-| Builder + custom node handlers | ✅ full builder, custom JS handlers, conditional predicates | ❌ no custom nodes (see below) |
-| Streaming | ✅ | ❌ |
-| Validate / compile DSL | ✅ | ✅ |
-| Model policy | ✅ | ✅ |
-| Component & prebuilt catalogs | ✅ | ✅ run via `run_component` / `run_prebuilt` |
-| Fully-Rust run paths | ✅ | ✅ |
+| TypeScript | TypeScript / JavaScript | N-API package with callback-heavy graph execution |
+| Python | Python | PyO3 wheel with JSON-in / JSON-out helpers |
+| C ABI SDKs | Ruby, PHP, Lua, PowerShell, Go, C, C++, Zig, Swift, Objective-C, Java, Kotlin, Scala, C#, Elixir | `crates/c-api` shared dynamic library |
 
-### Why Python has no custom nodes
+The C ABI SDKs intentionally start from the same callback-neutral surface that Python exposes.
+That gives every language the real Rust engine without inventing a runtime bridge thirteen
+times.
 
-The Python binding is **JSON-in / JSON-out** and runs on a single-threaded tokio runtime inside
-Rust — **no Python callbacks cross the boundary**. A custom node handler would mean calling
-*back* into Python from Rust on every step, which the binding intentionally doesn't do. So the
-Python surface is the part of the engine that needs no host callbacks: validation, compilation,
-the model policy, single-component runs, and prebuilt-agent runs (which execute end to end in
-Rust).
+## Feature parity matrix
 
-The TypeScript SDK *does* bridge callbacks (node handlers, condition predicates, event
-emission), which is why it offers the full builder with custom JavaScript nodes.
+| Capability | TypeScript | Python | C ABI SDKs |
+| --- | --- | --- | --- |
+| Engine version | Yes | Yes | Yes |
+| Validate `GraphDefinition` JSON | Yes | Yes | Yes |
+| Compile graph YAML DSL | Yes | Yes | Yes |
+| Resolve model tier / provider override | Yes | Yes | Yes |
+| List component catalog | Yes | Yes | Yes |
+| List prebuilt agents | Yes | Yes | Yes |
+| Run native component | Yes | Yes | Yes |
+| Run prebuilt micro-agent | Yes | Yes | Yes |
+| Fluent graph builder | Yes | Planned | Planned |
+| Host-language custom node handlers | Yes | Needs callback bridge | Needs callback bridge |
+| Host-language conditional predicates | Yes | Needs callback bridge | Needs callback bridge |
+| Streaming graph events | Yes | Needs callback bridge | Needs callback bridge |
+| Checkpointer interface / resume / approval helpers | Yes | Needs callback bridge | Needs callback bridge |
 
-## The asymmetry is intentional
+The parity target is not optional: every TypeScript capability should either exist in each SDK
+or be tracked as a bridge gap. The current C ABI covers the stable, callback-neutral part of the
+engine first. The remaining TypeScript-only features all share the same root requirement: Rust
+must be able to call safely back into the host language for handlers, predicates, streaming
+events, and checkpoint lifecycle hooks.
 
-This is not "Python is the lesser SDK." It's that each surface exposes what its bridge can do
-faithfully:
+## Callback boundary
 
-- Reach for **Python** to validate, compile, and run graphs and prebuilt agents from a Python
-  app or notebook — with the real engine, no re-implementation.
-- Reach for **TypeScript** when you need to author graphs with custom logic, stream, or embed
-  the engine in a Node service.
+Custom node handlers, conditional predicates, tool approval flows, and streaming are not simple
+JSON functions. They require long-lived host callbacks, runtime ownership rules, threading
+rules, error propagation, and allocator boundaries. TypeScript already has that through N-API.
+The polyglot SDKs need a C callback runtime contract before those features can be exposed
+without pretending that each language is identical.
 
-Either way you are driving the same Rust core.
+Until that callback bridge exists, use:
+
+- **TypeScript** for full custom graph execution, streaming, human gates, and checkpointers.
+- **Python or C ABI SDKs** for validation, DSL compilation, model policy, catalogs, native
+  components, and prebuilt micro-agent runs.
 
 ## Next
 
 - [TypeScript SDK](./typescript-sdk)
 - [Python SDK](./python-sdk)
+- [Polyglot C ABI](./polyglot-c-abi)

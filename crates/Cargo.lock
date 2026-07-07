@@ -50,6 +50,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "adriane-c-api"
+version = "1.4.0"
+dependencies = [
+ "adriane-sdk-core",
+]
+
+[[package]]
 name = "adriane-callbacks"
 version = "1.4.0"
 dependencies = [
@@ -246,15 +253,8 @@ dependencies = [
 name = "adriane-py"
 version = "1.4.0"
 dependencies = [
- "adriane-agents-core",
- "adriane-components",
- "adriane-graph-adriane",
- "adriane-graph-core",
- "adriane-graph-runtime",
- "adriane-llm-gateway",
+ "adriane-sdk-core",
  "pyo3",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -280,6 +280,20 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "adriane-sdk-core"
+version = "1.4.0"
+dependencies = [
+ "adriane-agents-core",
+ "adriane-components",
+ "adriane-graph-adriane",
+ "adriane-graph-core",
+ "adriane-graph-runtime",
+ "adriane-llm-gateway",
+ "serde_json",
  "tokio",
 ]
 

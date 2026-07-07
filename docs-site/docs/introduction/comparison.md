@@ -37,11 +37,11 @@ Legend: ✅ first-class · 🟡 partial / early · ❌ not provided · — not t
 | Native governance: approval gates as a runtime property | ✅ | 🟡 (interrupt/HIL primitives, you build the policy) | 🟡 (signals, you build the policy) | ❌ |
 | Separation of duties (agent never approves its own output), enforced | ✅ | ❌ (DIY) | ❌ (DIY) | ❌ |
 | Attested decisions (Ed25519, tamper-evident audit) | ✅ | ❌ | ❌ | ❌ |
-| One engine, two SDKs at parity (validate/compile identical across languages) | ✅ (TS + Python over one Rust core) | ❌ (Python-first; JS port is separate) | 🟡 (multi-SDK, but each is a client lib, not one core) | ❌ |
+| One engine, many SDKs at parity for engine-owned functions | ✅ (TS + Python + C-ABI SDKs over one Rust core) | ❌ (Python-first; JS port is separate) | 🟡 (multi-SDK, but each is a client lib, not one core) | ❌ |
 | Durable execution at scale (clustering, durable timers, signals, retries-as-platform) | ❌ | 🟡 (via LangGraph Platform / external infra) | ✅ (this is its core competency) | — |
 | RAG / retriever / vector-store breadth | 🟡 (a RAG pipeline + a few pieces) | 🟡 | 🟡 | ✅ (deepest catalog) |
 | Provider & tool integration breadth | 🟡 (small, curated) | ✅ (large) | — | ✅ (large) |
-| Polyglot SDKs beyond TS/Python | 🟡 (designed for; Go/Java/PHP/.NET/Ruby/Rust **planned**, not shipped) | ❌ | ✅ (Go, Java, TS, Python, PHP, .NET shipped) | ❌ |
+| Polyglot SDKs beyond TS/Python | 🟡 (C-ABI starter SDKs shipped; callback-heavy TS parity still in progress) | ❌ | ✅ (Go, Java, TS, Python, PHP, .NET shipped) | ❌ |
 | Maturity / production track record | 🟡 alpha, pre-1.0 | ✅ widely deployed | ✅ very mature | ✅ mature |
 
 A few entries deserve a footnote rather than a checkmark:
@@ -58,14 +58,13 @@ A few entries deserve a footnote rather than a checkmark:
 
 ## Where the parity SDKs actually differ
 
-The "one engine, two SDKs" row is genuine — the graph model, validator, and DSL compiler live
-**once in Rust** and both SDKs call into it, so a graph that validates in TypeScript validates
-identically in Python. But the two surfaces are deliberately not symmetric: TypeScript bridges
-callbacks (custom node handlers, condition predicates, streaming), Python is JSON-in/JSON-out
-(validate, compile, model policy, and end-to-end Rust component/prebuilt runs — **no custom
-Python nodes, no streaming**). The full contract is in
-[one engine, two languages](/docs/sdk-parity/one-engine-two-languages). Read it before assuming
-Python can do everything TypeScript can — it can't, by design.
+The "one engine, many SDKs" row is genuine: the graph model, validator, DSL compiler, model
+policy, catalogs, native component runs, and prebuilt-agent runs live **once in Rust** and the SDKs
+call into that code. But the surfaces are deliberately not symmetric yet: TypeScript bridges
+callbacks (custom node handlers, condition predicates, streaming), while Python and the C-ABI
+SDKs expose the callback-neutral JSON/YAML surface. The full contract is in
+[one engine, many languages](/docs/sdk-parity/one-engine-two-languages). Read it before assuming
+every SDK can do everything TypeScript can today.
 
 ## Benchmarks — speed & tokens
 

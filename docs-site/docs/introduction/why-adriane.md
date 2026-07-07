@@ -61,24 +61,27 @@ The run executes one node at a time, checkpointing as it goes. When it reaches a
 gate it **suspends** — the process can exit entirely — and a later **resume** picks up from
 the checkpoint, emitting the events that bring observers back in sync.
 
-## One engine, two SDKs
+## One engine, many SDKs
 
-Adriane's graph model, validator, and DSL compiler live **once, in Rust**. The TypeScript
-and Python SDKs are thin shims over that single engine — not re-implementations. A graph
-that validates one way in TypeScript validates exactly the same way in Python, because
+Adriane's graph model, validator, DSL compiler, model policy, component catalog, and prebuilt
+agent catalog live **once, in Rust**. The TypeScript, Python, and C-ABI SDKs are thin surfaces
+over that single engine, not re-implementations. A graph that validates one way in TypeScript
+validates exactly the same way in Python, Ruby, Go, Java, C#, or any other C-ABI wrapper because
 there is no second source of truth to drift.
 
 - **TypeScript** — `npm i @adriane-ai/graph-sdk`. The Rust engine (`@adriane-ai/napi`) is a
   **required dependency**, installed with the SDK; Adriane runs on Rust.
 - **Python** — `pip install adriane-ai`, then `import adriane_ai`. The wheel ships the
   compiled Rust extension, so the engine is always present.
+- **C-ABI SDKs** — build `adriane-c-api`, set `ADRIANE_C_API_LIB`, and use the wrapper in
+  `sdks/` for Ruby, PHP, Lua, PowerShell, Go, C++, Zig, Swift, Objective-C, JVM, C#, or Elixir.
 
-See [One engine, two languages](/docs/sdk-parity/one-engine-two-languages) for the full
+See [One engine, many languages](/docs/sdk-parity/one-engine-two-languages) for the full
 parity story.
 
 ## Where to go next
 
-- **[Installation](/docs/getting-started/installation)** — set up TypeScript or Python (or both).
+- **[Installation](/docs/getting-started/installation)** — set up TypeScript, Python, or a C-ABI SDK.
 - **[Your first run](/docs/getting-started/your-first-run)** — build and run a graph in a few lines.
 - **[Core concepts](/docs/core-concepts/graphs-nodes-edges-state)** — the model in depth.
 - **[Governance](/docs/governance/governance-model)** — the differentiator, end to end.
