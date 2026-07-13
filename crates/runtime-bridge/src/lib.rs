@@ -1,25 +1,9 @@
-//! The async run bridge: assemble a Rust [`GraphRuntime`] from an
-//! [`crate::spec::EngineSpec`], wiring user-supplied JS closures (node handlers,
-//! tool `execute` fns, condition predicates) as Rust seams that call back into JS
-//! via [`ThreadsafeFunction`]s, then drive a start / resume / approve.
+//! Callback-capable runtime bridge shared by N-API and the C ABI.
 //!
-//! Threading model:
-//! - The whole thing runs inside an **async** napi fn, so the JS main thread is free
-//!   to service the TSFN callbacks while the Rust run future is parked.
-//! - Every JS seam is an **async** JS callback (it returns a `Promise`). Rust calls
-//!   it with [`ThreadsafeFunction::call_async`] — whose `Return = Promise<String>`
-//!   comes from the TSFN generics in napi 3 — which resolves to a napi
-//!   [`Promise<String>`], and then `.await`s that promise to its JS-resolved value.
-//!   Node handlers and tool `execute` fns are async on the Rust side too, so they
-//!   simply `.await` both stages inline.
-//! - Condition predicates are **synchronous** by the runtime contract
-//!   (`Fn(&GraphState) -> bool`), so the closure itself cannot `.await`. It still
-//!   drives an **async** (Promise-returning) JS predicate: it `spawn`s the
-//!   `call_async(..).await?.await?` chain onto napi's multi-threaded tokio runtime
-//!   and blocks the current worker thread (inside `block_in_place`, so tokio can
-//!   relocate other tasks) on a oneshot until that spawned task resolves the JS
-//!   promise. The JS main thread is never blocked, so its microtask queue is free to
-//!   settle the promise. No `call_with_return_value` / sync-channel hack remains.
+//! This crate owns the TypeScript `EngineSpec` wire contract and the logic that
+//! assembles a Rust [`GraphRuntime`] from it. Language bindings provide only a
+//! [`HostCallbacks`] implementation for custom node handlers, tool handlers,
+//! conditional predicates, and event forwarding.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -54,21 +38,31 @@ use adriane_llm_gateway::{
 use adriane_memory::{InMemoryMemoryStore, MemoryStore, MockEmbedder, RecallMode, RetrievalPolicy};
 use adriane_skills::{InMemorySkillStore, SkillStore};
 use async_trait::async_trait;
-use napi::bindgen_prelude::Promise;
-use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
-use napi::Status;
 use serde_json::{json, Value};
+
+pub mod spec;
 
 use crate::spec::{AgentSpec, ApprovedTool, EngineSpec, FsPolicyRule, RunOutcome};
 
-/// A TSFN that takes one JS string argument. napi 3 dropped `ErrorStrategy`; the
-/// napi-2 `Fatal` behavior is the `CalleeHandled = false` const-generic (5th param):
-/// the JS callback receives just `(payloadString)` (no leading error arg), `.call(...)`
-/// takes a bare `String`, and a throw surfaces as a fatal napi exception rather than a
-/// silently-handled error. `Return = Promise<String>` is the value the async seams
-/// await (`call_async(..).await?.await?`); the fire-and-forget `on_event` never awaits
-/// it. `CallJsBackArgs` stays the default `T` so the payload marshals as one JS string.
-type StringTsfn = ThreadsafeFunction<String, Promise<String>, String, Status, false>;
+pub type BridgeResult<T> = Result<T, String>;
+
+/// Host-language callbacks used by the runtime when a graph needs behavior that
+/// lives outside Rust.
+#[async_trait]
+pub trait HostCallbacks: Send + Sync {
+    /// Custom node handlers and host-backed tool `execute` functions.
+    async fn on_node(&self, payload: Value) -> BridgeResult<String>;
+
+    /// Named conditional predicates. The runtime calls this synchronously while
+    /// routing, so an embedding that needs async host work must bridge/block on its
+    /// side, as the N-API adapter does.
+    fn on_condition(&self, payload: Value) -> BridgeResult<bool>;
+
+    /// Fire-and-forget run lifecycle / token events, serialized as JSON.
+    fn on_event(&self, payload_json: String);
+}
+
+pub type SharedCallbacks = Arc<dyn HostCallbacks>;
 
 /// Which entry point the caller asked for.
 #[derive(Clone, Debug)]
@@ -124,16 +118,13 @@ struct ReplayJournalWire {
 impl ReplayMode {
     /// Resolve the mode: `Entry::Replay` (+ `spec.replay_journal`) → Replay; else the
     /// `ADRIANE_LLM_RECORD` env flag → Record; else Live.
-    fn resolve(spec: &EngineSpec, entry: &Entry) -> napi::Result<ReplayMode> {
+    fn resolve(spec: &EngineSpec, entry: &Entry) -> BridgeResult<ReplayMode> {
         if matches!(entry, Entry::Replay { .. }) {
             let raw = spec.replay_journal.as_deref().ok_or_else(|| {
-                napi::Error::from_reason(
-                    "Entry::Replay requires `replay_journal` (the recorded run journal)".to_owned(),
-                )
+                "Entry::Replay requires `replay_journal` (the recorded run journal)".to_owned()
             })?;
-            let wire: ReplayJournalWire = serde_json::from_str(raw).map_err(|error| {
-                napi::Error::from_reason(format!("invalid replay_journal JSON: {error}"))
-            })?;
+            let wire: ReplayJournalWire = serde_json::from_str(raw)
+                .map_err(|error| format!("invalid replay_journal JSON: {error}"))?;
             return Ok(ReplayMode::Replay {
                 gateway: Arc::new(ReplayGateway::new(wire.decisions)),
                 clock: wire.clock,
@@ -202,41 +193,15 @@ impl ReplayMode {
     }
 }
 
-/// The three JS callbacks, shared into every seam closure. napi 3's
-/// `ThreadsafeFunction` is no longer `Clone` (napi 2 was), so each is held behind an
-/// `Arc`; cloning an `Arc` shares the SAME underlying threadsafe-function handle (which
-/// is itself `Arc`-refcounted), preserving the napi-2 "clone the TSFN into each closure"
-/// semantics — same JS callback, refcounted alive until the last clone drops.
-#[derive(Clone)]
-pub struct JsCallbacks {
-    /// `(payloadJson) -> updateJson` — JS node handlers (`kind:"node"`) and JS tool
-    /// `execute` fns (`kind:"tool"`). The return is the channel-update JSON (node)
-    /// or the tool-result JSON (tool).
-    on_node: Arc<StringTsfn>,
-    /// `(payloadJson) -> boolean` — named condition predicates.
-    on_condition: Arc<StringTsfn>,
-    /// `(payloadJson)` — fire-and-forget run-lifecycle event sink.
-    on_event: Arc<StringTsfn>,
-}
-
-impl JsCallbacks {
-    /// Wrap the three already-converted TSFNs in `Arc`s. The conversion from
-    /// `JsFunction` happens in napi's `FromNapiValue` for `ThreadsafeFunction`, which
-    /// maps each `String` payload into a single JS string argument.
-    pub fn new(on_node: StringTsfn, on_condition: StringTsfn, on_event: StringTsfn) -> Self {
-        JsCallbacks {
-            on_node: Arc::new(on_node),
-            on_condition: Arc::new(on_condition),
-            on_event: Arc::new(on_event),
-        }
-    }
-}
-
-/// Entry point used by all three napi fns. Deserializes the spec, builds the
+/// Entry point used by language bindings. Deserializes the spec, builds the
 /// runtime, drives the requested entry, then serializes the [`RunOutcome`].
-pub async fn run(spec_json: String, callbacks: JsCallbacks, entry: Entry) -> napi::Result<String> {
+pub async fn run(
+    spec_json: String,
+    callbacks: SharedCallbacks,
+    entry: Entry,
+) -> BridgeResult<String> {
     let spec: EngineSpec = serde_json::from_str(&spec_json)
-        .map_err(|error| napi::Error::from_reason(format!("invalid engine spec JSON: {error}")))?;
+        .map_err(|error| format!("invalid engine spec JSON: {error}"))?;
 
     // ADR 0038: resolve the replay mode (live / record / replay) once, before the runtime is
     // built — it drives the runtime's clock and every agent gateway, and (record mode) the
@@ -269,7 +234,7 @@ pub async fn run(spec_json: String, callbacks: JsCallbacks, entry: Entry) -> nap
         replay_journal: mode.recorded_journal_json(),
         entry_state,
     };
-    serde_json::to_string(&outcome).map_err(|error| napi::Error::from_reason(error.to_string()))
+    serde_json::to_string(&outcome).map_err(|error| error.to_string())
 }
 
 /// Drive the requested entry against an already-assembled runtime.
@@ -277,7 +242,7 @@ async fn drive(
     runtime: &GraphRuntime,
     spec: &EngineSpec,
     entry: Entry,
-) -> napi::Result<GraphState> {
+) -> BridgeResult<GraphState> {
     match entry {
         Entry::Start => {
             let run_id = RunId::from(spec.run_id.clone().unwrap_or_else(|| "run".to_owned()));
@@ -289,10 +254,7 @@ async fn drive(
         }
         Entry::Resume | Entry::Approve => {
             let mut state = spec.state.clone().ok_or_else(|| {
-                napi::Error::from_reason(
-                    "resume/approve require `state` (the serialized suspended GraphState)"
-                        .to_owned(),
-                )
+                "resume/approve require `state` (the serialized suspended GraphState)".to_owned()
             })?;
 
             // On BOTH the approve and resume paths, validate the no-self-approval
@@ -330,9 +292,7 @@ async fn drive(
             // then resume_with_signal injects the payload under `__signals[name]` and
             // advances past the node that awaited it.
             let state = spec.state.clone().ok_or_else(|| {
-                napi::Error::from_reason(
-                    "signal requires `state` (the serialized suspended GraphState)".to_owned(),
-                )
+                "signal requires `state` (the serialized suspended GraphState)".to_owned()
             })?;
             let run_id = state.run_id.clone();
             seed_checkpoint(runtime, state);
@@ -348,10 +308,8 @@ async fn drive(
             // so re-execution re-feeds the original LLM outputs + timestamps. `replay_from` forks a
             // new run id — read-only evidence, never advancing or re-opening the original run.
             let state = spec.state.clone().ok_or_else(|| {
-                napi::Error::from_reason(
-                    "replay requires `state` (the serialized GraphState to seed the checkpoint)"
-                        .to_owned(),
-                )
+                "replay requires `state` (the serialized GraphState to seed the checkpoint)"
+                    .to_owned()
             })?;
             let run_id = state.run_id.clone();
             seed_replay_checkpoint(runtime, &checkpoint_id, state);
@@ -363,8 +321,8 @@ async fn drive(
     }
 }
 
-fn runtime_err(error: adriane_graph_runtime::RuntimeError) -> napi::Error {
-    napi::Error::from_reason(format!("runtime error: {error}"))
+fn runtime_err(error: adriane_graph_runtime::RuntimeError) -> String {
+    format!("runtime error: {error}")
 }
 
 /// Pre-queue the spec's dynamic-message inbox into the runtime before driving: each
@@ -387,20 +345,18 @@ fn seed_inbox(
 /// The core invariant (the same one [`adriane_approval_engine`] enforces in
 /// `ensure_can_resolve`): a tool's `resolved_by` must be a non-empty principal that
 /// DIFFERS from its `requested_by` — an agent never approves its own request. A
-/// violation maps the engine's [`ApprovalError::SelfApproval`] to a napi error that
+/// violation maps the engine's [`ApprovalError::SelfApproval`] to a bridge error that
 /// interrupts the resume, so a malformed/forged approve call cannot unlock a tool.
 /// Returns names sorted + de-duplicated, so the `__approvedTools` channel write is
 /// deterministic regardless of the order the caller sent the tools in.
-fn validate_approved_tools(tools: &[ApprovedTool]) -> napi::Result<Vec<String>> {
+fn validate_approved_tools(tools: &[ApprovedTool]) -> BridgeResult<Vec<String>> {
     let mut names: Vec<String> = Vec::with_capacity(tools.len());
     for tool in tools {
         // An empty resolver (no principal recorded) is treated as a self-approval
         // violation: there is no distinct human on record who granted the tool.
         if tool.resolved_by.trim().is_empty() || tool.resolved_by == tool.requested_by {
             let error = ApprovalError::SelfApproval(format!("tool:{}", tool.name));
-            return Err(napi::Error::from_reason(format!(
-                "approval guard-rail rejected resume: {error}"
-            )));
+            return Err(format!("approval guard-rail rejected resume: {error}"));
         }
         // A content-scoped grant (ADR 0024 phase 2c) unlocks only the exact call: write
         // its composite key into the channel, not the bare tool name. No-self-approval is
@@ -415,10 +371,10 @@ fn validate_approved_tools(tools: &[ApprovedTool]) -> napi::Result<Vec<String>> 
                     .map(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
                     .unwrap_or(false);
                 if !well_formed {
-                    return Err(napi::Error::from_reason(format!(
+                    return Err(format!(
                         "approval guard-rail rejected resume: malformed content-scoped key for tool '{}'",
                         tool.name
-                    )));
+                    ));
                 }
                 names.push(key.clone());
             }
@@ -725,9 +681,9 @@ fn build_fs_policy(rules: &[FsPolicyRule]) -> StaticPathPolicy {
 
 fn build_runtime(
     spec: &EngineSpec,
-    callbacks: JsCallbacks,
+    callbacks: SharedCallbacks,
     mode: &ReplayMode,
-) -> napi::Result<GraphRuntime> {
+) -> BridgeResult<GraphRuntime> {
     let js_node_ids: HashSet<&str> = spec.js_node_ids.iter().map(String::as_str).collect();
 
     // Run-scoped governed filesystem (ADR 0024 phase 2b): ONE in-memory artifact store
@@ -759,9 +715,7 @@ fn build_runtime(
             // front, so a misconfigured component fails the whole build cleanly.
             let handler = registry
                 .build_handler(&component.kind, &component.params)
-                .map_err(|error| {
-                    napi::Error::from_reason(format!("component node '{id}': {error}"))
-                })?;
+                .map_err(|error| format!("component node '{id}': {error}"))?;
             nodes.register(NodeId::from(id), handler);
         } else if let Some(agent_spec) = spec.agents.get(&id) {
             let handler = build_agent_handler(
@@ -778,7 +732,7 @@ fn build_runtime(
             // The runtime suspends natively at a human gate — no handler needed.
             continue;
         } else if js_node_ids.contains(id.as_str()) {
-            nodes.register(NodeId::from(id.clone()), js_node_handler(id, &callbacks));
+            nodes.register(NodeId::from(id.clone()), host_node_handler(id, &callbacks));
         }
         // Other native node types without a JS handler are left unregistered; the
         // runtime errors clearly (`NoHandler`) if it ever routes to one.
@@ -802,7 +756,7 @@ fn build_runtime(
         if !seen.insert(name.clone()) {
             continue;
         }
-        conditions.register(name.clone(), js_condition(name.clone(), &callbacks));
+        conditions.register(name.clone(), host_condition(name.clone(), &callbacks));
     }
 
     let mut runtime = GraphRuntime::new(spec.graph.clone(), nodes, conditions)
@@ -813,26 +767,28 @@ fn build_runtime(
         runtime = runtime.with_clock(clock);
     }
 
-    // Forward every run-lifecycle event to JS, fire-and-forget. The observer runs
-    // synchronously inside `emit`; we only enqueue a non-blocking TSFN call (no
-    // await, no block), so the run loop is never stalled by the JS side.
-    let on_event = callbacks.on_event.clone();
+    // Forward every run-lifecycle event to the host, fire-and-forget from the
+    // engine's point of view.
+    let callbacks = callbacks.clone();
     runtime.on_event(Box::new(move |event: &RunEvent| {
         if let Ok(payload) = serde_json::to_string(event) {
-            let _ = on_event.call(payload, ThreadsafeFunctionCallMode::NonBlocking);
+            callbacks.on_event(payload);
         }
     }));
 
     Ok(runtime)
 }
 
-/// A node handler that delegates to the JS `on_node` closure (kind `"node"`),
+/// A node handler that delegates to the host `on_node` closure (kind `"node"`),
 /// awaiting the returned channel-update JSON. The runtime applies the reducer and
 /// checkpoints; this seam only produces the update map.
-fn js_node_handler(node_id: String, callbacks: &JsCallbacks) -> adriane_graph_runtime::NodeHandler {
-    let on_node = callbacks.on_node.clone();
+fn host_node_handler(
+    node_id: String,
+    callbacks: &SharedCallbacks,
+) -> adriane_graph_runtime::NodeHandler {
+    let callbacks = callbacks.clone();
     Box::new(move |state: GraphState| {
-        let on_node = on_node.clone();
+        let callbacks = callbacks.clone();
         let node_id = node_id.clone();
         Box::pin(async move {
             let payload = json!({
@@ -841,27 +797,22 @@ fn js_node_handler(node_id: String, callbacks: &JsCallbacks) -> adriane_graph_ru
                 "input": Value::Null,
                 "state": channels_value(&state),
             });
-            match call_js_string(&on_node, payload).await {
-                Ok(update) => js_update_to_output(&update),
-                Err(error) => NodeOutput::failure(format!("js node handler '{node_id}': {error}")),
+            match callbacks.on_node(payload).await {
+                Ok(update) => host_update_to_output(&update),
+                Err(error) => {
+                    NodeOutput::failure(format!("host node handler '{node_id}': {error}"))
+                }
             }
         })
     })
 }
 
-/// A condition predicate that bridges to the **async** JS `on_condition` closure.
-/// The runtime's [`adriane_graph_runtime::ConditionFn`] contract is synchronous, so
-/// this closure cannot itself `.await`; instead it `spawn`s the async
-/// `call_async(..).await?.await?` chain onto napi's tokio runtime and blocks the
-/// current worker thread on a oneshot until the JS promise resolves. Wrapped in
-/// `block_in_place` so the multi-threaded runtime can relocate other tasks (incl.
-/// the spawned one) off this thread while it waits. The JS main thread is never
-/// blocked, so the promise's microtask is free to settle.
-fn js_condition(name: String, callbacks: &JsCallbacks) -> adriane_graph_runtime::ConditionFn {
-    let on_condition = callbacks.on_condition.clone();
+/// A condition predicate that delegates to the host `on_condition` closure.
+fn host_condition(name: String, callbacks: &SharedCallbacks) -> adriane_graph_runtime::ConditionFn {
+    let callbacks = callbacks.clone();
     Box::new(move |state: &GraphState| {
         let payload = json!({ "name": name, "state": channels_value(state) });
-        call_js_bool_awaiting(&on_condition, payload).unwrap_or(false)
+        callbacks.on_condition(payload).unwrap_or(false)
     })
 }
 
@@ -882,7 +833,7 @@ fn now_string() -> String {
 /// enters the in-memory events vector, a checkpoint, or the durable journal. Built only when
 /// the run opted into streaming (`EngineSpec::stream_tokens`).
 struct TokenStreamSink {
-    on_event: Arc<StringTsfn>,
+    callbacks: SharedCallbacks,
     run_id: RunId,
     node_id: NodeId,
 }
@@ -907,28 +858,24 @@ impl EventSink for TokenStreamSink {
             timestamp: now_string(),
         };
         if let Ok(payload) = serde_json::to_string(&event) {
-            // Fire-and-forget, exactly like the lifecycle-event forwarder. Never blocks the
-            // agent loop; a JS-side throw is the consumer's problem, not the run's.
-            let _ = self
-                .on_event
-                .call(payload, ThreadsafeFunctionCallMode::NonBlocking);
+            self.callbacks.on_event(payload);
         }
     }
 }
 
 /// Build the agent-node handler for an agent spec: a [`ReActAgent`] over a gateway
-/// chosen from env, with a tool registry where JS tools call back into JS.
+/// chosen from env, with a tool registry where host tools call back into the host.
 #[allow(clippy::too_many_arguments)]
 fn build_react_agent(
     node_id: &str,
     agent_spec: &AgentSpec,
     spec: &EngineSpec,
-    callbacks: &JsCallbacks,
+    callbacks: &SharedCallbacks,
     fs_store: &Arc<dyn ArtifactStore>,
     fs_policy: &Arc<StaticPathPolicy>,
     fs_run_id: &RunId,
     mode: &ReplayMode,
-) -> napi::Result<Arc<ReActAgent>> {
+) -> BridgeResult<Arc<ReActAgent>> {
     // Resolve the concrete model BEFORE building the gateway, so the registered
     // adapter and the agent's provider/model all agree (e.g. a `fast` tier on a
     // mistral-only env -> mistral-small-latest through the Mistral adapter).
@@ -950,7 +897,7 @@ fn build_react_agent(
         .iter()
         .map(String::as_str)
         .collect();
-    let js_tools: HashSet<&str> = spec.js_tool_names.iter().map(String::as_str).collect();
+    let host_tools: HashSet<&str> = spec.js_tool_names.iter().map(String::as_str).collect();
 
     let mut registry = InMemoryToolRegistry::new();
     for tool_name in &agent_spec.tool_names {
@@ -969,8 +916,8 @@ fn build_react_agent(
             input_schema: Some(json!({ "type": "object" })),
             content_scoped: false,
         };
-        let handler = if js_tools.contains(tool_name.as_str()) {
-            js_tool_handler(tool_name.clone(), callbacks)
+        let handler = if host_tools.contains(tool_name.as_str()) {
+            host_tool_handler(tool_name.clone(), callbacks)
         } else {
             // A non-JS tool with no Rust impl: a deterministic no-op so the agent
             // loop can still execute and observe something.
@@ -1062,7 +1009,7 @@ fn build_react_agent(
     // this same function inherits the sink and tags its deltas with the spawn index.
     if spec.stream_tokens {
         agent = agent.with_event_sink(Arc::new(TokenStreamSink {
-            on_event: callbacks.on_event.clone(),
+            callbacks: callbacks.clone(),
             run_id: fs_run_id.clone(),
             node_id: NodeId::from(node_id),
         }));
@@ -1077,12 +1024,12 @@ fn build_agent_handler(
     node_id: &str,
     agent_spec: &AgentSpec,
     spec: &EngineSpec,
-    callbacks: &JsCallbacks,
+    callbacks: &SharedCallbacks,
     fs_store: &Arc<dyn ArtifactStore>,
     fs_policy: &Arc<StaticPathPolicy>,
     fs_run_id: &RunId,
     mode: &ReplayMode,
-) -> napi::Result<adriane_graph_runtime::NodeHandler> {
+) -> BridgeResult<adriane_graph_runtime::NodeHandler> {
     let agent = build_react_agent(
         node_id, agent_spec, spec, callbacks, fs_store, fs_policy, fs_run_id, mode,
     )?;
@@ -1106,12 +1053,12 @@ fn build_map_agent_handler(
     node_id: &str,
     map_spec: &crate::spec::MapAgentSpec,
     spec: &EngineSpec,
-    callbacks: &JsCallbacks,
+    callbacks: &SharedCallbacks,
     fs_store: &Arc<dyn ArtifactStore>,
     fs_policy: &Arc<StaticPathPolicy>,
     fs_run_id: &RunId,
     mode: &ReplayMode,
-) -> napi::Result<adriane_graph_runtime::NodeHandler> {
+) -> BridgeResult<adriane_graph_runtime::NodeHandler> {
     let agent = build_react_agent(
         node_id,
         &map_spec.agent,
@@ -1130,18 +1077,21 @@ fn build_map_agent_handler(
     ))
 }
 
-/// A tool `execute` fn that delegates to the JS `on_node` closure (kind `"tool"`),
+/// A tool `execute` fn that delegates to the host `on_node` closure (kind `"tool"`),
 /// awaiting the returned tool-result JSON.
-fn js_tool_handler(tool_name: String, callbacks: &JsCallbacks) -> adriane_agents_core::ToolHandler {
-    let on_node = callbacks.on_node.clone();
+fn host_tool_handler(
+    tool_name: String,
+    callbacks: &SharedCallbacks,
+) -> adriane_agents_core::ToolHandler {
+    let callbacks = callbacks.clone();
     Box::new(move |input: Value| {
-        let on_node = on_node.clone();
+        let callbacks = callbacks.clone();
         let tool_name = tool_name.clone();
         Box::pin(async move {
             let payload = json!({ "kind": "tool", "name": tool_name, "input": input });
-            match call_js_string(&on_node, payload).await {
+            match callbacks.on_node(payload).await {
                 Ok(result) => Ok(parse_value(&result)),
-                Err(error) => Err(format!("js tool '{tool_name}': {error}")),
+                Err(error) => Err(format!("host tool '{tool_name}': {error}")),
             }
         })
     })
@@ -1496,49 +1446,10 @@ fn parse_provider(provider: &str) -> LlmProvider {
 /// Call an **async** JS string callback from an async context and await its result.
 /// The JS callback returns a `Promise<string>`: napi 3's `call_async` resolves the
 /// (synchronously returned) promise object — the `Return = Promise<String>` type now
-/// comes from the TSFN's generics rather than a turbofish — and the inner `.await`
-/// drives that promise to its JS-resolved string. (`Result` is shadowed by the napi
-/// prelude here, so the std one is explicit.)
-async fn call_js_string(tsfn: &StringTsfn, payload: Value) -> std::result::Result<String, String> {
-    let promise: Promise<String> = tsfn
-        .call_async(payload.to_string())
-        .await
-        .map_err(|error| error.to_string())?;
-    promise.await.map_err(|error| error.to_string())
-}
-
-/// Drive the **async** JS condition predicate from the runtime's **synchronous**
-/// [`adriane_graph_runtime::ConditionFn`] context. We cannot `.await` here, so we
-/// `spawn` the `call_async(..).await?.await?` chain onto napi's tokio runtime and
-/// block this worker thread on a oneshot until it resolves. `block_in_place` lets
-/// the multi-threaded runtime move other tasks (including the spawned one) onto
-/// other worker threads while this one waits, avoiding starvation. The JS callback
-/// resolves its `Promise` to a boolean-ish value, serialized as a JSON string
-/// (`"true"`/`"false"`, or any JSON whose truthiness we read).
-fn call_js_bool_awaiting(
-    tsfn: &Arc<StringTsfn>,
-    payload: Value,
-) -> std::result::Result<bool, String> {
-    // Arc-clone the shared TSFN so the spawned `'static` task owns a handle to the same
-    // underlying JS callback (napi 3's TSFN is not `Clone`; the `Arc` is — see `JsCallbacks`).
-    let tsfn = Arc::clone(tsfn);
-    let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<String, String>>(1);
-    tokio::task::block_in_place(move || {
-        napi::bindgen_prelude::spawn(async move {
-            let result = call_js_string(&tsfn, payload).await;
-            // Ignore send errors: only happens if the receiver was dropped.
-            let _ = tx.send(result);
-        });
-        rx.recv()
-            .map_err(|_| "condition callback dropped without a value".to_owned())?
-            .map(|text| parse_bool(&text))
-    })
-}
-
-/// Read a JS-returned boolean-ish JSON string. Accepts a JSON boolean (`true`),
+/// Read a host-returned boolean-ish JSON string. Accepts a JSON boolean (`true`),
 /// the strings `"true"`/`"false"` (any case), or a JSON number (non-zero is true).
 /// Anything else is `false`.
-fn parse_bool(text: &str) -> bool {
+pub fn parse_bool(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.eq_ignore_ascii_case("true") {
         return true;
@@ -1554,7 +1465,7 @@ fn parse_bool(text: &str) -> bool {
     }
 }
 
-/// The channels of a state as a JSON object — what JS closures see as `state`.
+/// The channels of a state as a JSON object — what host closures see as `state`.
 fn channels_value(state: &GraphState) -> Value {
     Value::Object(
         state
@@ -1565,7 +1476,7 @@ fn channels_value(state: &GraphState) -> Value {
     )
 }
 
-/// Parse a JS-returned channel-update JSON string into the update map. A non-object
+/// Parse a host-returned channel-update JSON string into the update map. A non-object
 /// (or unparsable) result yields an empty update rather than failing the node.
 fn parse_update(text: &str) -> BTreeMap<String, Value> {
     match serde_json::from_str::<Value>(text) {
@@ -1574,13 +1485,13 @@ fn parse_update(text: &str) -> BTreeMap<String, Value> {
     }
 }
 
-/// Build a [`NodeOutput`] from a JS node handler's returned update JSON. Two reserved
-/// keys let a JS handler request a durable timer / signal wait without a structured
+/// Build a [`NodeOutput`] from a host node handler's returned update JSON. Two reserved
+/// keys let a host handler request a durable timer / signal wait without a structured
 /// return: `__sleepUntil` (an opaque deadline string) and `__waitForSignal` (a signal
 /// name). Either makes the run suspend after applying the remaining keys as the channel
 /// update; together they are a signal-or-timeout. The SDK exposes them via `sleepUntil`
 /// / `waitForSignal` helpers.
-fn js_update_to_output(text: &str) -> NodeOutput {
+fn host_update_to_output(text: &str) -> NodeOutput {
     let mut update = parse_update(text);
     let sleep_until = take_reserved_string(&mut update, "__sleepUntil");
     let wait_for_signal = take_reserved_string(&mut update, "__waitForSignal");
@@ -1600,7 +1511,7 @@ fn take_reserved_string(update: &mut BTreeMap<String, Value>, key: &str) -> Opti
     }
 }
 
-/// Parse a JS-returned tool-result JSON string into a value; an unparsable result
+/// Parse a host-returned tool-result JSON string into a value; an unparsable result
 /// is surfaced verbatim as a string.
 fn parse_value(text: &str) -> Value {
     serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.to_owned()))
@@ -2600,12 +2511,9 @@ mod tests {
             key: None,
         }];
         let error = validate_approved_tools(&tools).expect_err("self-approval is rejected");
+        assert!(error.contains("guard-rail"), "unexpected error: {error}");
         assert!(
-            error.reason.contains("guard-rail"),
-            "unexpected error: {error}"
-        );
-        assert!(
-            error.reason.contains("tool:refund"),
+            error.contains("tool:refund"),
             "error should name the offending subject: {error}"
         );
     }

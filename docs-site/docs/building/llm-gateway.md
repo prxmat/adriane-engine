@@ -26,7 +26,7 @@ On the **Rust** path (the default, via `@adriane-ai/napi`) provider calls go thr
 `crates/llm-gateway`. The TypeScript `@adriane-ai/llm-gateway` documented here is the
 **dev / test / uncovered-platform fallback**: it runs when the native addon is absent, and it is
 what the offline mock and the unit tests exercise. The two share the same wire shapes and the
-same model-policy table by design — see [one engine, two languages](/docs/sdk-parity/one-engine-two-languages).
+same model-policy table by design — see [one engine, many languages](/docs/sdk-parity/one-engine-two-languages).
 Reach the gateway through `@adriane-ai/graph-sdk`, which re-exports these classes; don't import
 the engine package directly.
 :::
@@ -347,4 +347,4 @@ real adapter only when you want live calls.
 ## Next
 
 - [Agent nodes & ReAct](/docs/building/agent-nodes-and-react)
-- [One engine, two languages](/docs/sdk-parity/one-engine-two-languages)
+- [One engine, many languages](/docs/sdk-parity/one-engine-two-languages)

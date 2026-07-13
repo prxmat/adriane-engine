@@ -30,16 +30,16 @@
 
 #![deny(clippy::all)]
 
-mod bridge;
-mod spec;
-
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use adriane_graph_adriane::compile_graph_yaml;
 use adriane_graph_core::{validate_graph, GraphDefinition};
 use adriane_llm_gateway::{LlmGateway, LlmRequest};
+use adriane_runtime_bridge::{BridgeResult, Entry, HostCallbacks};
+use async_trait::async_trait;
 use napi::bindgen_prelude::Promise;
-use napi::threadsafe_function::ThreadsafeFunction;
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::Status;
 use napi_derive::napi;
 use serde_json::Value;
@@ -57,6 +57,70 @@ use serde_json::Value;
 /// stays the default `T` (`String`) so the napi-generated marshalling passes the
 /// payload as a single JS string argument.
 type StringCallback = ThreadsafeFunction<String, Promise<String>, String, Status, false>;
+
+#[derive(Clone)]
+struct NapiCallbacks {
+    on_node: Arc<StringCallback>,
+    on_condition: Arc<StringCallback>,
+    on_event: Arc<StringCallback>,
+}
+
+impl NapiCallbacks {
+    fn new(
+        on_node: StringCallback,
+        on_condition: StringCallback,
+        on_event: StringCallback,
+    ) -> Self {
+        Self {
+            on_node: Arc::new(on_node),
+            on_condition: Arc::new(on_condition),
+            on_event: Arc::new(on_event),
+        }
+    }
+}
+
+#[async_trait]
+impl HostCallbacks for NapiCallbacks {
+    async fn on_node(&self, payload: Value) -> BridgeResult<String> {
+        call_js_string(&self.on_node, payload).await
+    }
+
+    fn on_condition(&self, payload: Value) -> BridgeResult<bool> {
+        call_js_bool_awaiting(&self.on_condition, payload)
+    }
+
+    fn on_event(&self, payload_json: String) {
+        let _ = self
+            .on_event
+            .call(payload_json, ThreadsafeFunctionCallMode::NonBlocking);
+    }
+}
+
+fn to_napi(error: String) -> napi::Error {
+    napi::Error::from_reason(error)
+}
+
+async fn call_js_string(tsfn: &StringCallback, payload: Value) -> BridgeResult<String> {
+    let promise: Promise<String> = tsfn
+        .call_async(payload.to_string())
+        .await
+        .map_err(|error| error.to_string())?;
+    promise.await.map_err(|error| error.to_string())
+}
+
+fn call_js_bool_awaiting(tsfn: &Arc<StringCallback>, payload: Value) -> BridgeResult<bool> {
+    let tsfn = Arc::clone(tsfn);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<BridgeResult<String>>(1);
+    tokio::task::block_in_place(move || {
+        napi::bindgen_prelude::spawn(async move {
+            let result = call_js_string(&tsfn, payload).await;
+            let _ = tx.send(result);
+        });
+        rx.recv()
+            .map_err(|_| "condition callback dropped without a value".to_owned())?
+            .map(|text| adriane_runtime_bridge::parse_bool(&text))
+    })
+}
 
 /// Version of the bound Rust engine.
 #[napi]
@@ -104,7 +168,7 @@ pub async fn llm_complete(
     } else {
         Some(request.model.clone())
     };
-    let gateway = bridge::build_standalone_gateway(request.provider, model, &keys);
+    let gateway = adriane_runtime_bridge::build_standalone_gateway(request.provider, model, &keys);
     let response = gateway
         .complete(request)
         .await
@@ -114,14 +178,14 @@ pub async fn llm_complete(
 
 /// Start a fresh run of a graph on the Rust engine.
 ///
-/// `spec_json` is an [`crate::spec::EngineSpec`]: the graph, the run id, optional
+/// `spec_json` is an [`adriane_runtime_bridge::spec::EngineSpec`]: the graph, the run id, optional
 /// initial channel data, the agent configs, and the ids/names whose handlers live
 /// in JS. The three callbacks bridge back to JS:
 /// - `on_node(payloadJson) -> Promise<updateJson>` for JS node handlers and JS tools,
 /// - `on_condition(payloadJson) -> Promise<"true"|"false">` for named conditions,
 /// - `on_event(payloadJson)` (fire-and-forget) for run-lifecycle events.
 ///
-/// Resolves to a JSON [`crate::bridge::RunOutcome`] (final state + any pending
+/// Resolves to a JSON [`adriane_runtime_bridge::spec::RunOutcome`] (final state + any pending
 /// approvals + the serialized state needed for `engine_approve_and_resume`).
 #[napi(
     ts_args_type = "specJson: string, onNode: (payloadJson: string) => string | Promise<string>, onCondition: (payloadJson: string) => boolean | string | Promise<boolean | string>, onEvent: (payloadJson: string) => void",
@@ -133,8 +197,10 @@ pub async fn engine_run(
     on_condition: StringCallback,
     on_event: StringCallback,
 ) -> napi::Result<String> {
-    let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
-    bridge::run(spec_json, callbacks, bridge::Entry::Start).await
+    let callbacks = Arc::new(NapiCallbacks::new(on_node, on_condition, on_event));
+    adriane_runtime_bridge::run(spec_json, callbacks, Entry::Start)
+        .await
+        .map_err(to_napi)
 }
 
 /// Resume a previously suspended run from its serialized state (carried in
@@ -149,8 +215,10 @@ pub async fn engine_resume(
     on_condition: StringCallback,
     on_event: StringCallback,
 ) -> napi::Result<String> {
-    let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
-    bridge::run(spec_json, callbacks, bridge::Entry::Resume).await
+    let callbacks = Arc::new(NapiCallbacks::new(on_node, on_condition, on_event));
+    adriane_runtime_bridge::run(spec_json, callbacks, Entry::Resume)
+        .await
+        .map_err(to_napi)
 }
 
 /// Grant the approved tools carried in `spec_json.approvedTools`, write them into
@@ -166,8 +234,10 @@ pub async fn engine_approve_and_resume(
     on_condition: StringCallback,
     on_event: StringCallback,
 ) -> napi::Result<String> {
-    let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
-    bridge::run(spec_json, callbacks, bridge::Entry::Approve).await
+    let callbacks = Arc::new(NapiCallbacks::new(on_node, on_condition, on_event));
+    adriane_runtime_bridge::run(spec_json, callbacks, Entry::Approve)
+        .await
+        .map_err(to_napi)
 }
 
 /// Deliver an external signal to a suspended run, then resume it. `signalName` is the
@@ -190,16 +260,17 @@ pub async fn engine_signal(
     let payload: Value = serde_json::from_str(&payload_json).map_err(|error| {
         napi::Error::from_reason(format!("invalid signal payload JSON: {error}"))
     })?;
-    let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
-    bridge::run(
+    let callbacks = Arc::new(NapiCallbacks::new(on_node, on_condition, on_event));
+    adriane_runtime_bridge::run(
         spec_json,
         callbacks,
-        bridge::Entry::Signal {
+        Entry::Signal {
             name: signal_name,
             payload,
         },
     )
     .await
+    .map_err(to_napi)
 }
 
 /// Replay-as-evidence (ADR 0038): re-execute a run from `checkpointId`, re-feeding the
@@ -217,11 +288,8 @@ pub async fn engine_replay(
     on_condition: StringCallback,
     on_event: StringCallback,
 ) -> napi::Result<String> {
-    let callbacks = bridge::JsCallbacks::new(on_node, on_condition, on_event);
-    bridge::run(
-        spec_json,
-        callbacks,
-        bridge::Entry::Replay { checkpoint_id },
-    )
-    .await
+    let callbacks = Arc::new(NapiCallbacks::new(on_node, on_condition, on_event));
+    adriane_runtime_bridge::run(spec_json, callbacks, Entry::Replay { checkpoint_id })
+        .await
+        .map_err(to_napi)
 }

@@ -212,7 +212,8 @@ const sidebars = {
           items: [
             "sdk-parity/one-engine-two-languages",
             "sdk-parity/typescript-sdk",
-            "sdk-parity/python-sdk"
+            "sdk-parity/python-sdk",
+            "sdk-parity/polyglot-c-abi"
           ]
         },
         "glossary",
