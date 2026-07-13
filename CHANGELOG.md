@@ -3,6 +3,25 @@
 All notable changes to the Adriane engine are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.15.0
+
+### Added
+
+- **Per-token streaming on the catalog run path** — `runCatalogGraph({ streamTokens: true })` surfaces
+  an agent node's generation as `token_delta` run events over `onEvent`, so a catalog run (e.g. the
+  product's Governed Ask) can stream its answer token-by-token instead of only returning a final
+  result. Reuses the streaming chain already wired for the in-process builder path (`CompiledGraph.stream`)
+  — no Rust or napi change; the assembled state is byte-identical (deltas are observational, they bypass
+  the checkpoint/journal). Default off. (ADR 0033, ADR 0060)
+
+## 1.14.0
+
+### Added
+
+- **Dynamic `mapAgents` fan-out on the catalog path** — a `mapAgents` carrier lets a catalog graph fan a
+  node out over a runtime-sized list, executed natively; a malformed carrier now warns instead of failing
+  silently. (ADR 0049)
+
 ## 1.0.0
 
 First stable engine release. The Rust runtime reaches (and extends) parity with the
