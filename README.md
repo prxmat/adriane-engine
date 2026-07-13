@@ -97,7 +97,12 @@ choosing a model: [`docs-site/docs/recipes/model-packages.md`](docs-site/docs/re
 - **Human-in-the-loop gates** — `human-gate` nodes suspend the run and wait for
   approval before continuing.
 - **Streaming** — observe `values`, `updates`, `messages` or `debug` events as a
-  graph executes.
+  graph executes, or stream an agent's generation **per token** (`messages` mode,
+  or `runCatalogGraph({ streamTokens: true })` on the catalog path).
+- **Retrieval** — lexical (BM25/keyword) + semantic retrievers, RRF fusion, and a
+  `reranker` that re-scores through a real **cross-encoder** (`bge-reranker-v2-m3`
+  via a self-hostable rerank service, `ADRIANE_RERANK_ENDPOINT`) or passes through
+  cleanly when none is set.
 - **Time-travel, fan-out/`send`, cycles, subgraphs and tool nodes** — the full
   runtime contract, framework-agnostic and Vitest-covered.
 - **Safe by construction** — no `eval` / `new Function` / dynamic `import()` of
