@@ -38,6 +38,13 @@ export type { SuspendMeta } from "./durable.js";
 export { readInjected, INJECTED_KEY } from "./send.js";
 
 export { exampleGraphs } from "./example-graphs.js";
+export {
+  anonymizeAndShuffle,
+  aggregateRanks,
+  parseRanking,
+  type MemberAnswer,
+  type AnonymizedAnswer
+} from "./council.js";
 export type { ExampleGraph } from "./example-graphs.js";
 
 // The complete Doc-QA reference pipeline (input → output), runnable as a CompiledGraph
