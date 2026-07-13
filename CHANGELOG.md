@@ -3,6 +3,15 @@
 All notable changes to the Adriane engine are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.17.0
+
+### Added
+
+- **LLM Council** — `council({ members, reviewers?, chair, humanGate? })` builds a governed
+  deliberation graph: dispatch → members (fan-out) → anonymized peer-review (fan-out) → Borda
+  aggregate → optional human gate → chair synthesis. Native agent seats (a member never reviews its
+  own answer; every seat audited), deterministic replay-faithful anonymize + aggregate. (ADR 0013/0061)
+
 ## 1.16.0
 
 ### Added

@@ -408,6 +408,37 @@ Because every agent is a node, multi-agent runs inherit the full
 - **Bounded loops** — `recursionLimit` (set via `createGraph({ recursionLimit })`) bounds
   supervisor/reflection cycles so they always terminate.
 
+## 7. LLM Council (governed deliberation)
+
+A **council** dispatches a query to N member agents, has reviewers **rank the anonymized field**, and
+a **chair** synthesizes the final answer — a governed version of Karpathy's llm-council (ADR 0013).
+`council(...)` builds the graph for you:
+
+```ts
+import { council, openai, anthropic } from "@adriane-ai/graph-sdk";
+
+const app = council({
+  members: [
+    { model: openai("gpt-4o"), prompt: { system: "Answer the question." } },
+    { model: anthropic("claude-sonnet-4-5"), prompt: { system: "Answer the question." } },
+    { model: openai("gpt-4o-mini"), prompt: { system: "Answer the question." } }
+  ],
+  // reviewers default to one per member; each ranks the ANONYMIZED answers (it can't favour its own)
+  chair: { model: anthropic("claude-sonnet-4-5"), prompt: { system: "Synthesize the best answer." } },
+  humanGate: true // optional: suspend for accept/override before the chair (high-stakes)
+});
+
+const result = await app.run({ query: "How should we price the EU tier?" });
+```
+
+The graph is `dispatch → members (fan-out) → anonymize+shuffle → reviewers (fan-out, rank) →
+aggregate (Borda) → [human gate] → chair`. What Adriane adds over a script: **checkpoint after every
+seat** (a timed-out member resumes without re-paying the others), a **node event per member/reviewer/
+chair** (who answered, who ranked whom, what the chair used — a signable audit trail), **no
+self-review** (a member never reviews its own answer), and an **optional human gate** before the
+verdict. The anonymize + aggregate steps are deterministic (replay-faithful). N is fixed by the member
+list. Cost is N× — reserve it for high-stakes questions.
+
 ## Next
 
 - [Agent nodes & ReAct](./agent-nodes-and-react)

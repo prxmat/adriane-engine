@@ -61,3 +61,48 @@ describe("parseRanking", () => {
     expect(parseRanking("none of these", ["A", "B"])).toEqual([]);
   });
 });
+
+import { council } from "./council.js";
+import { DefaultLLMGateway, rustEngineAvailable, validateGraph } from "./index.js";
+
+const describeIfRust = rustEngineAvailable() ? describe : describe.skip;
+
+describeIfRust("council(...) graph (ADR 0061 E2b, Rust engine)", () => {
+  const seat = () => ({ llm: new DefaultLLMGateway(), prompt: { system: "s" }, provider: "mistral" as const });
+
+  it("wires dispatch → members (fan-out) → anonymize → reviewers (fan-out) → aggregate → chair", () => {
+    const def = council({ members: [seat(), seat(), seat()], chair: seat() }).definition;
+    expect(validateGraph(def)).toEqual([]);
+    const ids = def.nodes.map((n) => String(n.id));
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "dispatch",
+        "member_0",
+        "member_1",
+        "member_2",
+        "anonymize",
+        "review_0",
+        "review_1",
+        "review_2",
+        "aggregate",
+        "chair"
+      ])
+    );
+    // dispatch fans out to all members, joining at anonymize; anonymize fans out to reviewers.
+    const dispatch = def.nodes.find((n) => String(n.id) === "dispatch");
+    expect((dispatch as { fanOut?: { parallelTo: string[]; joinAt: string } }).fanOut).toEqual({
+      parallelTo: ["member_0", "member_1", "member_2"],
+      joinAt: "anonymize"
+    });
+    const anonymize = def.nodes.find((n) => String(n.id) === "anonymize");
+    expect(
+      (anonymize as { fanOut?: { joinAt: string } }).fanOut?.joinAt
+    ).toBe("aggregate");
+  });
+
+  it("inserts an optional human gate before the chair", () => {
+    const def = council({ members: [seat(), seat()], chair: seat(), humanGate: true }).definition;
+    expect(def.nodes.map((n) => String(n.id))).toContain("gate");
+    expect(validateGraph(def)).toEqual([]);
+  });
+});
