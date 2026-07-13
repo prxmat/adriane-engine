@@ -42,6 +42,31 @@ for await (const event of app.stream({ question: "Explain checkpoints." }, "mess
 All deltas of one agent turn share a `messageId`, so a client concatenates them into a single
 growing message.
 
+## On the catalog run path (`runCatalogGraph`)
+
+The same per-token stream is available on the catalog path a control plane runs (e.g. a governed
+`/ask`). `runCatalogGraph` returns the final outcome, so token deltas arrive over its `onEvent`
+callback rather than an async iterator: opt in with `streamTokens: true` and read the `token_delta`
+run events.
+
+```ts
+import { runCatalogGraph } from "@adriane-ai/graph-sdk";
+
+await runCatalogGraph(definition, {
+  initialData: { question: "Explain checkpoints." },
+  streamTokens: true,
+  onEvent: (event) => {
+    if (event.type === "token_delta") {
+      process.stdout.write(event.delta); // same tokens, same side channel
+    }
+  }
+});
+```
+
+`streamTokens` defaults to `false` — a catalog run that doesn't set it takes the non-streaming
+`complete()` path, byte-for-byte unchanged. To bridge the callback into an async generator (SSE),
+buffer the deltas and drain them while the run promise settles.
+
 ## Guarantees
 
 - **Real provider SSE.** The Anthropic (`messages.stream`), OpenAI-compatible (`stream: true`) and

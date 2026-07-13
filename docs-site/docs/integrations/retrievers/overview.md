@@ -138,6 +138,16 @@ of the mock embeddings of the query and each item's `content`; without it, it so
 existing `score`. The (possibly recomputed) score is written back onto each item. Stable sort keeps
 input order on ties; items missing `content`/`score` are tolerated as score `0`.
 
+**Cross-encoder reranking (since 1.16.0).** Set `ADRIANE_RERANK_ENDPOINT` to a self-hostable,
+EU-sovereign rerank service (a HuggingFace [TEI](https://github.com/huggingface/text-embeddings-inference)
+endpoint serving `BAAI/bge-reranker-v2-m3`) and the `reranker` node re-scores its candidates through
+that real cross-encoder instead of the mock — the single biggest retrieval-precision lever. Add
+`ADRIANE_RERANK_API_KEY` for an authenticated endpoint (sent as `Authorization: Bearer`; omit for an
+unauthenticated self-hosted TEI). With no endpoint the node is an **identity passthrough** that
+preserves the upstream ranking (e.g. `mergeRanker`'s RRF order) — never a mock rescoring — and a
+rerank error is fail-open (the upstream order is kept). The rerank call routes through the
+`llm-gateway` seam (the only crate allowed to reach an external service); the engine stays lean.
+
 | Param | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `from` | `string` | — | Channel holding the array to reorder. |
