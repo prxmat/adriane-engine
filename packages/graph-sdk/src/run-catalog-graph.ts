@@ -311,6 +311,13 @@ const assembleParts = (
       });
       continue;
     }
+    // A node that CARRIES a mapAgents key but fails to parse (missing overChannel/joinAt/subAgent) would
+    // otherwise fall through to an inert JS node and silently never fan out. Surface it — no silent caps.
+    if (isRecord(node.metadata?.mapAgents)) {
+      console.warn(
+        `[adriane] node "${id}" has a malformed mapAgents carrier (needs overChannel, joinAt, subAgent) — it will NOT fan out.`
+      );
+    }
     const agent = readAgentCarrier(node.metadata);
     if (agent !== undefined) {
       agents.set(id, carrierToAgentConfig(agent, usesApprovalEngine));

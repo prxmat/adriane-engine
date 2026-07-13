@@ -123,6 +123,37 @@ The human-gate invariant holds across the fan-out: if any spawn flags a gated to
 re-enters it from the latest checkpoint. The `skills` overlay applies to `mapAgents` sub-agents
 too, so each spawn pulls in its own playbook — see [skills](./skills).
 
+### On the catalog path (persisted graphs)
+
+The example above uses the in-process **builder**. A graph authored as data — persisted, or built
+in the Studio editor — expresses the same fan-out through a node-metadata **carrier** instead, so no
+code is needed. Give any node a `metadata.mapAgents` carrier and the catalog runner
+(`runCatalogGraph`) routes it as a dynamic fan-out:
+
+```jsonc
+{
+  "id": "review-each-pr",
+  "type": "agent",
+  "metadata": {
+    "mapAgents": {
+      "overChannel": "pullRequests",   // the array to fan out over
+      "joinAt": "reviews",             // where the per-item results land (input order)
+      "subAgent": {                    // a full agent carrier — its own provider/model/system/tools,
+        "system": "Review this pull request for correctness and risk.",
+        "enableFs": true               // and the deep-agent knobs + skills all apply per spawn
+      },
+      "suspendForApproval": false
+    }
+  }
+}
+```
+
+`readMapAgentCarrier` narrows and validates the carrier; a `mapAgents` carrier takes **precedence**
+over a plain `agent` carrier on the same node (a fan-out node is not itself a top-level agent). A
+carrier that is present but malformed (missing `overChannel` / `joinAt` / `subAgent`) does **not**
+silently degrade — the runner warns rather than dropping the node to a no-op. The wire shape matches
+the engine's `MapAgentSpec`, so the catalog path reaches full parity with the builder.
+
 `mapAgents` is a native node: it has no TypeScript-fallback handler, so it runs only on the Rust
 engine (the required production path). A graph built with it needs the native addon — the TS
 dev/test fallback does not back it.
