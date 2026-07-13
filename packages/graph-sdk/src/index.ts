@@ -42,8 +42,11 @@ export {
   anonymizeAndShuffle,
   aggregateRanks,
   parseRanking,
+  council,
   type MemberAnswer,
-  type AnonymizedAnswer
+  type AnonymizedAnswer,
+  type CouncilSeat,
+  type CouncilOptions
 } from "./council.js";
 export type { ExampleGraph } from "./example-graphs.js";
 
