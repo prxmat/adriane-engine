@@ -54,12 +54,19 @@ struct TeiScore {
 /// `[{ index, score }, …]` (TEI may reorder by score, so scores are remapped back to input order).
 pub struct HttpRerankTransport {
     client: reqwest::Client,
+    /// Optional bearer token (`ADRIANE_RERANK_API_KEY`) — required by HF Inference Endpoints; omitted
+    /// for an unauthenticated self-hosted TEI.
+    api_key: Option<String>,
 }
 
 impl HttpRerankTransport {
+    /// Read the bearer token from `ADRIANE_RERANK_API_KEY` (empty/unset → no `Authorization` header).
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
+            api_key: std::env::var("ADRIANE_RERANK_API_KEY")
+                .ok()
+                .filter(|k| !k.trim().is_empty()),
         }
     }
 }
@@ -78,10 +85,14 @@ impl RerankTransport for HttpRerankTransport {
         query: &str,
         texts: &[String],
     ) -> Result<Vec<f64>, LlmError> {
-        let response = self
+        let mut request = self
             .client
             .post(endpoint)
-            .json(&TeiRequest { query, texts })
+            .json(&TeiRequest { query, texts });
+        if let Some(key) = &self.api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request
             .send()
             .await
             .map_err(|e| LlmError::Provider(format!("rerank request failed: {e}")))?;
