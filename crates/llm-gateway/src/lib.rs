@@ -9,6 +9,7 @@
 
 pub mod anthropic;
 pub mod compressor;
+pub mod cross_encoder;
 pub mod error;
 pub mod gateway;
 pub mod gemini;
@@ -29,6 +30,9 @@ pub use anthropic::{
 };
 pub use compressor::{
     CompressingGateway, HttpPromptCompressor, NoopPromptCompressor, PromptCompressor,
+};
+pub use cross_encoder::{
+    CrossEncoderReranker, HttpRerankTransport, RerankDoc, RerankResult, RerankTransport,
 };
 pub use error::LlmError;
 pub use gateway::{DefaultLlmGateway, LlmGateway, LlmProviderAdapter};
