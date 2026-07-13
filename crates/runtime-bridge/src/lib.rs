@@ -720,9 +720,10 @@ fn build_runtime(
             // library; it never routes to the JS `on_node` seam, even if its id also
             // appears in `js_node_ids`. `build_handler` validates kind + params up
             // front, so a misconfigured component fails the whole build cleanly.
-            let handler = if component.kind == "reranker" {
-                // Route the reranker through the cross-encoder seam (real rerank when an endpoint is
-                // configured, else identity passthrough) rather than the pure mock-cosine component.
+            let handler = if component.kind == "reranker" && cross_encoder.enabled() {
+                // Route the reranker through the cross-encoder seam ONLY when an endpoint is configured;
+                // otherwise the pure component runs unchanged (no behaviour change for graphs that never
+                // set `ADRIANE_RERANK_ENDPOINT`).
                 build_reranker_node(&component.params, Arc::clone(&cross_encoder))
                     .map_err(|error| format!("component node '{id}': {error}"))?
             } else {
