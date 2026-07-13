@@ -137,6 +137,14 @@ export type RunCatalogGraphOptions = {
   /** Subscribe to forwarded run-lifecycle events (every node transition). */
   onEvent?: (event: RunEvent) => void;
   /**
+   * Opt into per-token streaming (ADR 0033 phase 13 / ADR 0060). When true, an agent node's LLM call
+   * streams real provider deltas, surfaced as `token_delta` {@link RunEvent}s over {@link onEvent} — so
+   * a catalog run (e.g. Governed Ask) can stream its answer token-by-token, not just return a final
+   * result. The assembled state is byte-identical either way (deltas bypass the checkpoint/journal —
+   * observational only). Default false (the run returns its terminal state with no token events).
+   */
+  streamTokens?: boolean;
+  /**
    * Route the run's approvals through an {@link ApprovalEngine}. When present, the
    * agents run natively on Rust as usual, but the moment the run suspends for approval
    * the seam files one request per gated tool (`requestedBy = nodeId`, the agent's own
@@ -383,7 +391,12 @@ export const runCatalogGraph = async (
     runner.subscribe(options.onEvent);
   }
   const runId = options.runId ?? generateRunId();
-  const state = (await runner.run(runId, options.initialData ?? {})) as unknown as GraphState;
+  const state = (await runner.run(
+    runId,
+    options.initialData ?? {},
+    {},
+    options.streamTokens ?? false
+  )) as unknown as GraphState;
   const governed = await fileApprovalRequests(definition, state, runId, options.approvalEngine);
   return {
     state: governed,
