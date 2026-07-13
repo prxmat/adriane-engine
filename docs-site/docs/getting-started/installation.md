@@ -1,20 +1,20 @@
 ---
 sidebar_position: 1
 title: Installation
-description: Install the Adriane SDK in TypeScript or Python — names, packages, and the Rust engine.
+description: Install the Adriane SDK in TypeScript, Python, or a C-ABI language.
 ---
 
 # Installation
 
-Adriane ships **two SDKs over one Rust engine**. Pick your language — the package you
-install and the name you import are spelled out below, because they differ by ecosystem
-convention.
+Adriane ships SDKs over **one Rust engine**. Pick your language: the package you install, the
+name you import, and the native library you load differ by ecosystem convention.
 
 :::tip Naming at a glance
 | | Install | Import | Command |
 | --- | --- | --- | --- |
 | **TypeScript** | `npm i @adriane-ai/graph-sdk` | `import { createGraph } from "@adriane-ai/graph-sdk"` | — |
 | **Python** | `pip install adriane-ai` | `import adriane_ai` | — |
+| **C-ABI SDKs** | build `adriane-c-api` | language-specific wrapper in `sdks/` | `ADRIANE_C_API_LIB` |
 | **CLI** | `npm i -g @adriane-ai/cli` | — | `adriane` |
 
 The npm scope is `@adriane-ai`. On PyPI the distribution is `adriane-ai` (hyphen), but the
@@ -23,12 +23,13 @@ hyphen, so this is the standard pip↔import split, the same as `pip install sci
 `import sklearn`.
 :::
 
-:::caution One engine, two SDKs — but not byte-identical
-The Rust engine is shared, so graphs, runs, governance, and replay behave the same in both. A few
-**authoring conveniences are TypeScript-only** today (e.g. JS callbacks like streaming `stream()` and
-in-process `conditionalEdge` predicates); the Python SDK is JSON-in/JSON-out over the same engine.
-If you're on Python, skim **[One engine, two languages](/docs/sdk-parity/one-engine-two-languages)**
-first so nothing surprises you.
+:::caution One engine, many SDKs, not byte-identical surfaces
+The Rust engine is shared, so validation, DSL compilation, model policy, catalogs, native
+component runs, and prebuilt-agent runs come from the same code. The callback-heavy TypeScript
+features, such as custom node handlers, streaming `stream()`, and in-process `conditionalEdge`
+predicates, are available through N-API and the C callback ABI. Python remains JSON-in/JSON-out
+until its PyO3 layer gets the same callback runtime. Skim **[One engine, many languages](/docs/sdk-parity/one-engine-two-languages)**
+first so the parity boundaries are explicit.
 :::
 
 ## TypeScript

@@ -22,6 +22,7 @@ adriane-components = { path = "../components" }
 adriane-fs-backend = { path = "../fs-backend", features = ["http"] }
 adriane-llm-gateway = { path = "../llm-gateway" }
 adriane-memory = { path = "../memory" }
+adriane-runtime-bridge = { path = "../runtime-bridge" }
 adriane-skills = { path = "../skills" }
 async-trait = "0.1"
 # `dyn-symbols` (on by default in napi 3, but we disable defaults to pin the N-API

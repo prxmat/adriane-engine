@@ -50,6 +50,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adriane-c-api"
+version = "1.4.0"
+dependencies = [
+ "adriane-runtime-bridge",
+ "adriane-sdk-core",
+ "async-trait",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "adriane-callbacks"
 version = "1.4.0"
 dependencies = [
@@ -213,6 +224,7 @@ dependencies = [
  "adriane-graph-runtime",
  "adriane-llm-gateway",
  "adriane-memory",
+ "adriane-runtime-bridge",
  "adriane-skills",
  "async-trait",
  "napi",
@@ -246,15 +258,8 @@ dependencies = [
 name = "adriane-py"
 version = "1.4.0"
 dependencies = [
- "adriane-agents-core",
- "adriane-components",
- "adriane-graph-adriane",
- "adriane-graph-core",
- "adriane-graph-runtime",
- "adriane-llm-gateway",
+ "adriane-sdk-core",
  "pyo3",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -280,6 +285,40 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "adriane-runtime-bridge"
+version = "1.4.0"
+dependencies = [
+ "adriane-agents-core",
+ "adriane-approval-engine",
+ "adriane-artifact-store",
+ "adriane-components",
+ "adriane-fs-backend",
+ "adriane-graph-core",
+ "adriane-graph-runtime",
+ "adriane-llm-gateway",
+ "adriane-memory",
+ "adriane-skills",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "adriane-sdk-core"
+version = "1.4.0"
+dependencies = [
+ "adriane-agents-core",
+ "adriane-components",
+ "adriane-graph-adriane",
+ "adriane-graph-core",
+ "adriane-graph-runtime",
+ "adriane-llm-gateway",
+ "serde_json",
  "tokio",
 ]
 

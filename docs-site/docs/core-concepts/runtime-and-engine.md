@@ -60,10 +60,12 @@ event emission. The bridge is detailed in
   only, at most, for diagnostics.
 - **In Python**, the engine is always there too; the wheel ships it, so there is nothing to
   install separately.
-- **Across both**, a graph that validates or compiles one way validates and compiles the same
-  way in the other, because the same Rust code answers in both.
+- **In C-ABI SDKs**, the wrapper loads the shared Rust dynamic library and exposes the same
+  JSON/YAML helpers plus the callback-capable runtime ABI.
+- **Across SDKs**, a graph that validates or compiles one way validates and compiles the same
+  way in the others, because the same Rust code answers in every binding.
 
 ## Next
 
-- [SDK parity → one engine, two languages](/docs/sdk-parity/one-engine-two-languages)
+- [SDK parity: one engine, many languages](/docs/sdk-parity/one-engine-two-languages)
 - [Architecture overview](/docs/architecture/overview)
