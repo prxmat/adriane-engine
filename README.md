@@ -105,6 +105,9 @@ choosing a model: [`docs-site/docs/recipes/model-packages.md`](docs-site/docs/re
   cleanly when none is set.
 - **Time-travel, fan-out/`send`, cycles, subgraphs and tool nodes** — the full
   runtime contract, framework-agnostic and Vitest-covered.
+- **Multi-agent patterns** — ReAct, supervisor, swarm, plan-execute, reflection, and a governed
+  **LLM Council** (`council(...)`: dispatch → members → anonymized peer-review → chair), all as
+  checkpointed, audited graphs.
 - **Safe by construction** — no `eval` / `new Function` / dynamic `import()` of
   user strings; conditions are named registry predicates; agents cannot approve
   their own outputs; sensitive actions route through approval gates.
@@ -120,7 +123,7 @@ packages/   the framework              (OPEN SOURCE)
   graph-core       pure data model: GraphDefinition, channels, validation, errors
   graph-runtime    the execution engine: checkpoints, events, suspend/resume, streaming
   graph-sdk        ← you are here: the ergonomic front door
-  agents-core      agent patterns (ReAct, plan-execute, reflection, supervisor, swarm)
+  agents-core      agent patterns (ReAct, plan-execute, reflection, supervisor, swarm, council)
   llm-gateway      the only package allowed to import provider SDKs
   lang-adriane     the Adriane DSL compilers (YAML → graph)
   artifact-store · approval-engine · observability · memory-store · rag-pipeline
