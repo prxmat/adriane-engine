@@ -3,6 +3,17 @@
 All notable changes to the Adriane engine are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.16.0
+
+### Added
+
+- **Cross-encoder reranking (ADR 0060 E1)** — a `reranker` node now re-scores its candidates through a
+  real cross-encoder (`BAAI/bge-reranker-v2-m3`) served by a self-hostable, EU-sovereign rerank service
+  (HuggingFace TEI), configured by `ADRIANE_RERANK_ENDPOINT`. The gateway holds the HTTP call behind a
+  transport seam; the runtime routes `reranker` nodes to it. **Graceful fallback**: with no endpoint the
+  reranker is an identity passthrough that preserves the upstream ranking (no external call, no
+  mock-cosine rescoring). Fail-open: a rerank error keeps the upstream order.
+
 ## 1.15.0
 
 ### Added

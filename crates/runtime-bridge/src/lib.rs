@@ -29,11 +29,11 @@ use adriane_graph_runtime::{
     RecordingClock, RunEvent, SystemClock,
 };
 use adriane_llm_gateway::{
-    AnthropicAdapter, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort, HttpGeminiPort,
-    HttpPiiRedactor, HttpPromptCompressor, LlmError, LlmGateway, LlmJournal, LlmProvider,
-    LlmResponse, LlmToolCall, LlmUsage, MediaResolver, MediaSource, MockAdapter, ModelChoice,
-    ModelPolicy, OpenAiCompatibleAdapter, RecordedCall, RecordingGateway, RegexSecretsRedactor,
-    ReplayGateway,
+    AnthropicAdapter, CrossEncoderReranker, DefaultLlmGateway, GeminiAdapter, HttpAnthropicPort,
+    HttpGeminiPort, HttpPiiRedactor, HttpPromptCompressor, HttpRerankTransport, LlmError,
+    LlmGateway, LlmJournal, LlmProvider, LlmResponse, LlmToolCall, LlmUsage, MediaResolver,
+    MediaSource, MockAdapter, ModelChoice, ModelPolicy, OpenAiCompatibleAdapter, RecordedCall,
+    RecordingGateway, RegexSecretsRedactor, ReplayGateway, RerankDoc,
 };
 use adriane_memory::{InMemoryMemoryStore, MemoryStore, MockEmbedder, RecallMode, RetrievalPolicy};
 use adriane_skills::{InMemorySkillStore, SkillStore};
@@ -696,6 +696,13 @@ fn build_runtime(
     let fs_policy = Arc::new(build_fs_policy(&spec.fs_policy));
 
     let registry = ComponentRegistry::new();
+    // ADR 0060 E1: a `reranker` node re-scores its candidates through the cross-encoder seam. The
+    // endpoint is a deploy-level config (`ADRIANE_RERANK_ENDPOINT`, like the OTel/record seams); with it
+    // set the node calls the self-hostable rerank service, without it the node is an identity passthrough
+    // (the upstream ranking is preserved) — never the old mock-cosine placeholder.
+    let cross_encoder = Arc::new(CrossEncoderReranker::from_env(Arc::new(
+        HttpRerankTransport::new(),
+    )));
     let mut nodes = InMemoryNodeRegistry::new();
     // Register handlers for the parent graph's nodes AND every subgraph's nodes:
     // child runs share this runtime's node registry, so a child node handler must be
@@ -713,9 +720,16 @@ fn build_runtime(
             // library; it never routes to the JS `on_node` seam, even if its id also
             // appears in `js_node_ids`. `build_handler` validates kind + params up
             // front, so a misconfigured component fails the whole build cleanly.
-            let handler = registry
-                .build_handler(&component.kind, &component.params)
-                .map_err(|error| format!("component node '{id}': {error}"))?;
+            let handler = if component.kind == "reranker" {
+                // Route the reranker through the cross-encoder seam (real rerank when an endpoint is
+                // configured, else identity passthrough) rather than the pure mock-cosine component.
+                build_reranker_node(&component.params, Arc::clone(&cross_encoder))
+                    .map_err(|error| format!("component node '{id}': {error}"))?
+            } else {
+                registry
+                    .build_handler(&component.kind, &component.params)
+                    .map_err(|error| format!("component node '{id}': {error}"))?
+            };
             nodes.register(NodeId::from(id), handler);
         } else if let Some(agent_spec) = spec.agents.get(&id) {
             let handler = build_agent_handler(
@@ -1540,6 +1554,95 @@ fn collect_pending_approvals(spec: &EngineSpec, state: &GraphState) -> Vec<Appro
         }
     }
     out
+}
+
+/// Render a channel `Value` as plain text (string verbatim, else its JSON form).
+fn channel_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Build the async `reranker` node handler (ADR 0060 E1): read the `from` candidate array and the
+/// optional `query` channel, re-score through the cross-encoder seam, and write the reordered array to
+/// `into`. Items are re-ordered by id (positional fallback), carrying the cross-encoder score. Fail-open
+/// — a rerank error keeps the upstream order (a reranker must never sink a run).
+fn build_reranker_node(
+    params: &Value,
+    reranker: Arc<CrossEncoderReranker>,
+) -> BridgeResult<adriane_graph_runtime::NodeHandler> {
+    let from = params
+        .get("from")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "reranker: missing string param `from`".to_string())?
+        .to_owned();
+    let into = params
+        .get("into")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "reranker: missing string param `into`".to_string())?
+        .to_owned();
+    let query = params
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    Ok(Box::new(move |state: GraphState| {
+        let from = from.clone();
+        let into = into.clone();
+        let query = query.clone();
+        let reranker = Arc::clone(&reranker);
+        Box::pin(async move {
+            let items: Vec<Value> = match state.channels.get(&from) {
+                Some(Value::Array(arr)) => arr.clone(),
+                _ => Vec::new(),
+            };
+            let query_text = query
+                .as_ref()
+                .and_then(|q| state.channels.get(q))
+                .map(channel_text)
+                .unwrap_or_default();
+
+            let mut by_id: BTreeMap<String, Value> = BTreeMap::new();
+            let mut docs: Vec<RerankDoc> = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| index.to_string());
+                let content = item.get("content").map(channel_text).unwrap_or_default();
+                docs.push(RerankDoc {
+                    id: id.clone(),
+                    content,
+                });
+                by_id.insert(id, item.clone());
+            }
+
+            let top_k = items.len();
+            let reordered: Vec<Value> = match reranker.rerank(&query_text, docs, top_k).await {
+                Ok(results) => results
+                    .into_iter()
+                    .filter_map(|result| {
+                        by_id.get(&result.id).cloned().map(|mut item| {
+                            if let Value::Object(map) = &mut item {
+                                map.insert(
+                                    "score".to_string(),
+                                    serde_json::Number::from_f64(result.score)
+                                        .map(Value::Number)
+                                        .unwrap_or(Value::Null),
+                                );
+                            }
+                            item
+                        })
+                    })
+                    .collect(),
+                // Fail-open: a rerank error preserves the upstream order rather than sinking the run.
+                Err(_) => items,
+            };
+            NodeOutput::update(BTreeMap::from([(into.clone(), Value::Array(reordered))]))
+        })
+    }))
 }
 
 #[cfg(test)]
@@ -2719,5 +2822,71 @@ mod tests {
         assert_eq!(clock.now_string(), "7");
         assert_eq!(clock.now_string(), "8");
         assert_eq!(clock.now_string(), "8"); // clamps on exhaustion
+    }
+
+    struct FakeRerank {
+        scores: Vec<f64>,
+    }
+
+    #[async_trait]
+    impl adriane_llm_gateway::RerankTransport for FakeRerank {
+        async fn score(&self, _e: &str, _q: &str, _t: &[String]) -> Result<Vec<f64>, LlmError> {
+            Ok(self.scores.clone())
+        }
+    }
+
+    fn reranker_state() -> GraphState {
+        serde_json::from_value(json!({
+            "runId": "r", "graphId": "g", "currentNodeId": "n", "status": "running",
+            "version": 0, "createdAt": "t", "updatedAt": "t",
+            "channels": {
+                "hits": [
+                    { "id": "a", "content": "alpha", "score": 0.5 },
+                    { "id": "b", "content": "beta", "score": 0.5 }
+                ],
+                "q": "question"
+            }
+        }))
+        .expect("valid GraphState")
+    }
+
+    #[tokio::test]
+    async fn reranker_node_reorders_by_cross_encoder_score() {
+        let reranker = Arc::new(CrossEncoderReranker::new(
+            Some("http://rerank".to_owned()),
+            Arc::new(FakeRerank {
+                scores: vec![0.1, 0.9],
+            }),
+        ));
+        let handler = build_reranker_node(
+            &json!({ "from": "hits", "into": "ranked", "query": "q" }),
+            reranker,
+        )
+        .expect("builds");
+        let out = handler(reranker_state()).await;
+        let ranked = out.update.get("ranked").unwrap().as_array().unwrap();
+        let ids: Vec<&str> = ranked
+            .iter()
+            .map(|item| item.get("id").unwrap().as_str().unwrap())
+            .collect();
+        // b (0.9) outranks a (0.1); the item objects are preserved, re-ordered.
+        assert_eq!(ids, vec!["b", "a"]);
+    }
+
+    #[tokio::test]
+    async fn reranker_node_passthrough_preserves_order_without_endpoint() {
+        let reranker = Arc::new(CrossEncoderReranker::new(
+            None,
+            Arc::new(FakeRerank { scores: vec![] }),
+        ));
+        let handler = build_reranker_node(&json!({ "from": "hits", "into": "ranked" }), reranker)
+            .expect("builds");
+        let out = handler(reranker_state()).await;
+        let ranked = out.update.get("ranked").unwrap().as_array().unwrap();
+        let ids: Vec<&str> = ranked
+            .iter()
+            .map(|item| item.get("id").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["a", "b"]);
     }
 }

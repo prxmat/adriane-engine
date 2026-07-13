@@ -1,7 +1,7 @@
 {
   "name": "@adriane-ai/contracts",
   "license": "Apache-2.0",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "type": "module",
   "publishConfig": {
     "access": "public"
