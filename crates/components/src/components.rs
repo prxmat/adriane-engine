@@ -2732,7 +2732,9 @@ mod tests {
             "conditionalRouter" => json!({ "into": "o", "defaultRoute": "d", "branches": [] }),
             "documentWriter" => json!({ "from": "f", "into": "o" }),
             "councilAnonymize" => json!({ "fromChannels": ["m0"], "into": "field" }),
-            "councilAggregate" => json!({ "reviewsFrom": ["r0"], "fieldFrom": "field", "into": "agg" }),
+            "councilAggregate" => {
+                json!({ "reviewsFrom": ["r0"], "fieldFrom": "field", "into": "agg" })
+            }
             other => panic!("no sample params for kind `{other}`"),
         }
     }
