@@ -2637,10 +2637,10 @@ mod tests {
     }
 
     #[test]
-    fn registry_lists_all_twenty_nine_kinds() {
-        assert_eq!(ComponentRegistry::kinds().len(), 29);
+    fn registry_lists_all_thirty_one_kinds() {
+        assert_eq!(ComponentRegistry::kinds().len(), 31);
         // The seventeen wave-one kinds plus the eleven wave-two kinds plus
-        // semanticRetriever, in declaration order.
+        // semanticRetriever plus the two council kinds, in declaration order.
         assert_eq!(
             ComponentRegistry::kinds(),
             &[
@@ -2673,6 +2673,8 @@ mod tests {
                 "chatMessageBuilder",
                 "conditionalRouter",
                 "documentWriter",
+                "councilAnonymize",
+                "councilAggregate",
             ]
         );
     }
@@ -2729,6 +2731,8 @@ mod tests {
             }
             "conditionalRouter" => json!({ "into": "o", "defaultRoute": "d", "branches": [] }),
             "documentWriter" => json!({ "from": "f", "into": "o" }),
+            "councilAnonymize" => json!({ "fromChannels": ["m0"], "into": "field" }),
+            "councilAggregate" => json!({ "reviewsFrom": ["r0"], "fieldFrom": "field", "into": "agg" }),
             other => panic!("no sample params for kind `{other}`"),
         }
     }
