@@ -63,16 +63,19 @@ describe("parseRanking", () => {
 });
 
 import { council } from "./council.js";
-import { DefaultLLMGateway, rustEngineAvailable, validateGraph } from "./index.js";
+import { isCatalogGraph, validateGraph } from "./index.js";
 
-const describeIfRust = rustEngineAvailable() ? describe : describe.skip;
+describe("council(...) graph (ADR 0061 E2)", () => {
+  const seat = () => ({ prompt: { system: "s" }, provider: "mistral" as const });
 
-describeIfRust("council(...) graph (ADR 0061 E2b, Rust engine)", () => {
-  const seat = () => ({ llm: new DefaultLLMGateway(), prompt: { system: "s" }, provider: "mistral" as const });
+  it("is a valid CATALOG graph — every node carries a component/agent carrier (no JS handlers)", () => {
+    const def = council({ members: [seat(), seat(), seat()], chair: seat() });
+    expect(validateGraph(def)).toEqual([]);
+    expect(isCatalogGraph(def)).toBe(true);
+  });
 
   it("wires dispatch → members (fan-out) → anonymize → reviewers (fan-out) → aggregate → chair", () => {
-    const def = council({ members: [seat(), seat(), seat()], chair: seat() }).definition;
-    expect(validateGraph(def)).toEqual([]);
+    const def = council({ members: [seat(), seat(), seat()], chair: seat() });
     const ids = def.nodes.map((n) => String(n.id));
     expect(ids).toEqual(
       expect.arrayContaining([
@@ -88,20 +91,24 @@ describeIfRust("council(...) graph (ADR 0061 E2b, Rust engine)", () => {
         "chair"
       ])
     );
-    // dispatch fans out to all members, joining at anonymize; anonymize fans out to reviewers.
-    const dispatch = def.nodes.find((n) => String(n.id) === "dispatch");
-    expect((dispatch as { fanOut?: { parallelTo: string[]; joinAt: string } }).fanOut).toEqual({
+    const byId = (id: string) => def.nodes.find((n) => String(n.id) === id);
+    // anonymize/aggregate are catalog components (Rust), not JS action handlers.
+    expect((byId("anonymize")?.metadata as { component?: { kind?: string } }).component?.kind).toBe(
+      "councilAnonymize"
+    );
+    expect((byId("aggregate")?.metadata as { component?: { kind?: string } }).component?.kind).toBe(
+      "councilAggregate"
+    );
+    // dispatch fans out to all members (join at anonymize); anonymize fans out to reviewers.
+    expect((byId("dispatch") as { fanOut?: { parallelTo: string[]; joinAt: string } }).fanOut).toEqual({
       parallelTo: ["member_0", "member_1", "member_2"],
       joinAt: "anonymize"
     });
-    const anonymize = def.nodes.find((n) => String(n.id) === "anonymize");
-    expect(
-      (anonymize as { fanOut?: { joinAt: string } }).fanOut?.joinAt
-    ).toBe("aggregate");
+    expect((byId("anonymize") as { fanOut?: { joinAt: string } }).fanOut?.joinAt).toBe("aggregate");
   });
 
   it("inserts an optional human gate before the chair", () => {
-    const def = council({ members: [seat(), seat()], chair: seat(), humanGate: true }).definition;
+    const def = council({ members: [seat(), seat()], chair: seat(), humanGate: true });
     expect(def.nodes.map((n) => String(n.id))).toContain("gate");
     expect(validateGraph(def)).toEqual([]);
   });

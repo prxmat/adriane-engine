@@ -3,6 +3,12 @@
 All notable changes to the Adriane engine are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.18.0
+
+### Changed
+
+- **Council is now a native catalog graph.** `council(...)` returns a `GraphDefinition` whose anonymize/aggregate steps are Rust catalog components (`councilAnonymize` / `councilAggregate`) instead of JS handlers — so a council runs on the Rust engine via `runCatalogGraph`, like every other governed graph (dogfood / Rust-only, ADR 0003). BREAKING vs 1.17.0: `council(...)` returns a `GraphDefinition` (run it with `runCatalogGraph(council(...))`), not a `CompiledGraph`. The pure `anonymizeAndShuffle` / `aggregateRanks` helpers stay exported. (ADR 0061)
+
 ## 1.17.0
 
 ### Added

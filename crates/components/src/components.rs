@@ -9,7 +9,7 @@
 //!
 //! Every component here is deterministic and free of I/O and LLM calls.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use adriane_graph_core::GraphState;
@@ -68,6 +68,9 @@ impl ComponentRegistry {
             "chatMessageBuilder",
             "conditionalRouter",
             "documentWriter",
+            // --- council (ADR 0061 E2) ---
+            "councilAnonymize",
+            "councilAggregate",
         ]
     }
 
@@ -108,6 +111,8 @@ impl ComponentRegistry {
             "chatMessageBuilder" => build_chat_message_builder(params),
             "conditionalRouter" => build_conditional_router(params),
             "documentWriter" => build_document_writer(params),
+            "councilAnonymize" => build_council_anonymize(params),
+            "councilAggregate" => build_council_aggregate(params),
             other => Err(ComponentError::UnknownKind(other.to_string())),
         }
     }
@@ -2453,6 +2458,130 @@ fn build_document_writer(params: &Value) -> Result<NodeHandler, ComponentError> 
     }))
 }
 
+// --- council (ADR 0061 E2) ---------------------------------------------------
+
+/// FNV-1a 32-bit hash — for the deterministic (replay-faithful) anonymize shuffle.
+fn fnv1a(text: &str) -> u32 {
+    let mut hash: u32 = 2166136261;
+    for byte in text.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    hash
+}
+
+/// The label at position `i`: `A..Z`, then `M{i}` beyond 26 seats.
+fn council_label(i: usize) -> String {
+    if i < 26 {
+        ((b'A' + i as u8) as char).to_string()
+    } else {
+        format!("M{i}")
+    }
+}
+
+/// Read an agent-result channel's answer text (string verbatim, else its `content`/`output` field).
+fn council_content(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Object(map)) => map
+            .get("content")
+            .and_then(Value::as_str)
+            .or_else(|| map.get("output").and_then(Value::as_str))
+            .map(str::to_owned)
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// Parse a reviewer reply into an ordered list of labels it names (deduped, unknown dropped).
+fn council_parse_ranking(text: &str, labels: &BTreeSet<String>) -> Vec<String> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for token in text
+        .to_uppercase()
+        .split(|c: char| !c.is_ascii_alphabetic())
+    {
+        if let Some(head) = token.chars().next() {
+            let label = head.to_string();
+            if labels.contains(&label) && !seen.contains(&label) {
+                seen.insert(label.clone());
+                out.push(label);
+            }
+        }
+    }
+    out
+}
+
+/// `councilAnonymize { fromChannels: [member channels], into, seed? }` — strip authorship, relabel
+/// A/B/C, and shuffle deterministically by `seed` so a reviewer can't favour its own answer (ADR 0013).
+/// Each output item is `{ label, content, memberId }`; `memberId` (the source channel) is retained for
+/// post-ranking de-anonymization of the audit trail, never shown to a reviewer.
+fn build_council_anonymize(params: &Value) -> Result<NodeHandler, ComponentError> {
+    let kind = "councilAnonymize";
+    let into = require_string(kind, params, "into")?;
+    let seed = optional_string(kind, params, "seed")?.unwrap_or_else(|| "council".to_string());
+    let channels = Arc::new(require_string_array(kind, params, "fromChannels")?);
+
+    Ok(sync_handler(move |state: GraphState| {
+        let mut members: Vec<(String, String)> = channels
+            .iter()
+            .map(|name| (name.clone(), council_content(state.channels.get(name))))
+            .collect();
+        members.sort_by(|a, b| {
+            let ha = fnv1a(&format!("{seed}:{}", a.0));
+            let hb = fnv1a(&format!("{seed}:{}", b.0));
+            ha.cmp(&hb).then_with(|| a.0.cmp(&b.0))
+        });
+        let field: Vec<Value> = members
+            .into_iter()
+            .enumerate()
+            .map(|(i, (member_id, content))| {
+                json!({ "label": council_label(i), "content": content, "memberId": member_id })
+            })
+            .collect();
+        NodeOutput::update(single(&into, Value::Array(field)))
+    }))
+}
+
+/// `councilAggregate { reviewsFrom: [reviewer channels], fieldFrom, into }` — Borda-aggregate the
+/// reviewers' rankings of the anonymized `fieldFrom` labels into a consensus order (best-first). A
+/// label at position `p` of `n` scores `n - p`; ties break by label asc (deterministic).
+fn build_council_aggregate(params: &Value) -> Result<NodeHandler, ComponentError> {
+    let kind = "councilAggregate";
+    let into = require_string(kind, params, "into")?;
+    let field_from = require_string(kind, params, "fieldFrom")?;
+    let reviews = Arc::new(require_string_array(kind, params, "reviewsFrom")?);
+
+    Ok(sync_handler(move |state: GraphState| {
+        let labels: Vec<String> = match state.channels.get(&field_from) {
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(|item| item.get("label").and_then(Value::as_str).map(str::to_owned))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let label_set: BTreeSet<String> = labels.iter().cloned().collect();
+        let mut scores: BTreeMap<String, f64> = labels.iter().map(|l| (l.clone(), 0.0)).collect();
+        for name in reviews.iter() {
+            let ranking =
+                council_parse_ranking(&council_content(state.channels.get(name)), &label_set);
+            let n = ranking.len();
+            for (position, label) in ranking.iter().enumerate() {
+                *scores.entry(label.clone()).or_insert(0.0) += (n - position) as f64;
+            }
+        }
+        let mut ordered = labels.clone();
+        ordered.sort_by(|a, b| {
+            let sa = scores.get(a).copied().unwrap_or(0.0);
+            let sb = scores.get(b).copied().unwrap_or(0.0);
+            sb.partial_cmp(&sa)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.cmp(b))
+        });
+        NodeOutput::update(single(&into, json!(ordered)))
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2508,10 +2637,10 @@ mod tests {
     }
 
     #[test]
-    fn registry_lists_all_twenty_nine_kinds() {
-        assert_eq!(ComponentRegistry::kinds().len(), 29);
+    fn registry_lists_all_thirty_one_kinds() {
+        assert_eq!(ComponentRegistry::kinds().len(), 31);
         // The seventeen wave-one kinds plus the eleven wave-two kinds plus
-        // semanticRetriever, in declaration order.
+        // semanticRetriever plus the two council kinds, in declaration order.
         assert_eq!(
             ComponentRegistry::kinds(),
             &[
@@ -2544,6 +2673,8 @@ mod tests {
                 "chatMessageBuilder",
                 "conditionalRouter",
                 "documentWriter",
+                "councilAnonymize",
+                "councilAggregate",
             ]
         );
     }
@@ -2600,6 +2731,10 @@ mod tests {
             }
             "conditionalRouter" => json!({ "into": "o", "defaultRoute": "d", "branches": [] }),
             "documentWriter" => json!({ "from": "f", "into": "o" }),
+            "councilAnonymize" => json!({ "fromChannels": ["m0"], "into": "field" }),
+            "councilAggregate" => {
+                json!({ "reviewsFrom": ["r0"], "fieldFrom": "field", "into": "agg" })
+            }
             other => panic!("no sample params for kind `{other}`"),
         }
     }
@@ -4149,5 +4284,62 @@ mod tests {
         // First "a" (v=1) is kept.
         assert_eq!(store[0].get("v").unwrap(), &json!(1));
         assert_eq!(store[1].get("id").unwrap(), &json!("b"));
+    }
+
+    #[test]
+    fn council_anonymize_relabels_shuffles_and_keeps_member_id() {
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "councilAnonymize",
+                &json!({ "fromChannels": ["member_0", "member_1"], "into": "field", "seed": "s" }),
+            )
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[
+                ("member_0", json!({ "content": "alpha" })),
+                ("member_1", json!({ "content": "beta" })),
+            ]),
+        );
+        let field = out.update.get("field").and_then(Value::as_array).unwrap();
+        assert_eq!(field.len(), 2);
+        // Relabeled A/B; memberId retained for de-anonymization; content preserved.
+        let labels: Vec<&str> = field
+            .iter()
+            .map(|f| f.get("label").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(labels, vec!["A", "B"]);
+        let member_ids: BTreeSet<&str> = field
+            .iter()
+            .map(|f| f.get("memberId").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(member_ids, ["member_0", "member_1"].into_iter().collect());
+    }
+
+    #[test]
+    fn council_aggregate_borda_orders_the_field() {
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "councilAggregate",
+                &json!({ "reviewsFrom": ["review_0", "review_1"], "fieldFrom": "field", "into": "aggregate" }),
+            )
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[
+                ("field", json!([{ "label": "A" }, { "label": "B" }])),
+                ("review_0", json!({ "content": "I rank B then A" })),
+                ("review_1", json!({ "content": "B first, A second" })),
+            ]),
+        );
+        let order: Vec<&str> = out
+            .update
+            .get("aggregate")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(order, vec!["B", "A"]);
     }
 }

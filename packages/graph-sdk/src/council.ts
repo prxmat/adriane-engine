@@ -4,9 +4,9 @@
 // and aggregate-ranks — no model, no I/O, replay-faithful (the "not an ensemble trick" core of ADR
 // 0013) — plus the `council(...)` graph builder that wires them between the agent fan-outs.
 
-import { createGraph } from "./builder.js";
-import type { CompiledGraph } from "./compiled-graph.js";
-import type { AgentNodeConfig } from "./agent-node.js";
+import type { EdgeId, GraphDefinition, GraphId, NodeId } from "@adriane-ai/graph-core";
+
+import { toRustAgentConfig, type AgentNodeConfig } from "./agent-node.js";
 
 /** One member's answer to the query. */
 export type MemberAnswer = { memberId: string; content: string };
@@ -108,88 +108,101 @@ export type CouncilOptions = {
 const memberChannel = (i: number): string => `member_${i}`;
 const reviewChannel = (i: number): string => `review_${i}`;
 
-/** Read an agent-result channel's answer text, tolerating shapes. */
-const readContent = (value: unknown): string => {
-  if (typeof value === "string") return value;
-  if (value !== null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if (typeof record.content === "string") return record.content;
-    if (typeof record.output === "string") return record.output;
-  }
-  return "";
-};
+type CouncilNode = GraphDefinition["nodes"][number];
+
+const agentSeatNode = (id: string, seat: CouncilSeat, outputChannel: string): CouncilNode => ({
+  id: id as NodeId,
+  type: "agent",
+  label: id,
+  metadata: { agent: toRustAgentConfig(id, { ...seat, outputChannel }) }
+});
+
+const componentNode = (
+  id: string,
+  kind: string,
+  params: Record<string, unknown>
+): CouncilNode => ({
+  id: id as NodeId,
+  type: "action",
+  label: id,
+  metadata: { component: { kind, params } }
+});
+
+const edge = (from: string, to: string): GraphDefinition["edges"][number] => ({
+  id: `e_${from}_${to}` as EdgeId,
+  from: from as NodeId,
+  to: to as NodeId,
+  type: "default"
+});
 
 /**
- * Build a governed LLM Council (ADR 0013 / ADR 0061): dispatch → members (fan-out) → anonymize+shuffle
- * → reviewers (fan-out, rank the field) → aggregate → [optional human gate] → chair synthesis.
- * Members/reviewers/chair are native agent nodes (governed: a member never reviews its own answer,
- * every seat audited); anonymize/aggregate are the deterministic pure helpers above. Fixed N (the
- * member list length) via the runtime fan-out. Built by mutation so a per-seat loop stays type-clean.
+ * Build a governed LLM Council (ADR 0013 / ADR 0061) as a native **catalog** GraphDefinition: dispatch
+ * → members (fan-out) → `councilAnonymize` → reviewers (fan-out, rank the field) → `councilAggregate` →
+ * [optional human gate] → chair synthesis. Members/reviewers/chair are agent-carrier nodes (a member
+ * never reviews its own answer; every seat audited); anonymize/aggregate are Rust catalog components
+ * (their deterministic logic mirrors the exported pure helpers). Every node carries a `component`/
+ * `agent` carrier, so the graph runs on the Rust engine via `runCatalogGraph` — no JS handlers. Fixed N
+ * (the member list length) via the runtime fan-out. Returns the definition; run it with
+ * `runCatalogGraph(council(...))`.
  */
-export const council = (options: CouncilOptions): CompiledGraph => {
+export const council = (options: CouncilOptions): GraphDefinition => {
   const query = options.queryChannel ?? "query";
   const reviewers = options.reviewers ?? options.members;
   const seed = options.seed ?? "council";
-  const builder = createGraph({ name: "council" });
+  const memberIds = options.members.map((_, i) => memberChannel(i));
+  const reviewIds = reviewers.map((_, i) => reviewChannel(i));
 
-  builder.channel(query, { type: "string", default: "" });
-  builder.channel("field", { type: "json", default: [] });
-  builder.channel("aggregate", { type: "json", default: [] });
-
-  // dispatch: a single-headed entry the members fan out from.
-  builder.node("dispatch", async () => ({}));
-  options.members.forEach((seat, i) => {
-    builder.agentNode(memberChannel(i), { ...seat, outputChannel: memberChannel(i) });
-  });
-
-  builder.node("anonymize", async (_input, state) => {
-    const channels = state.channels as Record<string, unknown>;
-    const answers = options.members.map((_, i) => ({
-      memberId: memberChannel(i),
-      content: readContent(channels[memberChannel(i)])
-    }));
-    return { field: anonymizeAndShuffle(answers, seed) };
-  });
-
-  reviewers.forEach((seat, i) => {
-    builder.agentNode(reviewChannel(i), { ...seat, outputChannel: reviewChannel(i) });
-  });
-
-  builder.node("aggregate", async (_input, state) => {
-    const channels = state.channels as Record<string, unknown>;
-    const field = (channels.field as AnonymizedAnswer[] | undefined) ?? [];
-    const labels = field.map((f) => f.label);
-    const rankings = reviewers.map((_, i) =>
-      parseRanking(readContent(channels[reviewChannel(i)]), labels)
-    );
-    return { aggregate: aggregateRanks(rankings, labels) };
-  });
-
-  if (options.humanGate === true) {
-    builder.humanGate("gate");
-  }
-  builder.agentNode("chair", { ...options.chair, outputChannel: "answer" });
-
-  // Wire the two fan-outs + the tail.
-  builder.edge("dispatch", memberChannel(0));
-  builder.fanOut(
-    "dispatch",
-    options.members.map((_, i) => memberChannel(i)),
-    "anonymize"
-  );
-  builder.edge("anonymize", reviewChannel(0));
-  builder.fanOut(
-    "anonymize",
-    reviewers.map((_, i) => reviewChannel(i)),
-    "aggregate"
-  );
-  if (options.humanGate === true) {
-    builder.edge("aggregate", "gate");
-    builder.edge("gate", "chair");
-  } else {
-    builder.edge("aggregate", "chair");
+  const channels: GraphDefinition["channels"] = {
+    [query]: { type: "string", reducer: "replace", default: "" },
+    _dispatch: { type: "string", reducer: "replace", default: "" },
+    field: { type: "json", reducer: "replace", default: [] },
+    aggregate: { type: "json", reducer: "replace", default: [] },
+    answer: { type: "agentResult", reducer: "replace" }
+  };
+  for (const id of [...memberIds, ...reviewIds]) {
+    channels[id] = { type: "agentResult", reducer: "replace" };
   }
 
-  builder.entry("dispatch");
-  return builder.compile();
+  const dispatch: CouncilNode = {
+    ...componentNode("dispatch", "textCleaner", { from: query, into: "_dispatch" }),
+    fanOut: { parallelTo: memberIds as NodeId[], joinAt: "anonymize" as NodeId }
+  };
+  const anonymize: CouncilNode = {
+    ...componentNode("anonymize", "councilAnonymize", { fromChannels: memberIds, into: "field", seed }),
+    fanOut: { parallelTo: reviewIds as NodeId[], joinAt: "aggregate" as NodeId }
+  };
+  const gate: CouncilNode[] =
+    options.humanGate === true ? [{ id: "gate" as NodeId, type: "human-gate", label: "gate" }] : [];
+
+  const nodes: CouncilNode[] = [
+    dispatch,
+    ...options.members.map((seat, i) => agentSeatNode(memberChannel(i), seat, memberChannel(i))),
+    anonymize,
+    ...reviewers.map((seat, i) => agentSeatNode(reviewChannel(i), seat, reviewChannel(i))),
+    componentNode("aggregate", "councilAggregate", {
+      reviewsFrom: reviewIds,
+      fieldFrom: "field",
+      into: "aggregate"
+    }),
+    ...gate,
+    agentSeatNode("chair", options.chair, "answer")
+  ];
+
+  const edges = [
+    edge("dispatch", memberChannel(0)),
+    edge("anonymize", reviewChannel(0)),
+    ...(options.humanGate === true
+      ? [edge("aggregate", "gate"), edge("gate", "chair")]
+      : [edge("aggregate", "chair")])
+  ];
+
+  return {
+    id: "council" as GraphId,
+    version: "0.0.0",
+    name: "council",
+    channels,
+    nodes,
+    edges,
+    entryNodeId: "dispatch" as NodeId
+  };
 };

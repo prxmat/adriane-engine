@@ -412,12 +412,14 @@ Because every agent is a node, multi-agent runs inherit the full
 
 A **council** dispatches a query to N member agents, has reviewers **rank the anonymized field**, and
 a **chair** synthesizes the final answer — a governed version of Karpathy's llm-council (ADR 0013).
-`council(...)` builds the graph for you:
+`council(...)` builds the **catalog graph** for you — every node carries a component/agent carrier
+(anonymize/aggregate are the `councilAnonymize` / `councilAggregate` Rust components), so it runs on
+the Rust engine via `runCatalogGraph` like any governed graph:
 
 ```ts
-import { council, openai, anthropic } from "@adriane-ai/graph-sdk";
+import { council, runCatalogGraph, openai, anthropic } from "@adriane-ai/graph-sdk";
 
-const app = council({
+const definition = council({
   members: [
     { model: openai("gpt-4o"), prompt: { system: "Answer the question." } },
     { model: anthropic("claude-sonnet-4-5"), prompt: { system: "Answer the question." } },
@@ -428,7 +430,7 @@ const app = council({
   humanGate: true // optional: suspend for accept/override before the chair (high-stakes)
 });
 
-const result = await app.run({ query: "How should we price the EU tier?" });
+const result = await runCatalogGraph(definition, { initialData: { query: "How should we price the EU tier?" } });
 ```
 
 The graph is `dispatch → members (fan-out) → anonymize+shuffle → reviewers (fan-out, rank) →
