@@ -212,8 +212,42 @@ fn value_to_text(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
+        Value::Object(_) => {
+            // An agent node writes an `AgentResult` object into its output channel. Its final answer
+            // lives in `reasoning` as the last `final:<answer>` line (see agents-core react.rs). A
+            // downstream component (answerBuilder, outputParser, …) reading that channel wants the
+            // ANSWER, not the stringified wrapper — so unwrap it here (the universal text coercion).
+            // Prefer `structuredOutput` when the agent ran with a schema; else the `final:` tail; else
+            // fall through to the raw JSON for non-AgentResult objects.
+            if let Some(text) = agent_result_text(value) {
+                text
+            } else {
+                value.to_string()
+            }
+        }
         other => other.to_string(),
     }
+}
+
+/// Extract an `AgentResult`'s final answer text, or `None` when `value` is not an AgentResult-shaped
+/// object. Uses `structuredOutput` (validated JSON) when present; otherwise the text after the last
+/// `final:` marker in `reasoning`; otherwise the whole `reasoning`.
+fn agent_result_text(value: &Value) -> Option<String> {
+    let obj = value.as_object()?;
+    let reasoning = obj.get("reasoning")?.as_str()?;
+    if let Some(structured) = obj.get("structuredOutput") {
+        if !structured.is_null() {
+            return Some(match structured {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            });
+        }
+    }
+    let answer = match reasoning.rfind("final:") {
+        Some(idx) => reasoning[idx + "final:".len()..].trim(),
+        None => reasoning.trim(),
+    };
+    Some(answer.to_string())
 }
 
 /// Build a single-key channel update.
@@ -2634,6 +2668,47 @@ mod tests {
             build_err("nope", &json!({})),
             ComponentError::UnknownKind("nope".to_string())
         );
+    }
+
+    #[test]
+    fn value_to_text_unwraps_agent_result_final_answer() {
+        // An agent node writes an AgentResult; downstream components want the final answer, not the
+        // stringified wrapper (ADR 0060/0061 — the answerBuilder / outputParser unwrap fix).
+        let agent_result = json!({
+            "reasoning": "thought:It lists the projects.\nfinal:Next, GitHub, CLI.",
+            "approvalRequests": [],
+            "requiresHumanReview": false
+        });
+        assert_eq!(value_to_text(&agent_result), "Next, GitHub, CLI.");
+    }
+
+    #[test]
+    fn value_to_text_prefers_structured_output_when_present() {
+        let agent_result = json!({
+            "reasoning": "thought:x\nfinal:ignored",
+            "structuredOutput": { "answer": "structured" }
+        });
+        // Structured output wins over the `final:` tail; it round-trips as compact JSON.
+        assert_eq!(value_to_text(&agent_result), "{\"answer\":\"structured\"}");
+    }
+
+    #[test]
+    fn value_to_text_uses_whole_reasoning_without_a_final_marker() {
+        let agent_result =
+            json!({ "reasoning": "The facts do not answer.", "approvalRequests": [] });
+        assert_eq!(value_to_text(&agent_result), "The facts do not answer.");
+    }
+
+    #[test]
+    fn value_to_text_keeps_a_non_agentresult_object_as_json() {
+        let plain = json!({ "id": "x", "content": "hi" });
+        assert_eq!(value_to_text(&plain), plain.to_string());
+    }
+
+    #[test]
+    fn value_to_text_passes_strings_and_null_through() {
+        assert_eq!(value_to_text(&json!("hello")), "hello");
+        assert_eq!(value_to_text(&Value::Null), "");
     }
 
     #[test]
