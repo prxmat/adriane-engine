@@ -3,6 +3,17 @@
 All notable changes to the Adriane engine are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.18.1
+
+### Fixed
+
+- **`answerBuilder` / `outputParser` / any component reading an agent's output channel now unwrap the
+  `AgentResult`.** `value_to_text` treated an `AgentResult` object as raw JSON, so a downstream
+  component received the stringified wrapper (`{ reasoning: "thought:…\nfinal:…", approvalRequests, … }`)
+  instead of the agent's answer. It now extracts the final answer — the validated `structuredOutput`
+  when present, else the text after the last `final:` marker in `reasoning`. Fixes Governed Ask
+  answers, co-authoring projections, and the enterprise-analysis proposal all surfacing as raw JSON.
+
 ## 1.18.0
 
 ### Changed
