@@ -41,8 +41,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 pub mod spec;
+pub mod tool_journal;
 
 use crate::spec::{AgentSpec, ApprovedTool, EngineSpec, FsPolicyRule, RunOutcome};
+use crate::tool_journal::{hash_tool_input, ToolReplayLog, ToolReplayOutcome, ToolResultWire};
 
 pub type BridgeResult<T> = Result<T, String>;
 
@@ -95,6 +97,8 @@ enum ReplayMode {
     Record {
         journal: Arc<Mutex<Vec<RecordedCall>>>,
         clock: Arc<Mutex<Vec<String>>>,
+        /// ADR 0041 D2 — the host-tool results captured this run, in call order.
+        tools: Arc<Mutex<Vec<ToolResultWire>>>,
     },
     /// Replay mode (`Entry::Replay`): every agent gateway is the SAME shared `ReplayGateway`
     /// (so each recorded call is consumed once across the whole run), and the clock replays
@@ -102,6 +106,8 @@ enum ReplayMode {
     Replay {
         gateway: Arc<ReplayGateway>,
         clock: Vec<String>,
+        /// ADR 0041 D2 — recorded host-tool results, served by (name, inputHash), never re-executed.
+        tools: Arc<ToolReplayLog>,
     },
 }
 
@@ -113,6 +119,10 @@ enum ReplayMode {
 struct ReplayJournalWire {
     decisions: LlmJournal,
     clock: Vec<String>,
+    /// ADR 0041 D2 — host-tool results (additive: a pre-0041 journal deserializes to empty,
+    /// and its replay degrades host tools to the deterministic stub instead of failing).
+    #[serde(default)]
+    tool_results: Vec<ToolResultWire>,
 }
 
 impl ReplayMode {
@@ -128,6 +138,7 @@ impl ReplayMode {
             return Ok(ReplayMode::Replay {
                 gateway: Arc::new(ReplayGateway::new(wire.decisions)),
                 clock: wire.clock,
+                tools: Arc::new(ToolReplayLog::new(wire.tool_results)),
             });
         }
         let recording = std::env::var("ADRIANE_LLM_RECORD")
@@ -137,6 +148,7 @@ impl ReplayMode {
             return Ok(ReplayMode::Record {
                 journal: Arc::new(Mutex::new(Vec::new())),
                 clock: Arc::new(Mutex::new(Vec::new())),
+                tools: Arc::new(Mutex::new(Vec::new())),
             });
         }
         Ok(ReplayMode::Live)
@@ -176,7 +188,11 @@ impl ReplayMode {
     /// In record mode, serialize the captured journal (LLM I/O + clock) for `RunOutcome`.
     fn recorded_journal_json(&self) -> Option<String> {
         match self {
-            ReplayMode::Record { journal, clock } => {
+            ReplayMode::Record {
+                journal,
+                clock,
+                tools,
+            } => {
                 let wire = ReplayJournalWire {
                     decisions: LlmJournal {
                         calls: journal
@@ -185,10 +201,71 @@ impl ReplayMode {
                             .clone(),
                     },
                     clock: clock.lock().expect("record clock mutex poisoned").clone(),
+                    tool_results: tools.lock().expect("record tools mutex poisoned").clone(),
                 };
                 serde_json::to_string(&wire).ok()
             }
             _ => None,
+        }
+    }
+
+    /// ADR 0041 D2 — the handler a HOST tool name gets under this mode:
+    /// - Live: the plain host callback.
+    /// - Record: the host callback, its result (or error) journaled after each call.
+    /// - Replay: served purely from the journal by `(name, inputHash)` — never re-executed. A
+    ///   pre-0041 journal (no tool entries) degrades to the deterministic stub; a non-matching
+    ///   call with entries present fails the replay loudly (`tool_input_mismatch`).
+    fn host_tool(
+        &self,
+        tool_name: &str,
+        callbacks: &SharedCallbacks,
+    ) -> adriane_agents_core::ToolHandler {
+        match self {
+            ReplayMode::Live => host_tool_handler(tool_name.to_owned(), callbacks),
+            ReplayMode::Record { tools, .. } => {
+                let inner = host_tool_handler(tool_name.to_owned(), callbacks);
+                let tools = Arc::clone(tools);
+                let name = tool_name.to_owned();
+                Box::new(move |input: Value| {
+                    let inner_call = inner(input.clone());
+                    let tools = Arc::clone(&tools);
+                    let name = name.clone();
+                    Box::pin(async move {
+                        let outcome = inner_call.await;
+                        let wire = ToolResultWire {
+                            name: name.clone(),
+                            input_hash: hash_tool_input(&input),
+                            result: outcome.as_ref().ok().cloned(),
+                            error: outcome.as_ref().err().cloned(),
+                        };
+                        tools
+                            .lock()
+                            .expect("record tools mutex poisoned")
+                            .push(wire);
+                        outcome
+                    })
+                })
+            }
+            ReplayMode::Replay { tools, .. } => {
+                let tools = Arc::clone(tools);
+                let name = tool_name.to_owned();
+                Box::new(move |input: Value| {
+                    let tools = Arc::clone(&tools);
+                    let name = name.clone();
+                    Box::pin(async move {
+                        match tools.take_matching(&name, &input) {
+                            ToolReplayOutcome::Serve(result) => result,
+                            // Pre-0041 evidence: same degradation as an unbound name (E1).
+                            ToolReplayOutcome::NoJournal => {
+                                Ok(json!({ "tool": name, "ok": true }))
+                            }
+                            ToolReplayOutcome::Mismatch => Err(format!(
+                                "tool_input_mismatch: replayed call to '{name}' has no matching recorded result — the replay diverged from the journal"
+                            )),
+                        }
+                    })
+                })
+            }
         }
     }
 }
@@ -931,8 +1008,16 @@ fn build_react_agent(
             input_schema: Some(json!({ "type": "object" })),
             content_scoped: false,
         };
-        let handler = if host_tools.contains(tool_name.as_str()) {
-            host_tool_handler(tool_name.clone(), callbacks)
+        // ADR 0041 D2: a replayed run carries no `jsToolNames` (the SDK never passes tools on
+        // replay), so a name that WAS host-backed at record time must still route through the
+        // mode — the journal serves it. Any journal-backed replay therefore treats every
+        // non-native name as a host tool.
+        let journal_replayed = matches!(
+            mode,
+            ReplayMode::Replay { tools, .. } if tools.has_entries()
+        );
+        let handler = if host_tools.contains(tool_name.as_str()) || journal_replayed {
+            mode.host_tool(tool_name, callbacks)
         } else {
             // A non-JS tool with no Rust impl: a deterministic no-op so the agent
             // loop can still execute and observe something.
@@ -2798,6 +2883,7 @@ mod tests {
         let mode = ReplayMode::Record {
             journal: Arc::new(Mutex::new(Vec::new())),
             clock: Arc::clone(&clock_buf),
+            tools: Arc::new(Mutex::new(Vec::new())),
         };
         let clock = mode.runtime_clock().expect("record mode installs a clock");
         let _ = clock.now_string();
@@ -2818,11 +2904,100 @@ mod tests {
         let mode = ReplayMode::Replay {
             gateway: Arc::new(ReplayGateway::new(LlmJournal::default())),
             clock: vec!["7".to_owned(), "8".to_owned()],
+            tools: Arc::new(ToolReplayLog::new(vec![])),
         };
         let clock = mode.runtime_clock().expect("replay mode installs a clock");
         assert_eq!(clock.now_string(), "7");
         assert_eq!(clock.now_string(), "8");
         assert_eq!(clock.now_string(), "8"); // clamps on exhaustion
+    }
+
+    /// A host that serves every `kind:"tool"` call with a fixed JSON result.
+    struct ToolHost {
+        result: String,
+        calls: Mutex<Vec<Value>>,
+    }
+
+    #[async_trait]
+    impl HostCallbacks for ToolHost {
+        async fn on_node(&self, payload: Value) -> BridgeResult<String> {
+            self.calls.lock().unwrap().push(payload);
+            Ok(self.result.clone())
+        }
+        fn on_condition(&self, _payload: Value) -> BridgeResult<bool> {
+            Ok(false)
+        }
+        fn on_event(&self, _payload_json: String) {}
+    }
+
+    #[tokio::test]
+    async fn record_mode_journals_host_tool_results_and_replay_serves_them() {
+        // ADR 0041 D2 — record a host-tool call, round-trip the journal, replay WITHOUT a live
+        // host execution: the replayed handler serves the recorded result by (name, inputHash).
+        let host: SharedCallbacks = Arc::new(ToolHost {
+            result: "{\"hits\":[\"doc-1\"]}".to_owned(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let record = ReplayMode::Record {
+            journal: Arc::new(Mutex::new(Vec::new())),
+            clock: Arc::new(Mutex::new(Vec::new())),
+            tools: Arc::new(Mutex::new(Vec::new())),
+        };
+        let handler = record.host_tool("search", &host);
+        let input = json!({ "q": "gates" });
+        let live = handler(input.clone()).await.expect("live call succeeds");
+        assert_eq!(live, json!({ "hits": ["doc-1"] }));
+
+        let journal_json = record.recorded_journal_json().expect("record journals");
+        let wire: ReplayJournalWire = serde_json::from_str(&journal_json).unwrap();
+        assert_eq!(wire.tool_results.len(), 1);
+        assert_eq!(wire.tool_results[0].name, "search");
+
+        // Replay: the result must come purely from the journal — the host is never consulted.
+        let dead = Arc::new(ToolHost {
+            result: "{\"never\":true}".to_owned(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let dead_cb: SharedCallbacks = Arc::clone(&dead) as SharedCallbacks;
+        let replay = ReplayMode::Replay {
+            gateway: Arc::new(ReplayGateway::new(LlmJournal::default())),
+            clock: vec![],
+            tools: Arc::new(ToolReplayLog::new(wire.tool_results)),
+        };
+        let replayed = replay.host_tool("search", &dead_cb);
+        let served = replayed(input.clone()).await.expect("served from journal");
+        assert_eq!(served, json!({ "hits": ["doc-1"] }));
+        assert!(
+            dead.calls.lock().unwrap().is_empty(),
+            "replay must never re-execute a host tool"
+        );
+        // A second identical call has no remaining entry → divergence, loud failure.
+        let err = replayed(input).await.expect_err("journal exhausted");
+        assert!(err.contains("tool_input_mismatch"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn replay_of_a_pre0041_journal_degrades_host_tools_to_the_stub() {
+        let host: SharedCallbacks = Arc::new(ToolHost {
+            result: "{}".to_owned(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let replay = ReplayMode::Replay {
+            gateway: Arc::new(ReplayGateway::new(LlmJournal::default())),
+            clock: vec![],
+            tools: Arc::new(ToolReplayLog::new(vec![])),
+        };
+        let handler = replay.host_tool("search", &host);
+        let out = handler(json!({ "q": "x" })).await.expect("stub result");
+        assert_eq!(out, json!({ "tool": "search", "ok": true }));
+    }
+
+    #[test]
+    fn pre0041_journal_json_deserializes_with_empty_tool_results() {
+        // Additive compat: a journal recorded before ADR 0041 has no `toolResults` key.
+        let old = "{\"decisions\":{\"calls\":[]},\"clock\":[]}";
+        let wire: ReplayJournalWire = serde_json::from_str(old).expect("old journal loads");
+        assert!(wire.tool_results.is_empty());
     }
 
     struct FakeRerank {
