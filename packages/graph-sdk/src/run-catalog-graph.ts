@@ -37,6 +37,7 @@ import type {
   FsPolicyRule,
   RustAgentConfig,
   RustMapAgentConfig,
+  RustToolBinding,
   SkillRecord
 } from "./agent-node.js";
 import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
@@ -174,6 +175,16 @@ export type RunCatalogGraphOptions = {
    * selects from it. Omit/empty → the OSS shared in-memory store (no skills).
    */
   skills?: SkillRecord[];
+  /**
+   * Host tools for this run (ADR 0041 D1): JS-backed `{ name, execute }` bindings made callable by
+   * ANY catalog agent whose `toolNames` includes the name — through the same napi host-tool seam the
+   * in-process builder path uses (`on_node` `kind:"tool"`). Names NOT bound here keep the no-op stub
+   * behaviour, so a graph remains pure data and existing runs are untouched. Supplied per CALL, never
+   * persisted with the graph. NOTE (ADR 0041 E2): until the replay journal records host-tool results,
+   * the caller must not combine `tools` with record-mode replay evidence — a replayed run would
+   * re-execute the tools and may diverge.
+   */
+  tools?: RustToolBinding[];
 };
 
 /** Raised when the native engine is unavailable — catalog graphs require it. */
@@ -271,8 +282,9 @@ const carrierToAgentConfig = (
   // ADR 0025 phase 3d — forward the resolved efficiency list (already desugared at build
   // time); a pre-3d carrier has none, and the Rust bridge falls back to the flat knobs.
   resolvedMiddleware: carrier.resolvedMiddleware,
-  // The catalog path carries no JS tool closures — the agent's tools are native
-  // (no-op stubs in the bridge unless a name is also in jsToolNames, which it never is here).
+  // Per-agent tool closures are a builder-path concept; on the catalog path host tools are
+  // supplied PER RUN via RunCatalogGraphOptions.tools (ADR 0041 D1) and dispatched through the
+  // spec-level jsToolNames — an agent's toolName not bound there stays a native/no-op stub.
   toolBindings: [],
   usesApprovalEngine
 });
@@ -293,7 +305,8 @@ const assembleParts = (
   usesApprovalEngine: boolean,
   providerKeys: Record<string, string> | undefined,
   fsPolicy: FsPolicyRule[] | undefined,
-  skills: SkillRecord[] | undefined
+  skills: SkillRecord[] | undefined,
+  tools: RustToolBinding[] | undefined
 ): RustRunnerParts<ChannelValues> => {
   const components = new Map<string, RustComponentConfig>();
   const agents = new Map<string, RustAgentConfig>();
@@ -347,7 +360,10 @@ const assembleParts = (
     nodeFns: new Map(
       jsNodeIds.size === 0 ? [] : [...jsNodeIds].map((id) => [id, async () => ({})])
     ),
-    toolFns: new Map(),
+    // ADR 0041 D1 — per-run host tools: the same seam the builder path wires (`toolFns` backs the
+    // napi `on_node` `kind:"tool"` dispatch; `jsToolNames` tells the bridge which names are real).
+    // No bindings → today's behaviour exactly (every agent toolName is a native or no-op stub).
+    toolFns: new Map((tools ?? []).map((binding) => [binding.name, binding.execute])),
     conditions: new Map(),
     agents,
     components,
@@ -355,7 +371,7 @@ const assembleParts = (
     // fan-out node), at parity with the in-process builder path.
     mapAgents,
     jsNodeIds,
-    jsToolNames: new Set(),
+    jsToolNames: new Set((tools ?? []).map((binding) => binding.name)),
     providerKeys,
     fsPolicy,
     skills
@@ -381,7 +397,8 @@ export const runCatalogGraph = async (
       options.approvalEngine !== undefined,
       options.providerKeys,
       options.fsPolicy,
-      options.skills
+      options.skills,
+      options.tools
     )
   );
   if (runner === null) {
@@ -420,7 +437,7 @@ export const resumeCatalogGraph = async (
   state: GraphState,
   options: Pick<
     RunCatalogGraphOptions,
-    "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy" | "skills"
+    "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy" | "skills" | "tools"
   > & {
     /**
      * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
@@ -443,7 +460,10 @@ export const resumeCatalogGraph = async (
       options.approvalEngine !== undefined,
       options.providerKeys,
       options.fsPolicy,
-      options.skills
+      options.skills,
+      // A resumed run needs its host tools again — a tool-using agent past the gate would
+      // otherwise silently degrade to stubs (ADR 0041 D1).
+      options.tools
     )
   );
   if (runner === null) {
@@ -490,8 +510,10 @@ export const replayCatalogGraph = async (
     throw new RustEngineUnavailableError();
   }
   // No approval engine on replay — it is read-only EVIDENCE and must never open a new gate.
+  // No host tools either (ADR 0041): a replay must never RE-EXECUTE a tool — bound names degrade
+  // to stubs until E2 re-serves recorded tool results from the journal.
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, false, options.providerKeys, options.fsPolicy, options.skills)
+    assembleParts(definition, false, options.providerKeys, options.fsPolicy, options.skills, undefined)
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
