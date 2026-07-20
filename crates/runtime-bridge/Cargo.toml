@@ -19,5 +19,6 @@ adriane-memory = { path = "../memory" }
 adriane-skills = { path = "../skills" }
 async-trait = "0.1"
 serde = { workspace = true }
+sha2 = "0.10"
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
