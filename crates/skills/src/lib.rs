@@ -71,6 +71,19 @@ pub struct Skill {
     /// approval-gated when selected (content-scoped by `name@version`, ADR 0024 pattern).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
+    /// The open-standard `allowed-tools` field (ADR 0065 D1): an allow-list gating what the
+    /// skill's OWN instructions may invoke. Distinct from `requires` (a whole-skill capability
+    /// gate) — stored and round-tripped through import/export, but **not** enforced by
+    /// [`SkillMiddleware`] yet (ADR 0065 explicitly defers that to a follow-up).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    /// Open-standard SPDX license identifier (ADR 0065 D1). Optional, informational only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// Open-standard free-form frontmatter metadata map (ADR 0065 D1). Opaque to the engine —
+    /// round-tripped through import/export, never interpreted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     /// L3 bundled resource references (resolved on demand).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<SkillResource>,
@@ -248,16 +261,32 @@ impl SkillStore for InMemorySkillStore {
     }
 }
 
-/// Parse a SKILL.md document (YAML-frontmatter + markdown body) into its parts (ADR 0035). Handles
-/// the documented frontmatter subset — scalar `name`/`version`/`description` and inline-array
-/// `requires: [a, b]` — without a YAML dependency; the body is everything after the closing `---`.
-/// `namespace` + embedding + provenance are supplied by the registrar, not the file.
+/// Parse a SKILL.md document (YAML-frontmatter + markdown body) into its parts (ADR 0035, frontmatter
+/// parity with the open standard added in ADR 0065 D1). A real YAML parser (`serde_yaml`) reads the
+/// frontmatter block, so any spec-compliant SKILL.md — block or flow arrays, quoted or bare scalars —
+/// round-trips correctly. The body is everything after the closing `---`. `namespace` + embedding +
+/// provenance are supplied by the registrar, not the file.
 pub struct ParsedSkillMd {
     pub name: String,
     pub version: String,
     pub description: String,
     pub requires: Vec<String>,
+    pub allowed_tools: Vec<String>,
+    pub license: Option<String>,
+    pub metadata: Option<serde_json::Value>,
     pub body: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "kebab-case", default)]
+struct SkillFrontmatter {
+    name: String,
+    version: String,
+    description: String,
+    requires: Vec<String>,
+    allowed_tools: Vec<String>,
+    license: Option<String>,
+    metadata: Option<serde_json::Value>,
 }
 
 pub fn parse_skill_md(input: &str) -> Result<ParsedSkillMd, SkillError> {
@@ -271,42 +300,22 @@ pub fn parse_skill_md(input: &str) -> Result<ParsedSkillMd, SkillError> {
     let front = &rest[..end];
     let body = rest[end + 4..].trim_start_matches(['\n', '\r']).to_owned();
 
-    let mut name = String::new();
-    let mut version = String::new();
-    let mut description = String::new();
-    let mut requires: Vec<String> = Vec::new();
-    for line in front.lines() {
-        let line = line.trim();
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim().trim_matches(['"', '\'']).to_string();
-        match key.trim() {
-            "name" => name = value,
-            "version" => version = value,
-            "description" => description = value,
-            "requires" => {
-                requires = value
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .split(',')
-                    .map(|s| s.trim().trim_matches(['"', '\'']).to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
-            _ => {}
-        }
-    }
-    if name.is_empty() || version.is_empty() {
+    let parsed: SkillFrontmatter = serde_yaml::from_str(front)
+        .map_err(|e| SkillError::Store(format!("SKILL.md frontmatter is not valid YAML: {e}")))?;
+
+    if parsed.name.is_empty() || parsed.version.is_empty() {
         return Err(SkillError::Store(
             "SKILL.md frontmatter needs `name` and `version`".to_owned(),
         ));
     }
     Ok(ParsedSkillMd {
-        name,
-        version,
-        description,
-        requires,
+        name: parsed.name,
+        version: parsed.version,
+        description: parsed.description,
+        requires: parsed.requires,
+        allowed_tools: parsed.allowed_tools,
+        license: parsed.license,
+        metadata: parsed.metadata,
         body,
     })
 }
@@ -323,6 +332,9 @@ mod tests {
             description: desc.to_owned(),
             body: format!("# {name}\n…"),
             requires: vec![],
+            allowed_tools: vec![],
+            license: None,
+            metadata: None,
             resources: vec![],
             embedding: emb,
             embedding_model: Some("mock-v1".to_owned()),
@@ -433,6 +445,26 @@ mod tests {
         assert_eq!(parsed.description, "how to issue refunds");
         assert_eq!(parsed.requires, vec!["refund", "lookup_order"]);
         assert!(parsed.body.starts_with("# Refund policy"));
+    }
+
+    #[test]
+    fn parse_skill_md_reads_open_standard_fields_stored_not_enforced() {
+        let md = "---\nname: refund-policy\nversion: 1.2.0\ndescription: how to issue refunds\nallowed-tools: [lookup_order, issue_refund]\nlicense: MIT\nmetadata:\n  author: finance-team\n  tags: [refunds, policy]\n---\nbody\n";
+        let parsed = parse_skill_md(md).unwrap();
+        assert_eq!(parsed.allowed_tools, vec!["lookup_order", "issue_refund"]);
+        assert_eq!(parsed.license, Some("MIT".to_owned()));
+        assert_eq!(
+            parsed.metadata.unwrap()["author"],
+            serde_json::json!("finance-team")
+        );
+    }
+
+    #[test]
+    fn parse_skill_md_block_array_requires_still_parses() {
+        let md =
+            "---\nname: s\nversion: 1.0.0\ndescription: d\nrequires:\n  - a\n  - b\n---\nbody\n";
+        let parsed = parse_skill_md(md).unwrap();
+        assert_eq!(parsed.requires, vec!["a", "b"]);
     }
 
     #[test]

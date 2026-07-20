@@ -76,6 +76,9 @@ export type SkillConfig = {
  * One skill RECORD supplied by the control plane for a run (ADR 0049 B-3) — the store contents the
  * engine builds its run-scoped `SkillStore` from. Matches Rust `Skill` (camelCase). `description` is the
  * always-resident L1 index; `body` is the on-demand L2; `requires` are approval-gated capability keys.
+ * `allowedTools`/`license`/`metadata` are open-standard SKILL.md fields (ADR 0065 D1) — stored and
+ * round-tripped through import/export, but `allowedTools` is NOT enforced by `SkillMiddleware` yet
+ * (distinct from `requires`, which is the actual capability gate).
  */
 export type SkillRecord = {
   name: string;
@@ -84,6 +87,9 @@ export type SkillRecord = {
   description: string;
   body?: string;
   requires?: string[];
+  allowedTools?: string[];
+  license?: string;
+  metadata?: Record<string, unknown>;
   resources?: Array<{ kind?: string; ref: string }>;
 };
 
