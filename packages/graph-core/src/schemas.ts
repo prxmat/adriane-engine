@@ -32,6 +32,13 @@ export const NodeDefinitionSchema = z.object({
       joinAt: NodeIdSchema
     })
     .optional(),
+  // ADR 0042 D2/D3 (product ADR 0068 — child workflows): dynamic N-child subgraph fan-out.
+  mapSubgraph: z
+    .object({
+      overChannel: z.string().min(1),
+      joinAt: z.string().min(1)
+    })
+    .optional(),
   retryPolicy: RetryPolicySchema.optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
 });

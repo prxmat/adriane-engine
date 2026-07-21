@@ -48,6 +48,7 @@ pub fn transform_graph(ast: &GraphAst) -> GraphDefinition {
             input_mapping: None,
             output_mapping: None,
             fan_out: None,
+            map_subgraph: None,
             retry_policy: None,
             metadata: None,
         })

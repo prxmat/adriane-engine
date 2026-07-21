@@ -78,6 +78,18 @@ pub struct FanOut {
     pub join_at: NodeId,
 }
 
+/// ADR 0042 D2/D3 (product ADR 0068 — child workflows): dynamic N-child subgraph fan-out. Present
+/// on a `NodeType::Subgraph` node ALONGSIDE its existing `subgraph_id` (never duplicated here) —
+/// `over_channel` is read as a JSON array at execution time, one child spawn per item, run
+/// concurrently; results land in `join_at` as a JSON array, input order preserved. Absent (the
+/// common case): the node runs its subgraph exactly once, unchanged (`execute_subgraph`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapSubgraph {
+    pub over_channel: String,
+    pub join_at: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeDefinition {
@@ -93,6 +105,8 @@ pub struct NodeDefinition {
     pub output_mapping: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fan_out: Option<FanOut>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_subgraph: Option<MapSubgraph>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_policy: Option<RetryPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,6 +179,7 @@ mod tests {
             input_mapping: None,
             output_mapping: None,
             fan_out: None,
+            map_subgraph: None,
             retry_policy: Some(RetryPolicy {
                 max_attempts: 2,
                 backoff_ms: 100,
