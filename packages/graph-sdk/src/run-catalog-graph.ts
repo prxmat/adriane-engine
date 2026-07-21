@@ -185,6 +185,16 @@ export type RunCatalogGraphOptions = {
    * re-execute the tools and may diverge.
    */
   tools?: RustToolBinding[];
+  /**
+   * Child graph definitions for `subgraph`-type nodes (ADR 0042, product ADR 0068 — child
+   * workflows). A catalog node with `type: "subgraph"` + `subgraphId` resolves against this list,
+   * exactly like the in-process builder path (`GraphBuilder.subgraph()` → `CompiledGraph`) already
+   * does — `execute_subgraph` (the Rust engine) recursively starts/resumes the child sharing this
+   * run's checkpointer, propagates the child's suspension to the parent, and propagates a child
+   * failure as the parent's own error. Omit/empty for a graph with no subgraph nodes (today's
+   * behaviour, unchanged).
+   */
+  subgraphs?: GraphDefinition[];
 };
 
 /** Raised when the native engine is unavailable — catalog graphs require it. */
@@ -306,19 +316,27 @@ const assembleParts = (
   providerKeys: Record<string, string> | undefined,
   fsPolicy: FsPolicyRule[] | undefined,
   skills: SkillRecord[] | undefined,
-  tools: RustToolBinding[] | undefined
+  tools: RustToolBinding[] | undefined,
+  subgraphs: GraphDefinition[] | undefined
 ): RustRunnerParts<ChannelValues> => {
   const components = new Map<string, RustComponentConfig>();
   const agents = new Map<string, RustAgentConfig>();
   const mapAgents = new Map<string, RustMapAgentConfig>();
   const jsNodeIds = new Set<string>();
 
-  for (const node of definition.nodes) {
+  // Classifies ONE node into the shared maps above. Applied to the parent's own nodes AND
+  // (ADR 0042) each subgraph's nodes — mirrors what GraphBuilder.subgraph() does at TS build
+  // time on the builder path (flattening a child's handlers/agents/components into the SAME
+  // maps as the parent, since `execute_subgraph` shares the parent runtime's registries; see
+  // compiled-graph.ts's "child runs share these registries" comment). Without this, a subgraph's
+  // OWN action/agent/component nodes would have no registered handler and the Rust bridge would
+  // fail with "no node handler registered" the moment it tried to execute one.
+  const classifyNode = (node: GraphDefinition["nodes"][number]): void => {
     const id = String(node.id);
     const component = readComponentCarrier(node.metadata);
     if (component !== undefined) {
       components.set(id, { kind: component.kind as ComponentKind, params: component.params });
-      continue;
+      return;
     }
     // A mapAgents carrier takes precedence over a plain agent carrier (a fan-out node is not itself a
     // top-level agent) — the bridge routes it via EngineSpec.map_agents, keyed by node id.
@@ -330,7 +348,7 @@ const assembleParts = (
         agent: carrierToAgentConfig(mapAgent.subAgent, usesApprovalEngine),
         suspendForApproval: mapAgent.suspendForApproval === true
       });
-      continue;
+      return;
     }
     // A node that CARRIES a mapAgents key but fails to parse (missing overChannel/joinAt/subAgent) would
     // otherwise fall through to an inert JS node and silently never fan out. Surface it — no silent caps.
@@ -342,21 +360,33 @@ const assembleParts = (
     const agent = readAgentCarrier(node.metadata);
     if (agent !== undefined) {
       agents.set(id, carrierToAgentConfig(agent, usesApprovalEngine));
-      continue;
+      return;
     }
-    if (node.type === "human-gate") {
-      // The runtime suspends natively at a human gate — no handler needed.
-      continue;
+    if (node.type === "human-gate" || node.type === "subgraph") {
+      // The runtime handles both natively (a human gate suspends; a nested subgraph recurses via
+      // execute_subgraph, resolved against the SAME `subgraphs` list) — no JS handler needed.
+      return;
     }
     // A plain action / tool / custom node with no carrier: an inert JS seam. The
     // catalog path has no TS handler closures, so it produces an empty update.
     jsNodeIds.add(id);
+  };
+
+  for (const node of definition.nodes) {
+    classifyNode(node);
+  }
+  for (const subgraph of subgraphs ?? []) {
+    for (const node of subgraph.nodes) {
+      classifyNode(node);
+    }
   }
 
   return {
     definition,
-    // Catalog graphs (assembled from node-metadata carriers) carry no subgraph nodes.
-    subgraphs: [],
+    // ADR 0042 (product ADR 0068 — child workflows): child graphs for `subgraph`-type nodes,
+    // supplied per CALL like `tools`/`skills` — the same wire field the builder path
+    // (`CompiledGraph`) already populates. Empty for a graph with no subgraph nodes.
+    subgraphs: subgraphs ?? [],
     nodeFns: new Map(
       jsNodeIds.size === 0 ? [] : [...jsNodeIds].map((id) => [id, async () => ({})])
     ),
@@ -398,7 +428,8 @@ export const runCatalogGraph = async (
       options.providerKeys,
       options.fsPolicy,
       options.skills,
-      options.tools
+      options.tools,
+      options.subgraphs
     )
   );
   if (runner === null) {
@@ -437,7 +468,7 @@ export const resumeCatalogGraph = async (
   state: GraphState,
   options: Pick<
     RunCatalogGraphOptions,
-    "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy" | "skills" | "tools"
+    "onEvent" | "approvalEngine" | "providerKeys" | "fsPolicy" | "skills" | "tools" | "subgraphs"
   > & {
     /**
      * Human-granted tools to unlock on resume, each carrying its `{ name, requestedBy,
@@ -463,7 +494,10 @@ export const resumeCatalogGraph = async (
       options.skills,
       // A resumed run needs its host tools again — a tool-using agent past the gate would
       // otherwise silently degrade to stubs (ADR 0041 D1).
-      options.tools
+      options.tools,
+      // A resumed run needs its subgraph definitions again — a subgraph node resuming past
+      // its own child's suspension would otherwise fail to resolve `subgraphId` (ADR 0042).
+      options.subgraphs
     )
   );
   if (runner === null) {
@@ -512,8 +546,21 @@ export const replayCatalogGraph = async (
   // No approval engine on replay — it is read-only EVIDENCE and must never open a new gate.
   // No host tools either (ADR 0041): a replay must never RE-EXECUTE a tool — bound names degrade
   // to stubs until E2 re-serves recorded tool results from the journal.
+  // No subgraphs either (ADR 0042): a replayed subgraph node would recursively re-execute its
+  // child's own LLM calls, and the record-mode journal is not yet proven to interleave a child's
+  // entries correctly for a recursive replay to feed back in deterministically — same caution as
+  // tools, not yet lifted. A subgraph-containing run replays its OWN nodes; a `subgraphId` node
+  // fails loudly (`SubgraphNotFound`) rather than silently diverging.
   const runner = tryCreateRustRunner<ChannelValues>(
-    assembleParts(definition, false, options.providerKeys, options.fsPolicy, options.skills, undefined)
+    assembleParts(
+      definition,
+      false,
+      options.providerKeys,
+      options.fsPolicy,
+      options.skills,
+      undefined,
+      undefined
+    )
   );
   if (runner === null) {
     throw new RustEngineUnavailableError();
