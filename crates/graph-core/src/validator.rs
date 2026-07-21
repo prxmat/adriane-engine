@@ -101,6 +101,7 @@ mod tests {
             input_mapping: None,
             output_mapping: None,
             fan_out: None,
+            map_subgraph: None,
             retry_policy: None,
             metadata: None,
         }

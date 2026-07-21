@@ -124,3 +124,105 @@ describe("@adriane-ai/graph-sdk — catalog subgraphs (ADR 0042 D1)", () => {
     }
   );
 });
+
+/**
+ * ADR 0042 D2/D3 (product ADR 0068 — child workflows) — dynamic N-child subgraph fan-out on the
+ * CATALOG path. `NodeDefinition.mapSubgraph` is a core wire field (like `fanOut`), so — unlike
+ * `mapAgents` — no `runtime-bridge`/`EngineSpec` side-channel wiring is needed: a plain catalog
+ * `GraphDefinition` with `type: "subgraph"` + `mapSubgraph` reaches the real
+ * `execute_map_subgraph` through the exact same `subgraphs` option D1 already exposed. This test
+ * proves that claim against the REAL napi boundary, not just the in-crate Rust unit tests.
+ */
+const mapDoublerParent = (): GraphDefinition =>
+  ({
+    id: "parent-map-subgraph",
+    version: "1",
+    name: "parent-map-subgraph",
+    channels: {
+      items: { type: "array", reducer: "replace", default: [] },
+      results: { type: "array", reducer: "replace", default: [] }
+    },
+    nodes: [
+      {
+        id: "sub",
+        type: "subgraph",
+        label: "sub",
+        subgraphId: "sub-doubler",
+        inputMapping: {},
+        outputMapping: { in: "in", out: "out" },
+        mapSubgraph: { overChannel: "items", joinAt: "results" }
+      }
+    ],
+    edges: [],
+    entryNodeId: "sub"
+  }) as unknown as GraphDefinition;
+
+describe("@adriane-ai/graph-sdk — catalog map_subgraph fan-out (ADR 0042 D2/D3)", () => {
+  (rustEngineAvailable() ? it : it.skip)(
+    "fans out N children over an array channel through the real napi boundary, no runtime-bridge changes needed",
+    async () => {
+      const items = [{ in: 1 }, { in: 2 }, { in: 3 }];
+      const outcome = await runCatalogGraph(mapDoublerParent(), {
+        runId: "run_catalog_map_sub" as RunId,
+        initialData: { items },
+        subgraphs: [doublerChild]
+      });
+      expect(outcome.status).toBe("completed");
+      const results = outcome.state.channels.results as Array<{ in: number; out: number }>;
+      expect(results).toHaveLength(3);
+      // Each child's SEEDED `in` value round-trips correctly per index (proves real per-item
+      // wiring over the napi boundary) — `out` stays at the child's inert-node default (4200)
+      // for every item, exactly like D1's single-child test, same inertness reason.
+      expect(results.map((r) => r.in)).toEqual([1, 2, 3]);
+      expect(results.every((r) => r.out === 4200)).toBe(true);
+    }
+  );
+
+  (rustEngineAvailable() ? it : it.skip)(
+    "suspends when every fanned-out child hits the same internal gate, then resumes all via resumeCatalogGraph",
+    async () => {
+      const definition: GraphDefinition = {
+        id: "parent-map-subgraph-gated",
+        version: "1",
+        name: "parent-map-subgraph-gated",
+        channels: {
+          items: { type: "array", reducer: "replace", default: [] },
+          results: { type: "array", reducer: "replace", default: [] }
+        },
+        nodes: [
+          {
+            id: "sub",
+            type: "subgraph",
+            label: "sub",
+            subgraphId: "sub-gated",
+            inputMapping: {},
+            outputMapping: { out: "out" },
+            mapSubgraph: { overChannel: "items", joinAt: "results" }
+          }
+        ],
+        edges: [],
+        entryNodeId: "sub"
+      } as unknown as GraphDefinition;
+
+      const suspended = await runCatalogGraph(definition, {
+        runId: "run_catalog_map_sub_gate" as RunId,
+        initialData: { items: [{}, {}] },
+        subgraphs: [gatedChild]
+      });
+      expect(suspended.status).toBe("suspended");
+
+      const resumed = await resumeCatalogGraph(definition, suspended.state, {
+        subgraphs: [gatedChild]
+      });
+      // The catalog path has no TS handler closures — c_publish is inert there too (same
+      // reason D1's own single-child gated test only asserts status, never channel content:
+      // it can't produce "published", only the BUILDER path's real sync_handler can). What
+      // THIS test proves instead: both children genuinely suspended concurrently (parent
+      // suspended once), both were re-attached and driven to completion on ONE resume call —
+      // the actual N-child suspend/resume mechanics, over the real napi boundary.
+      expect(resumed.status).toBe("completed");
+      const results = resumed.state.channels.results as unknown[];
+      expect(results).toHaveLength(2);
+    }
+  );
+});

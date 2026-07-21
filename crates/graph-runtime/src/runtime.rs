@@ -57,7 +57,7 @@ const SUBGRAPH_STATES_KEY: &str = "__subgraphStates";
 
 use adriane_graph_core::{
     ChannelDefinition, ChannelReducer, EdgeType, GraphDefinition, GraphState, GraphStatus,
-    NodeDefinition, NodeId, NodeType, RunId,
+    MapSubgraph, NodeDefinition, NodeId, NodeType, RunId,
 };
 use serde_json::Value;
 
@@ -163,6 +163,30 @@ fn apply_output_mapping(
                 parent.insert(parent_key.clone(), value);
             }
         }
+    }
+}
+
+/// Project ONE completed child's channels into its `join_at` array element (ADR 0042 D2/D3) — the
+/// per-item analog of `apply_output_mapping`, which instead MERGES a single child into the parent.
+/// With no mapping, the child's full channel set is the element; with a mapping, only the named
+/// keys are extracted (`elementKey ← childKey`), letting a map_subgraph node produce a small,
+/// deliberately-shaped result per item instead of leaking every internal child channel.
+fn project_output(
+    child: &BTreeMap<String, Value>,
+    mapping: Option<&BTreeMap<String, String>>,
+) -> Value {
+    match mapping {
+        None => Value::Object(child.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        Some(map) => Value::Object(
+            map.iter()
+                .map(|(element_key, child_key)| {
+                    (
+                        element_key.clone(),
+                        child.get(child_key).cloned().unwrap_or(Value::Null),
+                    )
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -700,8 +724,15 @@ impl GraphRuntime {
 
         // A subgraph node runs a registered child graph to completion or suspension,
         // mapping channels in and out. Child runs share this runtime's registries,
-        // checkpointer and event bus (see `execute_subgraph`).
+        // checkpointer and event bus (see `execute_subgraph`). A `map_subgraph`-bearing
+        // node instead fans out N children over an array channel (ADR 0042 D2/D3,
+        // product ADR 0068) — checked first since it's the more specific case.
         if node.node_type == NodeType::Subgraph {
+            if let Some(map_spec) = node.map_subgraph.clone() {
+                return self
+                    .execute_map_subgraph(&node, node_id, state, ctx, &map_spec)
+                    .await;
+            }
             return self.execute_subgraph(&node, node_id, state, ctx).await;
         }
 
@@ -1001,6 +1032,165 @@ impl GraphRuntime {
         Ok(self.persist_checkpoint(state))
     }
 
+    /// Run a `map_subgraph`-bearing node: fan out N children of the SAME registered subgraph, one
+    /// per item in `map_spec.over_channel`'s array, CONCURRENTLY (ADR 0042 D2/D3, product ADR
+    /// 0068). Deterministic per-item child ids (`<parentRunId>:<nodeId>:<index>`) — no
+    /// `__subgraphRuns` bookkeeping needed (unlike the single-child `execute_subgraph`): the ids
+    /// are fully re-derivable from `over_channel`'s length on a later resume, so nothing extra is
+    /// persisted to find them again. `__subgraphStates` (already map-keyed) carries every
+    /// STILL-SUSPENDED child's snapshot, exactly as the single-child path already does per key —
+    /// no schema change, just potentially more than one entry.
+    ///
+    /// A per-item child FAILURE (or a runtime error resuming/starting it) is captured as
+    /// `{ "error": ... }` at that array index — it does NOT fail the whole node (deliberate
+    /// deviation from `execute_subgraph`'s single-child behavior, matching `map_node_handler`'s
+    /// existing per-spawn convention: one bad item shouldn't sink the rest).
+    async fn execute_map_subgraph(
+        &self,
+        node: &NodeDefinition,
+        node_id: NodeId,
+        mut state: GraphState,
+        parent_ctx: GraphCtx<'_>,
+        map_spec: &MapSubgraph,
+    ) -> Result<GraphState, RuntimeError> {
+        let subgraph_id = node
+            .subgraph_id
+            .as_ref()
+            .ok_or_else(|| RuntimeError::SubgraphNotResolvable(node_id.0.clone()))?;
+        let entry = self
+            .subgraphs
+            .get(subgraph_id.0.as_str())
+            .ok_or_else(|| RuntimeError::SubgraphNotFound(subgraph_id.0.clone()))?;
+        let child_ctx = GraphCtx {
+            graph: &entry.graph,
+            node_by_id: &entry.node_by_id,
+        };
+
+        let items: Vec<Value> = match state.channels.get(&map_spec.over_channel) {
+            Some(Value::Array(items)) => items.clone(),
+            // Absent / non-array → no spawns; an empty join, deterministic no-op (mirrors
+            // `map_node_handler`'s identical fallback for a missing/malformed over_channel).
+            _ => Vec::new(),
+        };
+        let base_initial = apply_input_mapping(&state.channels, node.input_mapping.as_ref());
+        let child_run_ids: Vec<RunId> = (0..items.len())
+            .map(|index| RunId(format!("{}:{}:{}", state.run_id.0, node_id.0, index)))
+            .collect();
+
+        // Cross-call reseed (napi rebuilds the checkpointer every call): a child that suspended on
+        // a prior call is absent from `self.checkpointer` here — reseed from the parent's carried
+        // `__subgraphStates` snapshot, exactly as `execute_subgraph` does per-child.
+        for child_run_id in &child_run_ids {
+            if self.checkpointer.load(child_run_id).is_none() {
+                if let Some(child_state) = get_subgraph_state(&state, child_run_id) {
+                    self.seed_subgraph_checkpoint(child_run_id, child_state);
+                }
+            }
+        }
+
+        // Build every child's future from a snapshot BEFORE awaiting (map-reduce, not a chain —
+        // same determinism invariant the static `fan_out` branch above relies on: no child
+        // observes another's write mid-flight). The item's own fields (if it's a JSON object)
+        // overlay the input-mapped shared context, item wins on collision — a non-object item
+        // has nothing to overlay, so the child runs on shared context alone.
+        let futures = items
+            .iter()
+            .zip(child_run_ids.iter())
+            .map(|(item, child_run_id)| {
+                let mut child_initial = base_initial.clone();
+                if let Value::Object(fields) = item {
+                    for (key, value) in fields {
+                        child_initial.insert(key.clone(), value.clone());
+                    }
+                }
+                let already_checkpointed = self.checkpointer.load(child_run_id).is_some();
+                async move {
+                    if already_checkpointed {
+                        Box::pin(self.resume_with_ctx(child_run_id, child_ctx)).await
+                    } else {
+                        Box::pin(self.start_with_ctx(
+                            child_run_id.clone(),
+                            child_initial,
+                            child_ctx,
+                        ))
+                        .await
+                    }
+                }
+            });
+        let results = futures_util::future::join_all(futures).await;
+
+        let mut join_values = Vec::with_capacity(results.len());
+        let mut any_suspended = false;
+        for (child_run_id, result) in child_run_ids.iter().zip(results) {
+            match result {
+                Ok(child_state) if child_state.status == GraphStatus::Suspended => {
+                    any_suspended = true;
+                    set_subgraph_state(&mut state.channels, child_run_id, &child_state);
+                    // Placeholder for this index while its child is still outstanding — the
+                    // node itself suspends below, so this array is never actually returned to
+                    // the graph in this state; kept for a stable index↔child_run_id shape if a
+                    // future increment surfaces in-flight progress.
+                    join_values.push(Value::Null);
+                }
+                Ok(child_state) if child_state.status == GraphStatus::Failed => {
+                    clear_subgraph_state(&mut state.channels, child_run_id);
+                    join_values.push(
+                        serde_json::json!({ "error": format!("subgraph '{}' failed", subgraph_id.0) }),
+                    );
+                }
+                Ok(child_state) => {
+                    clear_subgraph_state(&mut state.channels, child_run_id);
+                    join_values.push(project_output(
+                        &child_state.channels,
+                        node.output_mapping.as_ref(),
+                    ));
+                }
+                Err(error) => {
+                    clear_subgraph_state(&mut state.channels, child_run_id);
+                    join_values.push(serde_json::json!({ "error": error.to_string() }));
+                }
+            }
+        }
+
+        state.version += 1;
+        state.updated_at = self.now_string();
+
+        if any_suspended {
+            // At least one child is still outstanding — the parent suspends "during" this node,
+            // exactly like the single-child case. A later resume re-enters this node, re-derives
+            // the same child_run_ids from over_channel, and re-attaches to whichever are still
+            // suspended (already-completed children are simply re-run — cheap, deterministic,
+            // same re-entry shape `execute_subgraph` already relies on).
+            return Ok(self.suspend(state, &node_id, "human-gate"));
+        }
+
+        state
+            .channels
+            .insert(map_spec.join_at.clone(), Value::Array(join_values.clone()));
+        self.events.emit(RunEvent::NodeCompleted {
+            run_id: state.run_id.clone(),
+            node_id: node_id.clone(),
+            output: mask_no_log(
+                BTreeMap::from([(map_spec.join_at.clone(), Value::Array(join_values))]),
+                &entry.graph.channels,
+            ),
+            timestamp: self.now_string(),
+        });
+
+        let next = self.next_node(&node_id, &state, parent_ctx.graph);
+        match next {
+            Some(target) => {
+                state.current_node_id = target;
+                state.status = GraphStatus::Running;
+            }
+            None => {
+                state.current_node_id = node_id;
+                state.status = GraphStatus::Completed;
+            }
+        }
+        Ok(self.persist_checkpoint(state))
+    }
+
     /// Seed a child run's suspended snapshot into this runtime's checkpointer (used when
     /// resuming a subgraph across a fresh runtime — the parent state carried the child
     /// snapshot in `__subgraphStates`).
@@ -1159,6 +1349,7 @@ mod tests {
             input_mapping: None,
             output_mapping: None,
             fan_out: None,
+            map_subgraph: None,
             retry_policy: None,
             metadata: None,
         }
@@ -2301,6 +2492,275 @@ mod tests {
         assert_eq!(resumed.status, GraphStatus::Completed);
         assert_eq!(resumed.channels.get("result"), Some(&json!("published")));
         assert_eq!(resumed.channels.get("done"), Some(&json!(true)));
+    }
+
+    /// A minimal one-node child used by the `map_subgraph` tests below: doubles `in` into `out`.
+    fn doubler_child() -> (InMemoryNodeRegistry, GraphDefinition) {
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("calc"),
+            sync_handler(|s| {
+                let v = s.channels.get("in").and_then(|v| v.as_i64()).unwrap_or(0);
+                NodeOutput::update(upd(&[("out", json!(v * 2))]))
+            }),
+        );
+        let child = GraphDefinition {
+            id: GraphId::from("doubler"),
+            ..graph(
+                vec![node("calc", NodeType::Action)],
+                vec![],
+                "calc",
+                vec![
+                    channel("in", ChannelReducer::Replace),
+                    channel("out", ChannelReducer::Replace),
+                ],
+            )
+        };
+        (nodes, child)
+    }
+
+    #[tokio::test]
+    async fn map_subgraph_fans_out_over_an_array_channel_concurrently_preserving_input_order() {
+        let (nodes, child) = doubler_child();
+        let sub_node = NodeDefinition {
+            subgraph_id: Some(GraphId::from("doubler")),
+            // Empty input_mapping (not None): no shared parent context — only the item's own
+            // fields seed the child, avoiding a leaked copy of the PARENT's own `items`/`results`
+            // channels (matches `apply_input_mapping`'s existing single-child semantics: None
+            // copies everything, an explicit — even empty — map copies exactly what's named).
+            input_mapping: Some(BTreeMap::new()),
+            output_mapping: Some(
+                [
+                    ("in".to_owned(), "in".to_owned()),
+                    ("out".to_owned(), "out".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            map_subgraph: Some(MapSubgraph {
+                over_channel: "items".to_owned(),
+                join_at: "results".to_owned(),
+            }),
+            ..node("sub", NodeType::Subgraph)
+        };
+        let def = graph(
+            vec![sub_node],
+            vec![],
+            "sub",
+            vec![
+                channel("items", ChannelReducer::Replace),
+                channel("results", ChannelReducer::Replace),
+            ],
+        );
+        let runtime = GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new())
+            .with_subgraphs(vec![child]);
+
+        let initial = upd(&[("items", json!([{"in": 1}, {"in": 2}, {"in": 3}]))]);
+        let state = runtime
+            .start(RunId::from("run-map-sub"), initial)
+            .await
+            .unwrap();
+
+        assert_eq!(state.status, GraphStatus::Completed);
+        assert_eq!(
+            state.channels.get("results"),
+            Some(&json!([{"in": 1, "out": 2}, {"in": 2, "out": 4}, {"in": 3, "out": 6}]))
+        );
+    }
+
+    #[tokio::test]
+    async fn map_subgraph_with_no_items_writes_an_empty_join_deterministically() {
+        let (nodes, child) = doubler_child();
+        let sub_node = NodeDefinition {
+            subgraph_id: Some(GraphId::from("doubler")),
+            map_subgraph: Some(MapSubgraph {
+                over_channel: "items".to_owned(),
+                join_at: "results".to_owned(),
+            }),
+            ..node("sub", NodeType::Subgraph)
+        };
+        let def = graph(
+            vec![sub_node],
+            vec![],
+            "sub",
+            vec![
+                channel("items", ChannelReducer::Replace),
+                channel("results", ChannelReducer::Replace),
+            ],
+        );
+        let runtime = GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new())
+            .with_subgraphs(vec![child]);
+
+        // No `items` channel seeded at all — matches map_node_handler's identical fallback.
+        let state = runtime
+            .start(RunId::from("run-map-sub-empty"), BTreeMap::new())
+            .await
+            .unwrap();
+
+        assert_eq!(state.status, GraphStatus::Completed);
+        assert_eq!(state.channels.get("results"), Some(&json!([])));
+    }
+
+    #[tokio::test]
+    async fn map_subgraph_captures_a_failed_child_per_index_without_failing_the_whole_node() {
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("calc"),
+            sync_handler(|s| {
+                let v = s.channels.get("in").and_then(|v| v.as_i64()).unwrap_or(0);
+                if v == 2 {
+                    NodeOutput::failure("boom")
+                } else {
+                    NodeOutput::update(upd(&[("out", json!(v * 2))]))
+                }
+            }),
+        );
+        let child = GraphDefinition {
+            id: GraphId::from("doubler"),
+            ..graph(
+                vec![node("calc", NodeType::Action)],
+                vec![],
+                "calc",
+                vec![
+                    channel("in", ChannelReducer::Replace),
+                    channel("out", ChannelReducer::Replace),
+                ],
+            )
+        };
+        let sub_node = NodeDefinition {
+            subgraph_id: Some(GraphId::from("doubler")),
+            input_mapping: Some(BTreeMap::new()),
+            output_mapping: Some(
+                [
+                    ("in".to_owned(), "in".to_owned()),
+                    ("out".to_owned(), "out".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            map_subgraph: Some(MapSubgraph {
+                over_channel: "items".to_owned(),
+                join_at: "results".to_owned(),
+            }),
+            ..node("sub", NodeType::Subgraph)
+        };
+        let def = graph(
+            vec![sub_node],
+            vec![],
+            "sub",
+            vec![
+                channel("items", ChannelReducer::Replace),
+                channel("results", ChannelReducer::Replace),
+            ],
+        );
+        let runtime = GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new())
+            .with_subgraphs(vec![child]);
+
+        let initial = upd(&[("items", json!([{"in": 1}, {"in": 2}, {"in": 3}]))]);
+        let state = runtime
+            .start(RunId::from("run-map-sub-partial-fail"), initial)
+            .await
+            .unwrap();
+
+        // The whole node still completes — one bad item doesn't sink the other two.
+        assert_eq!(state.status, GraphStatus::Completed);
+        let results = state.channels.get("results").unwrap().as_array().unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], json!({"in": 1, "out": 2}));
+        assert!(results[1].get("error").is_some());
+        assert_eq!(results[2], json!({"in": 3, "out": 6}));
+    }
+
+    #[tokio::test]
+    async fn map_subgraph_suspends_when_children_hit_an_internal_gate_then_resumes_all() {
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("c_draft"),
+            sync_handler(|s| {
+                let v = s.channels.get("in").and_then(|v| v.as_i64()).unwrap_or(0);
+                NodeOutput::update(upd(&[("carried", json!(v))]))
+            }),
+        );
+        nodes.register(
+            NodeId::from("c_publish"),
+            sync_handler(|s| {
+                let v = s
+                    .channels
+                    .get("carried")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                NodeOutput::update(upd(&[("out", json!(v * 10))]))
+            }),
+        );
+        let child = GraphDefinition {
+            id: GraphId::from("gated"),
+            ..graph(
+                vec![
+                    node("c_draft", NodeType::Action),
+                    node("c_gate", NodeType::HumanGate),
+                    node("c_publish", NodeType::Action),
+                ],
+                vec![
+                    edge("ce1", "c_draft", "c_gate", EdgeType::Default, None),
+                    edge("ce2", "c_gate", "c_publish", EdgeType::Default, None),
+                ],
+                "c_draft",
+                vec![
+                    channel("in", ChannelReducer::Replace),
+                    channel("carried", ChannelReducer::Replace),
+                    channel("out", ChannelReducer::Replace),
+                ],
+            )
+        };
+        let sub_node = NodeDefinition {
+            subgraph_id: Some(GraphId::from("gated")),
+            input_mapping: Some(BTreeMap::new()),
+            output_mapping: Some(
+                [
+                    ("in".to_owned(), "in".to_owned()),
+                    ("carried".to_owned(), "carried".to_owned()),
+                    ("out".to_owned(), "out".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            map_subgraph: Some(MapSubgraph {
+                over_channel: "items".to_owned(),
+                join_at: "results".to_owned(),
+            }),
+            ..node("sub", NodeType::Subgraph)
+        };
+        let def = graph(
+            vec![sub_node],
+            vec![],
+            "sub",
+            vec![
+                channel("items", ChannelReducer::Replace),
+                channel("results", ChannelReducer::Replace),
+            ],
+        );
+        let runtime = GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new())
+            .with_subgraphs(vec![child]);
+
+        let initial = upd(&[("items", json!([{"in": 1}, {"in": 2}]))]);
+        let suspended = runtime
+            .start(RunId::from("run-map-sub-gate"), initial)
+            .await
+            .unwrap();
+
+        // Every child hits the SAME internal gate — the parent suspends at the map_subgraph node.
+        assert_eq!(suspended.status, GraphStatus::Suspended);
+        assert_eq!(suspended.current_node_id, NodeId::from("sub"));
+
+        let resumed = runtime
+            .resume(&RunId::from("run-map-sub-gate"))
+            .await
+            .unwrap();
+        assert_eq!(resumed.status, GraphStatus::Completed);
+        assert_eq!(
+            resumed.channels.get("results"),
+            Some(&json!([{"in": 1, "carried": 1, "out": 10}, {"in": 2, "carried": 2, "out": 20}]))
+        );
     }
 
     #[tokio::test]

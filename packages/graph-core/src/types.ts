@@ -55,6 +55,12 @@ export type NodeDefinition = {
   inputMapping?: Record<string, string>;
   outputMapping?: Record<string, string>;
   fanOut?: { parallelTo: NodeId[]; joinAt: NodeId };
+  /** ADR 0042 D2/D3 (product ADR 0068 — child workflows): dynamic N-child subgraph fan-out.
+   * Present on a `type: "subgraph"` node ALONGSIDE its `subgraphId` (never duplicated here) —
+   * `overChannel` is read as a JSON array at execution time, one child spawn per item, run
+   * concurrently; results land in `joinAt` as a JSON array, input order preserved. Absent (the
+   * common case): the node runs its subgraph exactly once, unchanged. */
+  mapSubgraph?: { overChannel: string; joinAt: string };
   retryPolicy?: RetryPolicy;
   metadata?: Record<string, unknown>;
 };
