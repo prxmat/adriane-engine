@@ -20,7 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "js-yaml": "^5.2.0"
+    "js-yaml": "^5.2.1"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
