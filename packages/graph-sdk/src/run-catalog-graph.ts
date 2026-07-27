@@ -41,6 +41,11 @@ import type {
   SkillRecord
 } from "./agent-node.js";
 import { APPROVAL_IDS_CHANNEL, DEFAULT_AGENT_OUTPUT_CHANNEL } from "./agent-node.js";
+
+/** Mirrors the Rust bridge's `SUBGRAPH_RUNS_KEY` (`runtime.rs`) — `{ <nodeId>: <childRunId> }`. */
+const SUBGRAPH_RUNS_CHANNEL = "__subgraphRuns";
+/** Mirrors the Rust bridge's `SUBGRAPH_STATES_KEY` (`runtime.rs`) — `{ <childRunId>: <GraphState> }`. */
+const SUBGRAPH_STATES_CHANNEL = "__subgraphStates";
 import type { RustComponentConfig, ComponentKind } from "./components.js";
 import {
   rustEngineAvailable,
@@ -445,7 +450,13 @@ export const runCatalogGraph = async (
     {},
     options.streamTokens ?? false
   )) as unknown as GraphState;
-  const governed = await fileApprovalRequests(definition, state, runId, options.approvalEngine);
+  const governed = await fileApprovalRequests(
+    definition,
+    state,
+    runId,
+    options.approvalEngine,
+    options.subgraphs
+  );
   return {
     state: governed,
     status: governed.status,
@@ -515,7 +526,8 @@ export const resumeCatalogGraph = async (
     definition,
     resumed,
     String(resumed.runId) as RunId,
-    options.approvalEngine
+    options.approvalEngine,
+    options.subgraphs
   );
   return {
     state: governed,
@@ -606,12 +618,12 @@ const normalizeSubject = (request: unknown): SurfacedApprovalRequest | undefined
   return undefined;
 };
 
-/** Read + normalize an agent output channel's `approvalRequests` off the suspended state. */
+/** Read + normalize an agent output channel's `approvalRequests` off a channel bag. */
 const readApprovalRequests = (
-  state: GraphState,
+  channels: Record<string, unknown>,
   outputChannel: string
 ): SurfacedApprovalRequest[] => {
-  const channel = (state.channels as Record<string, unknown>)[outputChannel];
+  const channel = channels[outputChannel];
   if (channel === null || typeof channel !== "object") {
     return [];
   }
@@ -625,21 +637,106 @@ const readApprovalRequests = (
 };
 
 /**
+ * Read a subgraph node's child run id off `__subgraphRuns[nodeId]` (recorded by the
+ * engine once the child has actually started), falling back to the same deterministic
+ * `<runId>:<nodeId>` the Rust bridge computes (`subgraph_run_id`, `runtime.rs`) for a
+ * child that hasn't recorded one yet (e.g. still on its first, not-yet-suspended pass).
+ */
+const readSubgraphRunId = (
+  channels: Record<string, unknown>,
+  runId: string,
+  nodeId: string
+): string => {
+  const runs = channels[SUBGRAPH_RUNS_CHANNEL];
+  if (isRecord(runs)) {
+    const existing = runs[nodeId];
+    if (typeof existing === "string") {
+      return existing;
+    }
+  }
+  return `${runId}:${nodeId}`;
+};
+
+/** Read a child run's round-trip snapshot off `__subgraphStates[childRunId]`, if present. */
+const readSubgraphChildState = (
+  channels: Record<string, unknown>,
+  childRunId: string
+): { channels: Record<string, unknown>; status: unknown } | undefined => {
+  const states = channels[SUBGRAPH_STATES_CHANNEL];
+  if (!isRecord(states)) {
+    return undefined;
+  }
+  const child = states[childRunId];
+  if (!isRecord(child) || !isRecord(child.channels)) {
+    return undefined;
+  }
+  return { channels: child.channels, status: child.status };
+};
+
+/**
+ * File one {@link ApprovalEngine} request per gated tool surfaced by ONE graph's own
+ * agent nodes (the top-level run, or — recursively — one direct child's own nodes),
+ * reading from `channels` (the run's own `state.channels`, or a child's nested
+ * `__subgraphStates[childRunId].channels`) and qualifying `nodeId`/`requestedBy` with
+ * `idPrefix` (empty for the top level; `"<childRunId>:"` for a child) so a child's grant
+ * key never collides with a parent's own same-named node id.
+ */
+const fileForGraphNodes = async (
+  nodes: GraphDefinition["nodes"],
+  channels: Record<string, unknown>,
+  runId: RunId,
+  idPrefix: string,
+  engine: ApprovalEngine
+): Promise<string[]> => {
+  const ids: string[] = [];
+  for (const node of nodes) {
+    const agent = readAgentCarrier(node.metadata);
+    if (agent === undefined) {
+      continue;
+    }
+    const outputChannel = agent.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL;
+    for (const request of readApprovalRequests(channels, outputChannel)) {
+      const created = await engine.request({
+        runId,
+        nodeId: `${idPrefix}${String(node.id)}` as NodeId,
+        requestedBy: `${idPrefix}${String(node.id)}`,
+        subject: request.subject
+      });
+      ids.push(String(created.id));
+    }
+  }
+  return ids;
+};
+
+/**
  * File one {@link ApprovalEngine} request per gated tool surfaced by a suspended
  * catalog run, and stash the returned ids in the `__approvalIds` channel of the
  * returned state — mirroring the TS `createAgentNodeHandler` emission pattern
  * (`requestedBy = nodeId`, the agent's own subject). The agent is the requester; a
  * human (a different principal) resolves it out of band, which the engine enforces.
  *
+ * ADR 0042 (product ADR 0068 D5.4, adriane-engine#177): also recurses into a DIRECT
+ * child's own nodes when that child itself suspended for approval — `execute_subgraph`
+ * propagates the child's suspension to the parent, but the child's own
+ * `approvalRequests` live in its nested `__subgraphStates[childRunId].channels`
+ * snapshot, invisible to the top-level walk alone. Scoped identically to D5.3's own
+ * run-gate injection: a single, non-fan-out `subgraphId` reference only (a
+ * deterministic `<runId>:<nodeId>` child id exists for that case); a nested subgraph
+ * inside that child, or `mapSubgraph`'s dynamic N-child fan-out, is NOT walked here —
+ * same "no precomputable id at this point" reasoning D5 already established, left for a
+ * follow-up rather than expanding this fix's scope.
+ *
  * No-ops (returns the state unchanged) when no engine is given or the run is not
- * suspended. Idempotency: an agent node that already carries stashed ids (a state that
- * was governed once) is skipped, so re-driving a suspended state does not double-file.
+ * suspended. Idempotency: a run that already carries stashed ids (a state that was
+ * governed once) is skipped entirely, so re-driving a suspended state does not
+ * double-file — for either the parent's own gate or a child's.
  */
 const fileApprovalRequests = async (
   definition: GraphDefinition,
   state: GraphState,
   runId: RunId,
-  engine: ApprovalEngine | undefined
+  engine: ApprovalEngine | undefined,
+  subgraphs: GraphDefinition[] | undefined
 ): Promise<GraphState> => {
   if (engine === undefined || state.status !== "suspended") {
     return state;
@@ -652,22 +749,32 @@ const fileApprovalRequests = async (
     return state;
   }
 
-  const ids: string[] = [];
+  const ids = await fileForGraphNodes(definition.nodes, channels, runId, "", engine);
+
+  const subgraphsById = new Map((subgraphs ?? []).map((subgraph) => [subgraph.id, subgraph]));
   for (const node of definition.nodes) {
-    const agent = readAgentCarrier(node.metadata);
-    if (agent === undefined) {
+    if (node.type !== "subgraph" || node.subgraphId === undefined || node.mapSubgraph !== undefined) {
+      // Not a direct single-child subgraph reference — mapSubgraph fan-out and
+      // anything without a resolvable subgraphId are out of scope here (see doc above).
       continue;
     }
-    const outputChannel = agent.outputChannel ?? DEFAULT_AGENT_OUTPUT_CHANNEL;
-    for (const request of readApprovalRequests(state, outputChannel)) {
-      const created = await engine.request({
-        runId,
-        nodeId: String(node.id) as NodeId,
-        requestedBy: String(node.id),
-        subject: request.subject
-      });
-      ids.push(String(created.id));
+    const child = subgraphsById.get(node.subgraphId);
+    if (child === undefined) {
+      continue;
     }
+    const childRunId = readSubgraphRunId(channels, String(runId), String(node.id));
+    const childState = readSubgraphChildState(channels, childRunId);
+    if (childState === undefined || childState.status !== "suspended") {
+      continue;
+    }
+    const childIds = await fileForGraphNodes(
+      child.nodes,
+      childState.channels,
+      runId,
+      `${childRunId}:`,
+      engine
+    );
+    ids.push(...childIds);
   }
 
   if (ids.length === 0) {
