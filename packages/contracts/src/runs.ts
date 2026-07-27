@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-const GraphStatusSchema = z.enum(["idle", "running", "suspended", "completed", "failed"]);
+// "rejected" (product ADR 0068, issue #496): a governance-level terminal status the
+// control plane assigns when a human REJECTS a pending `human-gate` approval — distinct
+// from "suspended" (still awaiting a decision) and from "failed" (an execution error).
+// The engine itself has no notion of rejection; a rejected run's underlying GraphState
+// stays "suspended" forever (the engine's own resume() would otherwise unconditionally
+// ADVANCE past a human-gate node) — the control plane refuses to call resume() at all
+// once it observes a rejected gate approval, and surfaces "rejected" on the DTO instead.
+const GraphStatusSchema = z.enum(["idle", "running", "suspended", "completed", "failed", "rejected"]);
 
 export const CreateRunDtoSchema = z.object({
   graphId: z.string().min(1),
