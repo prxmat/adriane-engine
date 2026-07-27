@@ -195,7 +195,8 @@ export {
   readComponentCarrier,
   readAgentCarrier,
   readMapAgentCarrier,
-  RustEngineUnavailableError
+  RustEngineUnavailableError,
+  GATE_SUBJECT_PREFIX
 } from "./run-catalog-graph.js";
 
 // Replay-as-evidence (ADR 0038): the faithfulness check — a deterministic replay must reproduce

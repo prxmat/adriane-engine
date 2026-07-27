@@ -661,7 +661,7 @@ const readSubgraphRunId = (
 const readSubgraphChildState = (
   channels: Record<string, unknown>,
   childRunId: string
-): { channels: Record<string, unknown>; status: unknown } | undefined => {
+): { channels: Record<string, unknown>; status: unknown; currentNodeId: unknown } | undefined => {
   const states = channels[SUBGRAPH_STATES_CHANNEL];
   if (!isRecord(states)) {
     return undefined;
@@ -670,7 +670,45 @@ const readSubgraphChildState = (
   if (!isRecord(child) || !isRecord(child.channels)) {
     return undefined;
   }
-  return { channels: child.channels, status: child.status };
+  return { channels: child.channels, status: child.status, currentNodeId: child.currentNodeId };
+};
+
+/**
+ * Subject prefix for a `human-gate` node's own {@link ApprovalEngine} request (issue
+ * #496), distinct from {@link TOOL_SUBJECT_PREFIX}-style tool subjects an agent files —
+ * the control plane uses this to tell a rejected GATE apart from a rejected TOOL when
+ * deciding whether a run becomes `"rejected"` (a tool rejection just leaves a tool
+ * unlocked; a gate rejection must block `resume()` outright).
+ */
+export const GATE_SUBJECT_PREFIX = "gate:";
+
+/**
+ * File one {@link ApprovalEngine} request for a suspended `human-gate` node, if the
+ * node at `currentNodeId` is one — a structural gate has no `approvalRequests` payload
+ * of its own (unlike an agent's gated tool call), so this reads the node type directly
+ * rather than a channel. Returns 0 or 1 created ids (a run/child suspends at exactly one
+ * node at a time).
+ */
+const fileGateRequestIfSuspended = async (
+  nodes: GraphDefinition["nodes"],
+  currentNodeId: unknown,
+  runId: RunId,
+  idPrefix: string,
+  engine: ApprovalEngine
+): Promise<string[]> => {
+  const node = nodes.find(
+    (candidate) => String(candidate.id) === String(currentNodeId) && candidate.type === "human-gate"
+  );
+  if (node === undefined) {
+    return [];
+  }
+  const created = await engine.request({
+    runId,
+    nodeId: `${idPrefix}${String(node.id)}` as NodeId,
+    requestedBy: `${idPrefix}${String(node.id)}`,
+    subject: { description: `${GATE_SUBJECT_PREFIX}${idPrefix}${String(node.id)}` }
+  });
+  return [String(created.id)];
 };
 
 /**
@@ -726,10 +764,18 @@ const fileForGraphNodes = async (
  * same "no precomputable id at this point" reasoning D5 already established, left for a
  * follow-up rather than expanding this fix's scope.
  *
+ * ADR 0068 issue #496: also files ONE request when the suspended node itself is a
+ * `human-gate` (top-level or a direct child's own) — `execute_node` suspends a
+ * `human-gate` unconditionally, with NO `ApprovalEngine` involvement of its own kind
+ * (unlike an agent's `suspendForApproval`, it carries no `approvalRequests` payload).
+ * Without this, `ensureNoPendingApprovals` (the control plane's ONLY resume gate) sees
+ * nothing pending and a `human-gate` — including D5.3's own injected `__run_gate` node —
+ * delays a resume but never actually authorizes one.
+ *
  * No-ops (returns the state unchanged) when no engine is given or the run is not
  * suspended. Idempotency: a run that already carries stashed ids (a state that was
  * governed once) is skipped entirely, so re-driving a suspended state does not
- * double-file — for either the parent's own gate or a child's.
+ * double-file — for the parent's own gate, a child's, or a human-gate node.
  */
 const fileApprovalRequests = async (
   definition: GraphDefinition,
@@ -750,6 +796,9 @@ const fileApprovalRequests = async (
   }
 
   const ids = await fileForGraphNodes(definition.nodes, channels, runId, "", engine);
+  ids.push(
+    ...(await fileGateRequestIfSuspended(definition.nodes, state.currentNodeId, runId, "", engine))
+  );
 
   const subgraphsById = new Map((subgraphs ?? []).map((subgraph) => [subgraph.id, subgraph]));
   for (const node of definition.nodes) {
@@ -767,14 +816,17 @@ const fileApprovalRequests = async (
     if (childState === undefined || childState.status !== "suspended") {
       continue;
     }
-    const childIds = await fileForGraphNodes(
-      child.nodes,
-      childState.channels,
-      runId,
-      `${childRunId}:`,
-      engine
+    const idPrefix = `${childRunId}:`;
+    ids.push(
+      ...(await fileForGraphNodes(child.nodes, childState.channels, runId, idPrefix, engine)),
+      ...(await fileGateRequestIfSuspended(
+        child.nodes,
+        childState.currentNodeId,
+        runId,
+        idPrefix,
+        engine
+      ))
     );
-    ids.push(...childIds);
   }
 
   if (ids.length === 0) {
