@@ -15,11 +15,17 @@ import { resumeCatalogGraph, runCatalogGraph, rustEngineAvailable, type GraphDef
  * gated tool call filed ZERO `ApprovalEngine` requests at all (tracked as #177). Fixed
  * by having `fileApprovalRequests` also walk a DIRECT (non-fan-out) child's own nodes,
  * reading its `approvalRequests` from the nested `__subgraphStates[childRunId].channels`
- * snapshot `execute_subgraph` already writes on suspend, and qualifying the grant key
- * with the child's run id (`<childRunId>:<nodeId>`) so it can never collide with a
- * parent's own same-named node id. This test now proves that property directly —
- * `engine.request()` is called with a genuinely distinct grant key for the child's own
- * tool call, exactly what Revision 5 asked D5.4 to prove.
+ * snapshot `execute_subgraph` already writes on suspend. This test now proves that
+ * property directly — `engine.request()` is called for the child's own tool call.
+ *
+ * A first pass of this fix (still #177) kept `nodeId`/`requestedBy` qualified with the
+ * child's run id but left `runId` itself pointed at the PARENT — a review of the
+ * product ADR 0068 Revision 10 design (which assumed a genuinely child-scoped
+ * `ApprovalEngine.getPending(childRunId)`/attestation chain) caught that the request was
+ * therefore filed, signed, and persisted under the PARENT's `runId`, making
+ * `loadAttestationChain(childRunId)` return nothing — not attributable to the child at
+ * all. Fixed here too: `runId` passed to `engine.request()` is now the child's own
+ * deterministic run id, exactly like `nodeId`/`requestedBy` already were.
  *
  * Deliberately unchanged: a nested subgraph inside a subgraph, and `mapSubgraph`'s
  * dynamic N-child fan-out, are NOT walked — same scope D5.3's own run-gate injection
@@ -117,12 +123,15 @@ rustOnly(
 
         expect(outcome.status).toBe("suspended");
 
-        const pending = await engine.getPending(runId as never);
-        expect(pending).toHaveLength(1);
         // The deterministic child run id is `<parentRunId>:<nodeId>` (subgraph_run_id,
-        // runtime.rs); the grant key is that id, qualified with the child's OWN node id —
-        // never the bare `"c_assistant"` a parent-level collision could produce.
-        expect(pending[0]?.requestedBy).toBe(`${runId}:sub:c_assistant`);
+        // runtime.rs) — the request is filed under THAT id (not the parent's), so its
+        // ApprovalEngine attestation is genuinely attributable to the child, not merely
+        // labelled as one. A lookup under the PARENT's own runId finds nothing.
+        const childRunId = `${runId}:sub`;
+        expect(await engine.getPending(runId as never)).toHaveLength(0);
+        const pending = await engine.getPending(childRunId as never);
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.requestedBy).toBe(`${childRunId}:c_assistant`);
         expect(pending[0]?.subject).toMatchObject({ description: "tool:refund" });
 
         const ids = (outcome.state.channels as Record<string, unknown>).__approvalIds;
@@ -144,7 +153,8 @@ rustOnly(
           approvalEngine: engine
         });
         expect(outcome.status).toBe("suspended");
-        expect(await engine.getPending(runId as never)).toHaveLength(1);
+        const childRunId = `${runId}:sub`;
+        expect(await engine.getPending(childRunId as never)).toHaveLength(1);
 
         // Resuming with nothing approved re-suspends at the exact same child gate — the
         // returned state already carries the stashed __approvalIds, so the guard must
@@ -154,7 +164,7 @@ rustOnly(
           approvalEngine: engine
         });
         expect(resumed.status).toBe("suspended");
-        expect(await engine.getPending(runId as never)).toHaveLength(1);
+        expect(await engine.getPending(childRunId as never)).toHaveLength(1);
       }
     );
 

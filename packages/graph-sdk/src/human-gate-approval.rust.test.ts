@@ -24,6 +24,13 @@ import {
  * TOOL when deciding whether a run becomes `"rejected"` (a tool rejection just leaves a
  * tool unlocked; a gate rejection must block resume outright — that product-side check
  * is issue #496's own follow-up, not this engine-side filing fix).
+ *
+ * A review of the product ADR 0068 Revision 10 design (which assumed a genuinely
+ * child-scoped attestation chain, `loadAttestationChain(childRunId)`) caught that a
+ * child's gate request was filed under the PARENT's own `runId` (only `nodeId`/
+ * `requestedBy` were child-qualified) — not attributable to the child at all. Fixed
+ * alongside the same bug in `fileForGraphNodes` (child tool-call gates): `runId` passed
+ * to `engine.request()` for a child's own gate is now the child's deterministic run id.
  */
 const gatedGraph: GraphDefinition = {
   id: "top-human-gate",
@@ -109,11 +116,14 @@ rustOnly("@adriane-ai/graph-sdk — human-gate approval filing (product ADR 0068
     });
 
     expect(outcome.status).toBe("suspended");
-    const pending = await engine.getPending(runId as never);
+    // Filed under the CHILD's own run id — a lookup under the parent's finds nothing.
+    const childRunId = `${runId}:sub`;
+    expect(await engine.getPending(runId as never)).toHaveLength(0);
+    const pending = await engine.getPending(childRunId as never);
     expect(pending).toHaveLength(1);
-    expect(pending[0]?.requestedBy).toBe(`${runId}:sub:c_gate`);
+    expect(pending[0]?.requestedBy).toBe(`${childRunId}:c_gate`);
     expect(pending[0]?.subject).toMatchObject({
-      description: `${GATE_SUBJECT_PREFIX}${runId}:sub:c_gate`
+      description: `${GATE_SUBJECT_PREFIX}${childRunId}:c_gate`
     });
   });
 
