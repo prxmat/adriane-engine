@@ -715,9 +715,14 @@ const fileGateRequestIfSuspended = async (
  * File one {@link ApprovalEngine} request per gated tool surfaced by ONE graph's own
  * agent nodes (the top-level run, or — recursively — one direct child's own nodes),
  * reading from `channels` (the run's own `state.channels`, or a child's nested
- * `__subgraphStates[childRunId].channels`) and qualifying `nodeId`/`requestedBy` with
- * `idPrefix` (empty for the top level; `"<childRunId>:"` for a child) so a child's grant
- * key never collides with a parent's own same-named node id.
+ * `__subgraphStates[childRunId].channels`). `runId` is the run this request is genuinely
+ * FILED under — the top-level run's own id for a top-level node, or the CHILD's own
+ * deterministic run id for a child's node (never the parent's — a request filed under
+ * the wrong runId is not attributable to the run that actually raised it: a later
+ * `ApprovalEngine.getPending(childRunId)`/`loadAttestationChain(childRunId)` must find
+ * it). `idPrefix` (empty for the top level; `"<childRunId>:"` for a child) only
+ * qualifies `nodeId`/`requestedBy` for human-readability — it is not what makes the
+ * request child-attributable; `runId` is.
  */
 const fileForGraphNodes = async (
   nodes: GraphDefinition["nodes"],
@@ -818,11 +823,17 @@ const fileApprovalRequests = async (
     }
     const idPrefix = `${childRunId}:`;
     ids.push(
-      ...(await fileForGraphNodes(child.nodes, childState.channels, runId, idPrefix, engine)),
+      ...(await fileForGraphNodes(
+        child.nodes,
+        childState.channels,
+        childRunId as RunId,
+        idPrefix,
+        engine
+      )),
       ...(await fileGateRequestIfSuspended(
         child.nodes,
         childState.currentNodeId,
-        runId,
+        childRunId as RunId,
         idPrefix,
         engine
       ))
