@@ -40,6 +40,12 @@ describe("principal contracts", () => {
     expect(() => TenantRoleSchema.parse("superuser")).toThrow();
   });
 
+  it("accepts the ADR 0056 P3 org-role vocabulary alongside the pre-P3 one", () => {
+    for (const role of ["owner", "approver", "viewer", "admin", "billing", "member"]) {
+      expect(TenantRoleSchema.parse(role)).toBe(role);
+    }
+  });
+
   it("rejects a malformed email on login", () => {
     expect(() => LoginDtoSchema.parse({ email: "nope", password: "x" })).toThrow();
   });

@@ -9,13 +9,21 @@ import { z } from "zod";
  */
 
 /**
- * Role a principal holds WITHIN a tenant (RBAC). Hierarchy: `owner ⊃ approver ⊃ viewer`.
- * It is TENANT-SCOPED and resolved SERVER-SIDE on every request — it is never read from a
- * JWT claim or a client-supplied header. The wire carries it only as an enrichment of the
- * principal for the current tenant (so the Studio can gate UI cosmetically); the server's
- * 403 remains the only authority.
+ * Role a principal holds WITHIN a tenant (RBAC). It is TENANT-SCOPED and resolved
+ * SERVER-SIDE on every request — it is never read from a JWT claim or a client-supplied
+ * header. The wire carries it only as an enrichment of the principal for the current
+ * tenant (so the Studio can gate UI cosmetically); the server's 403 remains the only
+ * authority.
+ *
+ * `admin`/`billing`/`member` are the ADR 0056 P3 org-role vocabulary (Organization > Team
+ * tenancy + granular rights); `approver`/`viewer` are the pre-P3 vocabulary, kept valid here
+ * so the schema stays parseable across the rollout window (a control-plane deploy that
+ * ships the new vocabulary and its own DB backfill migration are two separate, sequenced
+ * steps — this schema must never reject a role value either side of that migration has
+ * legitimately in flight). A future ADR-tracked cleanup may narrow this back down once no
+ * `approver`/`viewer` row is ever written or read anywhere.
  */
-export const TenantRoleSchema = z.enum(["owner", "approver", "viewer"]);
+export const TenantRoleSchema = z.enum(["owner", "approver", "viewer", "admin", "billing", "member"]);
 
 /** The authenticated principal, as returned by `GET /auth/me`. Never includes secrets. */
 export const PrincipalDtoSchema = z.object({
