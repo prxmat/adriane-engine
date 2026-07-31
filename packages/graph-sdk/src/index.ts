@@ -126,6 +126,7 @@ export type {
   Embeddings,
   EmbeddingsTransport,
   EmbeddingsRequestBody,
+  EmbeddingsProvider,
   CreateEmbeddingsOptions
 } from "./embeddings.js";
 
