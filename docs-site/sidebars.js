@@ -171,7 +171,8 @@ const sidebars = {
         { type: "category", label: "Retrievers", items: ["integrations/retrievers/overview"] },
         { type: "category", label: "Text splitters", items: ["integrations/text-splitters/overview"] },
         { type: "category", label: "Vector stores", items: ["integrations/vector-stores/overview"] },
-        { type: "category", label: "Sandboxes", items: ["integrations/sandboxes/overview"] }
+        { type: "category", label: "Sandboxes", items: ["integrations/sandboxes/overview"] },
+        { type: "category", label: "Tool registries", items: ["integrations/tool-registries/overview"] }
       ]
     },
     {
@@ -193,7 +194,10 @@ const sidebars = {
         "recipes/agent-memory",
         "recipes/model-packages",
         "recipes/token-streaming",
-        "recipes/governed-skills"
+        "recipes/governed-skills",
+        "recipes/parallel-fan-out",
+        "recipes/hierarchical-delegation",
+        "recipes/governed-council-decision"
       ]
     },
     {

@@ -29,8 +29,9 @@ concrete examples and all available implementations.
 | **Lexical retrieval** — BM25, keyword match, or mock embeddings (keyless dev/test). | [Retrievers](/docs/integrations/retrievers/overview) | `bm25Retriever`, `keywordRetriever`, and `retriever` (mock embeddings) need no external embeddings — pure, deterministic components. |
 | **LLM provider** — Claude, OpenAI, Google, Mistral, local Ollama, etc. | [Models](/docs/integrations/models/overview) | One gateway per deployment; `DefaultLLMGateway` auto-selects by `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / env flags. |
 | **Text chunking** — split documents before embedding or retrieval. | [Text splitters](/docs/integrations/text-splitters/overview) | Semantic and recursive splitters with configurable chunk size and overlap. Use with knowledge bases. |
-| **Middleware** — compression, terse output, context budget, reflection. | [Middleware](/docs/integrations/middleware/overview) | Efficiency layer you compose (`compress`, `terse`, `contextBudget`, `reflection`); governed layer (redaction, approval gate, fs policy) is sealed. |
+| **Middleware** — compression, terse output, context budget, reflection, structured (schema-constrained) output. | [Middleware](/docs/integrations/middleware/overview) | Efficiency layer you compose (`compress`, `terse`, `contextBudget`, `reflection`, `structuredOutput`); governed layer (redaction, approval gate, fs policy) is sealed. |
 | **Sandboxed code execution** — run JavaScript / Python in a sandbox. | [Sandboxes](/docs/integrations/sandboxes/overview) | External seam for code-execution providers (E2B, GVisor, etc.). The runtime routes `execute_code` tool calls to the sandbox. |
+| **Tool sources** — bind an agent to tools from somewhere other than in-process code (an MCP server, an internal tool API, a plugin marketplace). | [Tool registries](/docs/integrations/tool-registries/overview) | The `ToolRegistry` interface (`register` / `resolve` / `list`) any tool source implements; `InMemoryToolRegistry` is the in-engine default, an MCP-backed registry is the reference external example. |
 
 ## Quick patterns
 
@@ -106,7 +107,8 @@ invisible to the agent (they read as "not found") but accessible to the runtime 
 ### Middleware and governance
 
 Middleware runs in a sealed **governed layer** (redaction, approval gate, filesystem policy) plus a
-user-tunable **efficiency layer** (compression, terse, context budget, reflection). You cannot add,
+user-tunable **efficiency layer** (compression, terse, context budget, reflection, structured
+output). You cannot add,
 remove, or disable governed middleware — it is constructed-in. You compose efficiency middleware with
 `profile` and `middleware` configs.
 
@@ -125,19 +127,20 @@ through it.
 | Category | Purpose | When to visit |
 | --- | --- | --- |
 | [Models](/docs/integrations/models/overview) | LLM provider selection and setup | Picking Claude, OpenAI, Google, Ollama, etc. |
-| [Middleware](/docs/integrations/middleware/overview) | Agent middleware catalog | Compression, terse output, context budgeting, reflection. |
+| [Middleware](/docs/integrations/middleware/overview) | Agent middleware catalog | Compression, terse output, context budgeting, reflection, structured output. |
 | [Backends](/docs/integrations/backends/overview) | Virtual filesystem storage | File durability, cross-process fs, or disabling the fs. |
 | [Checkpointers](/docs/integrations/checkpointers/overview) | Run persistence and resumability | Durable suspend/resume, cross-process checkpointing. |
 | [Retrievers](/docs/integrations/retrievers/overview) | Document ranking components | Lexical (BM25, keyword) or semantic (embeddings) retrieval. |
 | [Vector stores](/docs/integrations/vector-stores/overview) | Pre-computed embeddings storage | Persistent embedding vectors for semantic search. |
 | [Text splitters](/docs/integrations/text-splitters/overview) | Document chunking | Split documents before embedding for RAG. |
 | [Sandboxes](/docs/integrations/sandboxes/overview) | Code execution | JavaScript / Python sandbox providers (E2B, Gvisor). |
+| [Tool registries](/docs/integrations/tool-registries/overview) | Tool source binding | `ToolRegistry` interface; in-engine default plus external sources (e.g. MCP). |
 
 ## Next
 
 - [Models](/docs/integrations/models/overview) — LLM provider and gateway setup
 - [Checkpointers](/docs/integrations/checkpointers/overview) — the durable store seam
-- [Middleware](/docs/integrations/middleware/overview) — compression, terse output, and reflection
+- [Middleware](/docs/integrations/middleware/overview) — compression, terse output, reflection, and structured output
 
 ## See also
 
