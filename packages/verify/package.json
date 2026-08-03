@@ -1,12 +1,20 @@
 {
   "name": "@adriane-ai/verify",
   "license": "Apache-2.0",
-  "version": "1.24.0",
+  "version": "1.25.0",
   "description": "Offline, independent verifier for an Adriane Certificate of Execution — re-checks the Ed25519 signature, walks the attestation chain, AND re-derives the run from the capsule alone. `npx @adriane-ai/verify capsule.json`.",
   "type": "module",
-  "bin": { "adriane-verify": "./dist/cli.js" },
-  "files": ["dist", "README.md", "LICENSE"],
-  "publishConfig": { "access": "public" },
+  "bin": {
+    "adriane-verify": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "lint": "eslint .",
