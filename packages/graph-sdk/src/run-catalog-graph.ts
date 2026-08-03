@@ -87,6 +87,13 @@ export type AgentCarrier = {
   /** ADR 0024 — opt this agent into the governed virtual filesystem tools. */
   enableFs?: boolean;
   /**
+   * ADR 0075 (issue #566 G3) — attach an external MCP server's tools to this agent, mid-run. The
+   * control plane resolves this to a connection, discovers the server's tools, and merges them into
+   * `toolNames`/`approvalToolNames` before the run reaches this carrier — the Rust engine itself
+   * never resolves an MCP connection.
+   */
+  mcpConnectionId?: string;
+  /**
    * ADR 0025 phase 3d — the resolved efficiency middleware list. Present on graphs built by
    * the phase-3d SDK; absent on a pre-3d persisted node (the Rust bridge then falls back to
    * the legacy `outputStyle`/`contextBudget` knobs above, so old graphs keep their behaviour).
