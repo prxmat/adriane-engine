@@ -66,6 +66,15 @@ export const AgentNodeMetadataSchema = z.object({
   /** ADR 0024 phase 2c/2d — opt this agent into the governed virtual filesystem tools. */
   enableFs: z.boolean().optional(),
   /**
+   * ADR 0075 (issue #566 G3) — attach an external MCP server's tools to this agent, mid-run. The
+   * value references a tenant-owned `connector_connections` row (`provider: "mcp"`), resolved and
+   * connected at run start; every discovered tool is unconditionally `requiresApproval` (an MCP
+   * server is code Adriane does not control and cannot statically vet). Distinct from `toolNames`/
+   * `approvalToolNames` above — those are re-derived at run start to include the tools this
+   * connection discovers, since the tool set isn't known until the server is actually queried.
+   */
+  mcpConnectionId: z.string().min(1).optional(),
+  /**
    * ADR 0025 phase 3d — the resolved EFFICIENCY middleware list. A discriminated union of
    * efficiency-only kinds (compress / terse / contextBudget): a GOVERNANCE kind (redact /
    * approvalGate / fsPolicy) fails this schema BY CONSTRUCTION, so any consumer that runs it
