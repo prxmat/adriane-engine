@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Middleware overview
-description: The agent middleware catalog — a sealed governed layer (redaction, the intrinsic approval gate, fs policy) and a user-tunable efficiency layer (compress, terse, contextBudget, reflection).
+description: The agent middleware catalog — a sealed governed layer (redaction, the intrinsic approval gate, fs policy) and a user-tunable efficiency layer (compress, terse, contextBudget, reflection, structuredOutput).
 ---
 
 # Middleware overview
@@ -12,8 +12,8 @@ unrepresentable**.
 
 - **GOVERNED** — PII redaction, the human-approval gate, the filesystem policy. Engine-injected
   and **sealed**: you cannot add to it, remove from it, or turn it off.
-- **EFFICIENCY** — compression, terse output, context-budget trim, reflection. **User-tunable**:
-  the layer you compose with `profile` and `middleware`.
+- **EFFICIENCY** — compression, terse output, context-budget trim, reflection, structured output.
+  **User-tunable**: the layer you compose with `profile` and `middleware`.
 
 A user can only ever append to the efficiency layer. The governed layer is always present, and
 the approval gate is **intrinsic** to `before_tool` — it fires even on an empty stack, so a bare
@@ -58,10 +58,11 @@ point it runs at.
 | `terse` | `before_model` | Append a compact-output directive to the system prompt (ADR 0014). Lossy — prose only, not code. | EFFICIENCY |
 | `contextBudget` | `before_run` | Cap the agent's seed message (the injected `Input` / `State` dump) to `params.chars` characters; truncates on a char boundary, marks the cut with `…`. | EFFICIENCY |
 | `reflection` | `after_run` | One self-critique over the run's reasoning (ADR 0025). On rejection, annotates with a `reflection:needs_review:<issues>` marker. **Fail-open**; never forces a suspend. | EFFICIENCY |
+| `structuredOutput` | `before_model` (sets the provider's native constraint) / `after_model` (validates) | Constrain the agent's output to a JSON Schema (ADR 0029). Provider-neutral: OpenAI `response_format`, Anthropic forced tool, Gemini `responseSchema`, plus an in-engine JSON-Schema validation floor. The validated value lands on `AgentResult.structuredOutput`. `params.mode: "required"` (default) fails closed after `params.retryCap` (default 2) deterministic re-prompts; `"lenient"` falls back to raw text. | EFFICIENCY |
 
 The governed `redact` / approval-gate / fs-policy rows have **no `kind` you can pass** — they are
-engine-injected. Only `compress`, `terse`, `contextBudget`, and `reflection` are valid
-`middleware` specs.
+engine-injected. Only `compress`, `terse`, `contextBudget`, `reflection`, and `structuredOutput`
+are valid `middleware` specs.
 
 ## Governed kinds are rejected from user middleware
 

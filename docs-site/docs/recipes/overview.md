@@ -22,6 +22,9 @@ Build single and multi-agent systems with ReAct, planning, criticism, and progre
 
 - [ReAct agent with planner & critic](./react-planner-critic) — Intermediate · An optional planner flows through the agent loop and optional critic, comparing Adriane's built-in patterns to LangGraph.
 - [Governed skills for a deep agent](./governed-skills) — Advanced · Give a deep agent playbooks it loads progressively, withheld until granted when they grant capability.
+- [Parallel fan-out (mapAgents)](./parallel-fan-out) — Intermediate · Run the same agent concurrently over every item in an array channel, then join the per-item results in input order.
+- [Hierarchical delegation (fanOut)](./hierarchical-delegation) — Intermediate · A manager agent dispatches to different, heterogeneous specialist nodes concurrently, then joins at a report node.
+- [Governed council for a high-stakes decision](./governed-council-decision) — Advanced · N member agents answer independently, reviewers rank the anonymized field, and a chair synthesizes — with an optional human gate before the verdict.
 
 ## Retrieval & Knowledge
 

@@ -103,23 +103,31 @@ Phases 5 (interop + UI) and 6 (skills/memory) and 4c (token streaming) were coar
 
 11. **Phase 11 — long-term cross-thread memory.** 🟡 **Engine increment shipped** ([ADR 0026](0026-memory-architecture-engine-studio.md), GO 2026-06-24). New `adriane-memory` crate (unified **vector + entity-graph** recall + `MemoryProvenance` + `RetrievalPolicy` + `MemoryStore` seam + in-memory default) + a governed `MemoryMiddleware` (recall→inject seed / persist-after, sealed namespace+principal) wired via an agentNode `memory` overlay. **Control-plane follow-ups**: Neo4j persistence + native vector index (sub-phase A), governed LLM entity-extraction v2 (C), lifecycle/forgetting (E), BKP (F), Studio surfaces.
     Original gap (for reference): Missing impl: **M3** agent memory (`memory-store` `PgStore` is a stub that throws), **M2** pgvector (no semantic recall), **M4** portable export; and the wiring as a **`MemoryMiddleware`** (`before_run` loads relevant memories → injects; `after_run` persists) — clean now the middleware API exists. Plus scoping/governance (per-tenant/agent, attributable). The moat-#1 build.
-12. **Phase 12 — skills (`SKILL.md` progressive disclosure).** Nothing built. Missing: the skill format (frontmatter + body), progressive loading (load the body on demand, not always in-context), a skill registry over the KB, versioning + governance. No ADR yet.
-13. **Phase 13 — token / tool / sub-agent event streaming.** 4a wired **node + tool lifecycle** events (done). Missing: per-**token** LLM deltas (`LlmStreamChunk` → napi → `messages` mode at token granularity) + **nested sub-agent** event tagging (so a UI can show each spawn's stream). The napi token-stream bridge is the work. (= the old "4c".)
-14. **Phase 14 — ACP / Google ADK protocols.** Nothing. Missing: a control-plane adapter exposing a *governed* Adriane agent over Agent Client Protocol (Zed) + Google ADK — external clients (editors/orchestrators) drive + stream the agent over a standard (auth, session, streaming mapping). (= part of the old phase 5.)
+12. **Phase 12 — skills (`SKILL.md` progressive disclosure).** ✅ **Done** ([ADR 0035](0035-skills-progressive-disclosure.md), shipped). `crates/skills` + `SkillMiddleware` (`crates/agents-core/src/skill_middleware.rs`) implement the format (frontmatter + body), progressive loading (load on demand, not always in-context), and the bridge/SDK/contracts wiring (`packages/contracts/src/skills.ts`); doc-site page + cookbook recipe (`governed-skills.md`) exist. Studio-side authoring surface (installing/browsing skills in the product) is tracked separately, product-side (issue #566 G5-era gap register in the private repo), not an engine gap.
+13. **Phase 13 — token / tool / sub-agent event streaming.** ✅ **Done** ([ADR 0033](0033-token-streaming-and-spawn-tagging.md), signed off 2026-06-24). Per-**token** LLM deltas (`token_delta`, `crates/runtime-bridge/src/spec.rs` → `packages/graph-sdk/src/compiled-graph.ts`/`rust-engine.ts`/`run-catalog-graph.ts`) and nested sub-agent event tagging both shipped; cookbook recipe (`token-streaming.md`) exists.
+14. **Phase 14 — ACP / Google ADK protocols.** Re-scoped (not this ADR's line item anymore): the private product repo's **ADR 0066** ("A2A agent interop") superseded this line — ACP (IBM/BeeAI) merged into A2A under the Linux Foundation and wound down, and Google ADK's interop story is native A2A, so "expose over ACP and ADK" collapsed to one real target. ADR 0066 is **Accepted** (ratified 2026-08-03), implemented control-plane-side (`product/apps/api/src/a2a/`: controller, service, delegate-tool, outbound-client, remote-agents, agent-card, task-lifecycle) — not an engine surface (the engine has no HTTP server). Nothing further to build here in `adriane-engine`.
 15. **Phase 15 — Studio sub-agent UI.** Nothing (Studio = the commercial product). Missing: the nested sub-agent stream visualization, consuming phase-13 events. Product, not engine. (= part of the old phase 5.)
 16. **Phase 16 — per-model provider packages + provider-agnostic SDK.** 🟡 **Foundation done** ([ADR 0031](0031-per-model-provider-packages.md)). Per-provider overlay packages (`@adriane-ai/model-{openai,anthropic,gemini,mistral}` + `openaiCompatible`) over the single Rust engine: a `Model` declares a serializable `ModelSpec` passed to `agentNode({ model })`, and is callable standalone via `Model.invoke()` (a one-shot through the Rust gateway over the napi `llmComplete` seam — LangChain DX, Rust execution). `agentNode.llm` is now optional+deprecated. **Follow-ups**: 16a slim `@anthropic-ai/sdk` out of the base; 16b docs/examples → `model()`; 16c publish config (flip `private`, versioning); **16d DX-beyond-LangChain** — `init("openai:gpt-4o")` string form, typed model-id catalog/autocomplete, typed `.invoke()` output, batteries-included defaults + great errors, *without losing performance* (owner request). (Supersedes the old "minor/cosmetic" note — this IS a capability + the open-core ecosystem story.)
 
 > Also unphased (candidates): **sandbox / interpreters** (code/shell exec — an external, always-approval-gated seam, documented in integrations/sandboxes; never in the OSS engine per the security rule) and the **retry / rate-limit / tool-call-limit** middleware deferred from phase 3e (net-new efficiency/safety middleware on the existing hooks).
 
-### Re-plan after phase 10 (2026-06-23)
+### Re-plan after phase 10 (2026-06-23; superseded — see phase-status correction below)
 
-Status: phases 1–10 + the phase-16 foundation are **shipped**. Re-prioritised order for what remains, by value × cost:
+Status at the time: phases 1–10 + the phase-16 foundation were **shipped**. Re-prioritised order
+for what remained, by value × cost:
 
 - **Phase 11 — long-term memory** (moat #1, NEXT): the highest-value capability; ADR 0026 exists (needs GO). Biggest build — its own ADR/sign-off.
 - **Phase 13 — token/sub-agent streaming**: enables phase 15 (Studio UI) and better DX; the napi token-stream bridge is the work. Prioritise over 12/14.
 - **Phase 16 follow-ups (16a–16d)**: 16a (slim) + 16d (DX-beyond-LangChain) are cheap, high client-facing value — fold in opportunistically between bigger phases.
 - **Phase 12 — skills** and **Phase 14 — ACP/ADK**: real but lower urgency; schedule after 11/13.
 - **Phase 15 — Studio UI**: product (not engine); follows phase 13.
+
+**Correction (issue #566 G11, 2026-08-03, re-verified against `origin/main`):** the plan above is
+stale — phases 12, 13, and (re-scoped) 14 all shipped since this snapshot; see their own phase
+entries above for current status. Phase 11 shipped its engine increment (ADR 0026); control-plane
+follow-ups (Neo4j persistence, entity-extraction v2, lifecycle/forgetting, BKP, Studio surfaces)
+are tracked product-side. Phase 15 (Studio sub-agent UI) remains product-side, not engine, and its
+status isn't tracked in this ADR.
 
 ### Integrations taxonomy (the doc-site surface)
 

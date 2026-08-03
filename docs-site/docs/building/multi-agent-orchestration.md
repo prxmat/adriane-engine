@@ -417,16 +417,16 @@ a **chair** synthesizes the final answer — a governed version of Karpathy's ll
 the Rust engine via `runCatalogGraph` like any governed graph:
 
 ```ts
-import { council, runCatalogGraph, openai, anthropic } from "@adriane-ai/graph-sdk";
+import { council, runCatalogGraph, model } from "@adriane-ai/graph-sdk";
 
 const definition = council({
   members: [
-    { model: openai("gpt-4o"), prompt: { system: "Answer the question." } },
-    { model: anthropic("claude-sonnet-4-5"), prompt: { system: "Answer the question." } },
-    { model: openai("gpt-4o-mini"), prompt: { system: "Answer the question." } }
+    { model: model.openai("gpt-4o"), prompt: { system: "Answer the question." } },
+    { model: model.anthropic("claude-sonnet-4-5"), prompt: { system: "Answer the question." } },
+    { model: model.openai("gpt-4o-mini"), prompt: { system: "Answer the question." } }
   ],
   // reviewers default to one per member; each ranks the ANONYMIZED answers (it can't favour its own)
-  chair: { model: anthropic("claude-sonnet-4-5"), prompt: { system: "Synthesize the best answer." } },
+  chair: { model: model.anthropic("claude-sonnet-4-5"), prompt: { system: "Synthesize the best answer." } },
   humanGate: true // optional: suspend for accept/override before the chair (high-stakes)
 });
 
