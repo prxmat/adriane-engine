@@ -94,6 +94,12 @@ export type AgentCarrier = {
    */
   mcpConnectionId?: string;
   /**
+   * Issue #566 G19 — governed action-tool connectors, keyed by provider id ("slack" first).
+   * Resolved the same way as `mcpConnectionId`; generalized to a map so future providers don't
+   * need a new engine field/release each time.
+   */
+  actionConnections?: Record<string, string>;
+  /**
    * ADR 0025 phase 3d — the resolved efficiency middleware list. Present on graphs built by
    * the phase-3d SDK; absent on a pre-3d persisted node (the Rust bridge then falls back to
    * the legacy `outputStyle`/`contextBudget` knobs above, so old graphs keep their behaviour).
