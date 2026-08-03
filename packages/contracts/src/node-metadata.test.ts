@@ -45,6 +45,17 @@ describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
     expect(parsed.todosChannel).toBeUndefined();
     expect(parsed.outputStyle).toBeUndefined();
     expect(parsed.contextBudget).toBeUndefined();
+    expect(parsed.mcpConnectionId).toBeUndefined();
+  });
+
+  // ADR 0075 (issue #566 G3) — the MCP connection carrier.
+  it("keeps mcpConnectionId through a parse round-trip", () => {
+    const parsed = AgentNodeMetadataSchema.parse({ provider: "anthropic", mcpConnectionId: "conn-1" });
+    expect(parsed.mcpConnectionId).toBe("conn-1");
+  });
+
+  it("rejects an empty mcpConnectionId", () => {
+    expect(AgentNodeMetadataSchema.safeParse({ mcpConnectionId: "" }).success).toBe(false);
   });
 
   // ADR 0025 phase 3d — the persisted resolvedMiddleware gate.
