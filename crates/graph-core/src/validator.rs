@@ -1,7 +1,7 @@
 //! Structural validation of a [`GraphDefinition`]. Mirrors the TS `validateGraph`:
 //! returns every problem found rather than failing on the first.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::{ValidationError, ValidationErrorCode};
 use crate::types::{EdgeType, GraphDefinition};
@@ -63,6 +63,26 @@ pub fn validate_graph(def: &GraphDefinition) -> Vec<ValidationError> {
                     vec![edge.id.0.clone()],
                 ));
             }
+        }
+    }
+
+    // ADR 0076: at most one outgoing "error" edge per node (ambiguous routing otherwise).
+    let mut error_edge_count_by_node: HashMap<&str, u32> = HashMap::new();
+    for edge in &def.edges {
+        if edge.edge_type == EdgeType::Error {
+            *error_edge_count_by_node.entry(edge.from.as_str()).or_insert(0) += 1;
+        }
+    }
+    for (node_id, count) in &error_edge_count_by_node {
+        if *count > 1 {
+            errors.push(ValidationError::new(
+                ValidationErrorCode::MultipleErrorEdges,
+                format!(
+                    "Node '{}' has {} outgoing error edges; at most one is allowed.",
+                    node_id, count
+                ),
+                vec![(*node_id).to_owned()],
+            ));
         }
     }
 
@@ -207,5 +227,34 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| e.code == ValidationErrorCode::DuplicateNodeId));
+    }
+
+    #[test]
+    fn accepts_a_single_error_edge_per_node() {
+        let def = graph(
+            vec![node("a", NodeType::Action), node("b", NodeType::Action)],
+            vec![edge("e1", "a", "b", EdgeType::Error, None)],
+            "a",
+        );
+        let errors = validate_graph(&def);
+        assert!(!errors
+            .iter()
+            .any(|e| e.code == ValidationErrorCode::MultipleErrorEdges));
+    }
+
+    #[test]
+    fn flags_a_node_with_two_outgoing_error_edges() {
+        let def = graph(
+            vec![node("a", NodeType::Action), node("b", NodeType::Action)],
+            vec![
+                edge("e1", "a", "b", EdgeType::Error, None),
+                edge("e2", "a", "b", EdgeType::Error, None),
+            ],
+            "a",
+        );
+        let errors = validate_graph(&def);
+        assert!(errors
+            .iter()
+            .any(|e| e.code == ValidationErrorCode::MultipleErrorEdges));
     }
 }

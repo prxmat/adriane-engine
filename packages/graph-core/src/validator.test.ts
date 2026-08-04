@@ -154,4 +154,42 @@ describe("validateGraph", () => {
       false
     );
   });
+
+  it("accepts a single error edge per node (ADR 0076)", () => {
+    const graph = createValidGraph();
+    graph.edges.push({
+      id: "edge-error" as GraphDefinition["edges"][number]["id"],
+      from: "node-1" as GraphDefinition["nodes"][number]["id"],
+      to: "node-2" as GraphDefinition["nodes"][number]["id"],
+      type: "error"
+    });
+
+    const errors = validateGraph(graph);
+    expect(
+      errors.some((error) => error.code === GRAPH_VALIDATION_ERROR_CODES.MULTIPLE_ERROR_EDGES)
+    ).toBe(false);
+  });
+
+  it("rejects a node with two outgoing error edges (ADR 0076)", () => {
+    const graph = createValidGraph();
+    graph.edges.push(
+      {
+        id: "edge-error-1" as GraphDefinition["edges"][number]["id"],
+        from: "node-1" as GraphDefinition["nodes"][number]["id"],
+        to: "node-2" as GraphDefinition["nodes"][number]["id"],
+        type: "error"
+      },
+      {
+        id: "edge-error-2" as GraphDefinition["edges"][number]["id"],
+        from: "node-1" as GraphDefinition["nodes"][number]["id"],
+        to: "node-2" as GraphDefinition["nodes"][number]["id"],
+        type: "error"
+      }
+    );
+
+    const errors = validateGraph(graph);
+    expect(
+      errors.some((error) => error.code === GRAPH_VALIDATION_ERROR_CODES.MULTIPLE_ERROR_EDGES)
+    ).toBe(true);
+  });
 });

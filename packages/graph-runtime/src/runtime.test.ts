@@ -340,6 +340,106 @@ describe("GraphRuntime", () => {
     expect(failures).toEqual([1, 2]);
   });
 
+  it("routes to an error edge once retries are exhausted, instead of failing the run (ADR 0076)", async () => {
+    const graph = asGraph<GraphDefinition>({
+      id: "graph-error-edge" as GraphDefinition["id"],
+      version: "1.0.0",
+      name: "Error Edge Graph",
+      channels: {
+        handled: { type: "boolean", reducer: "replace", default: false }
+      },
+      entryNodeId: "R" as GraphDefinition["entryNodeId"],
+      nodes: [
+        {
+          id: "R" as GraphDefinition["nodes"][number]["id"],
+          type: "action",
+          label: "Always Fails",
+          retryPolicy: { maxAttempts: 2, backoffMs: 0 }
+        },
+        { id: "H" as GraphDefinition["nodes"][number]["id"], type: "action", label: "Error Handler" }
+      ],
+      edges: [
+        {
+          id: "e-error" as GraphDefinition["edges"][number]["id"],
+          from: "R" as GraphDefinition["nodes"][number]["id"],
+          to: "H" as GraphDefinition["nodes"][number]["id"],
+          type: "error"
+        }
+      ]
+    });
+
+    const nodeRegistry = new InMemoryNodeRegistry();
+    const conditionRegistry = new InMemoryConditionRegistry();
+    const checkpointer = new InMemoryCheckpointer();
+    const eventBus = new InMemoryEventBus();
+    const events: string[] = [];
+    eventBus.subscribe((event) => events.push(event.type));
+
+    nodeRegistry.register("R" as GraphDefinition["nodes"][number]["id"], async () => {
+      throw new Error("always fails");
+    });
+    nodeRegistry.register("H" as GraphDefinition["nodes"][number]["id"], async () => ({ handled: true }));
+
+    const runtime = new GraphRuntime({
+      graph,
+      nodeRegistry,
+      conditionRegistry,
+      checkpointer,
+      eventBus
+    });
+
+    const finalState = await runtime.start("run-error-edge" as GraphState["runId"], {});
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.channels.handled).toBe(true);
+    expect(events.includes("node_error_routed")).toBe(true);
+    expect(events.includes("run_failed")).toBe(false);
+  });
+
+  it("fails the run exactly as before when no error edge is declared (ADR 0076 backward compat)", async () => {
+    const graph = asGraph<GraphDefinition>({
+      id: "graph-no-error-edge" as GraphDefinition["id"],
+      version: "1.0.0",
+      name: "No Error Edge Graph",
+      channels: {},
+      entryNodeId: "R" as GraphDefinition["entryNodeId"],
+      nodes: [
+        {
+          id: "R" as GraphDefinition["nodes"][number]["id"],
+          type: "action",
+          label: "Always Fails",
+          retryPolicy: { maxAttempts: 2, backoffMs: 0 }
+        }
+      ],
+      edges: []
+    });
+
+    const nodeRegistry = new InMemoryNodeRegistry();
+    const conditionRegistry = new InMemoryConditionRegistry();
+    const checkpointer = new InMemoryCheckpointer();
+    const eventBus = new InMemoryEventBus();
+    const events: string[] = [];
+    eventBus.subscribe((event) => events.push(event.type));
+
+    nodeRegistry.register("R" as GraphDefinition["nodes"][number]["id"], async () => {
+      throw new Error("always fails");
+    });
+
+    const runtime = new GraphRuntime({
+      graph,
+      nodeRegistry,
+      conditionRegistry,
+      checkpointer,
+      eventBus
+    });
+
+    const finalState = await runtime.start("run-no-error-edge" as GraphState["runId"], {});
+
+    expect(finalState.status).toBe("failed");
+    expect(events.includes("run_failed")).toBe(true);
+    expect(events.includes("node_error_routed")).toBe(false);
+  });
+
   it("executes subgraph and merges outputMapping into parent state", async () => {
     const childGraph = asGraph<GraphDefinition>({
       id: "child-graph" as GraphDefinition["id"],

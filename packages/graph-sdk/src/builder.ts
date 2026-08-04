@@ -560,6 +560,24 @@ export class GraphBuilder<TState extends ChannelValues = EmptyChannels> {
     return this;
   }
 
+  /**
+   * ADR 0076 — governed error branch: once `from`'s `retryPolicy` is exhausted, the run reroutes
+   * to `to` instead of failing (`node_error_routed` event, `channels.__lastError` populated)
+   * rather than the run terminating (`run_failed`). At most one per node (enforced at compile via
+   * `validateGraph`). Implemented in BOTH the Rust engine (`crates/graph-core`/`graph-runtime`,
+   * the path every catalog/native run takes) and the TS legacy `@adriane-ai/graph-runtime` —
+   * this builder always compiles to Rust, so this edge type works end to end here.
+   */
+  public errorEdge(from: string, to: string): this {
+    this.edges.push({
+      id: `e_${from}_${to}_${this.edges.length}` as EdgeId,
+      from: from as NodeId,
+      to: to as NodeId,
+      type: "error"
+    });
+    return this;
+  }
+
   /** Override the entry node (defaults to the first node added). */
   public entry(nodeId: string): this {
     this.entryNodeId = nodeId;

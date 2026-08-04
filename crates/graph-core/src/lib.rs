@@ -14,7 +14,7 @@ pub mod validator;
 pub use error::{ValidationError, ValidationErrorCode};
 pub use ids::{EdgeId, GraphId, NodeId, RunId};
 pub use types::{
-    ChannelDefinition, ChannelReducer, EdgeDefinition, EdgeType, FanOut, GraphDefinition,
-    GraphState, GraphStatus, MapSubgraph, NodeDefinition, NodeType, RetryPolicy,
+    ChannelDefinition, ChannelReducer, EdgeDefinition, EdgeType, FailureCategory, FanOut,
+    GraphDefinition, GraphState, GraphStatus, MapSubgraph, NodeDefinition, NodeType, RetryPolicy,
 };
 pub use validator::validate_graph;

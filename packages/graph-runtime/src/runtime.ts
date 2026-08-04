@@ -1,14 +1,16 @@
-import type {
-  ChannelDefinition,
-  ChannelsSchema,
-  Command,
-  GraphId,
-  EdgeDefinition,
-  GraphDefinition,
-  GraphState,
-  NodeDefinition,
-  NodeId,
-  RunId
+import {
+  FAILURE_CATEGORIES,
+  type ChannelDefinition,
+  type ChannelsSchema,
+  type Command,
+  type FailureCategory,
+  type GraphId,
+  type EdgeDefinition,
+  type GraphDefinition,
+  type GraphState,
+  type NodeDefinition,
+  type NodeId,
+  type RunId
 } from "@adriane-ai/graph-core";
 
 import type { Checkpointer, ConditionRegistry, EventBus, NodeRegistry } from "./interfaces.js";
@@ -44,6 +46,23 @@ type GraphRuntimeDeps = {
 };
 
 const nowIso = (): string => new Date().toISOString();
+
+/** ADR 0076 — duck-typed classification: a thrower (e.g. `llm-gateway` on a provider 429) can set
+ * `failureCategory` on the error it throws; anything else classifies as `"unknown"`. Never throws. */
+const classifyFailure = (error: unknown): FailureCategory => {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "failureCategory" in error &&
+    typeof (error as { failureCategory?: unknown }).failureCategory === "string" &&
+    (FAILURE_CATEGORIES as readonly string[]).includes(
+      (error as { failureCategory: string }).failureCategory
+    )
+  ) {
+    return (error as { failureCategory: FailureCategory }).failureCategory;
+  }
+  return "unknown";
+};
 
 const toCheckpointId = (value: string): CheckpointId => value as CheckpointId;
 
@@ -406,12 +425,14 @@ export class GraphRuntime {
           return this.suspendRun(patchedState, nodeId, error.reason, "during");
         }
         const message = error instanceof Error ? error.message : "Unknown node error.";
+        const category = classifyFailure(error);
         this.eventBus.emit({
           type: "node_failed",
           runId: state.runId,
           nodeId,
           error: message,
           attempt,
+          category,
           timestamp: nowIso()
         });
         await this.callbackManager.emit({
@@ -423,6 +444,35 @@ export class GraphRuntime {
         });
 
         if (attempt >= maxAttempts) {
+          // ADR 0076: retries are exhausted. A node with a declared `"error"` outgoing edge
+          // reroutes there (a real, auditable branch) instead of failing the whole run — absent
+          // one, behavior is UNCHANGED from before this feature existed (rethrow, run fails).
+          const errorEdge = this.findErrorEdge(nodeId);
+          if (errorEdge !== undefined) {
+            const routedChannels = {
+              ...state.channels,
+              __lastError: { nodeId: String(nodeId), message, category, attempt }
+            };
+            const routedState: GraphState = {
+              ...state,
+              currentNodeId: errorEdge.to,
+              channels: routedChannels,
+              version: state.version + 1,
+              status: "running",
+              updatedAt: nowIso()
+            };
+            this.eventBus.emit({
+              type: "node_error_routed",
+              runId: state.runId,
+              nodeId,
+              errorEdgeId: errorEdge.id,
+              toNodeId: errorEdge.to,
+              category,
+              error: message,
+              timestamp: nowIso()
+            });
+            return this.persistCheckpoint(routedState);
+          }
           throw error;
         }
 
@@ -450,6 +500,12 @@ export class GraphRuntime {
     const queue = queueByNode.get(nodeId) ?? [];
     queueByNode.set(nodeId, [...queue, input]);
     this.inboxByRunId.set(runId, queueByNode);
+  }
+
+  /** ADR 0076 — at most one `"error"` edge per node is enforced at validation time
+   * (`GRAPH_VALIDATION_ERROR_CODES.MULTIPLE_ERROR_EDGES`), so the first match is unambiguous. */
+  private findErrorEdge(nodeId: NodeId): EdgeDefinition | undefined {
+    return this.graph.edges.find((edge) => edge.from === nodeId && edge.type === "error");
   }
 
   private selectNextEdge(edges: EdgeDefinition[], state: GraphState): EdgeDefinition | undefined {

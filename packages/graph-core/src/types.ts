@@ -31,8 +31,20 @@ export type ResolvedChannels<TChannels extends ChannelsSchema> = {
 export const NODE_TYPES = ["action", "agent", "tool", "human-gate", "subgraph"] as const;
 export type NodeType = (typeof NODE_TYPES)[number];
 
-export const EDGE_TYPES = ["default", "conditional"] as const;
+/** ADR 0076 (product repo) — `"error"` routes from a node to a designated handler once its
+ * `retryPolicy` is exhausted, instead of failing the whole run. Absent (the common case): failure
+ * behavior is unchanged — the run terminates exactly as before this type existed. */
+export const EDGE_TYPES = ["default", "conditional", "error"] as const;
 export type EdgeType = (typeof EDGE_TYPES)[number];
+
+/** ADR 0076 — coarse classification of why a node's handler threw, attached to `node_failed`/
+ * `node_error_routed` events so a governed error path can react differently to a transient
+ * failure (worth a human-visible retry) vs a permanent one (worth surfacing, not retrying).
+ * Derived by `graph-runtime` from a thrown error's own `failureCategory` property when present
+ * (a convention, not an interface — any thrower, e.g. `llm-gateway`, can set it); defaults to
+ * `"unknown"` for a plain `Error`/thrown value that doesn't declare one. */
+export const FAILURE_CATEGORIES = ["transient", "permanent", "unknown"] as const;
+export type FailureCategory = (typeof FAILURE_CATEGORIES)[number];
 
 export const GRAPH_STATUSES = ["idle", "running", "suspended", "completed", "failed"] as const;
 export type GraphStatus = (typeof GRAPH_STATUSES)[number];

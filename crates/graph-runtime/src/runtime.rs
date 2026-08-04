@@ -56,8 +56,8 @@ const INJECTED_KEY: &str = "__injected";
 const SUBGRAPH_STATES_KEY: &str = "__subgraphStates";
 
 use adriane_graph_core::{
-    ChannelDefinition, ChannelReducer, EdgeType, GraphDefinition, GraphState, GraphStatus,
-    MapSubgraph, NodeDefinition, NodeId, NodeType, RunId,
+    ChannelDefinition, ChannelReducer, EdgeDefinition, EdgeType, FailureCategory, GraphDefinition,
+    GraphState, GraphStatus, MapSubgraph, NodeDefinition, NodeId, NodeType, RunId,
 };
 use serde_json::Value;
 
@@ -82,6 +82,16 @@ fn mask_no_log(
             }
         })
         .collect()
+}
+
+/// ADR 0076 — the node's outgoing `"error"` edge, if any. At most one is enforced at
+/// validation time (`ValidationErrorCode::MultipleErrorEdges`), so the first match is
+/// unambiguous.
+fn find_error_edge<'a>(graph: &'a GraphDefinition, node_id: &NodeId) -> Option<&'a EdgeDefinition> {
+    graph
+        .edges
+        .iter()
+        .find(|edge| edge.from == *node_id && edge.edge_type == EdgeType::Error)
 }
 
 use crate::interfaces::{
@@ -773,15 +783,49 @@ impl GraphRuntime {
             let Some(error) = output.failure.clone() else {
                 break output;
             };
+            let category = output.failure_category.unwrap_or(FailureCategory::Unknown);
             self.events.emit(RunEvent::NodeFailed {
                 run_id: state.run_id.clone(),
                 node_id: node_id.clone(),
                 error: error.clone(),
                 attempt,
+                category,
                 timestamp: self.now_string(),
             });
 
             if attempt >= max_attempts {
+                // ADR 0076: retries are exhausted. A node with a declared "error" outgoing
+                // edge reroutes there (a real, auditable branch) instead of failing the
+                // whole run — absent one, behavior is UNCHANGED (fail the run), exactly as
+                // before this feature existed.
+                if let Some(error_edge) = find_error_edge(ctx.graph, &node_id) {
+                    let mut last_error = serde_json::Map::new();
+                    last_error.insert("nodeId".to_owned(), Value::String(node_id.0.clone()));
+                    last_error.insert("message".to_owned(), Value::String(error.clone()));
+                    last_error.insert(
+                        "category".to_owned(),
+                        serde_json::to_value(category).unwrap_or(Value::Null),
+                    );
+                    last_error.insert("attempt".to_owned(), Value::from(attempt));
+                    state
+                        .channels
+                        .insert("__lastError".to_owned(), Value::Object(last_error));
+                    state.current_node_id = error_edge.to.clone();
+                    state.version += 1;
+                    state.updated_at = self.now_string();
+                    let persisted = self.persist_checkpoint(state);
+                    self.events.emit(RunEvent::NodeErrorRouted {
+                        run_id: persisted.run_id.clone(),
+                        node_id: node_id.clone(),
+                        error_edge_id: error_edge.id.clone(),
+                        to_node_id: error_edge.to.clone(),
+                        category,
+                        error,
+                        timestamp: self.now_string(),
+                    });
+                    return Ok(persisted);
+                }
+
                 // Attempts exhausted: the run fails. A Failed status stops the
                 // run loop and must NOT produce a RunCompleted event.
                 state.status = GraphStatus::Failed;
@@ -1230,6 +1274,9 @@ impl GraphRuntime {
                         }
                     }
                 }
+                // ADR 0076 — an "error" edge is NEVER taken on the success path; it is only
+                // followed by `execute_node`'s own retry-exhausted branch (`find_error_edge`).
+                EdgeType::Error => {}
             }
         }
         None
@@ -2200,6 +2247,51 @@ mod tests {
             .load(&RunId::from("run-exhausted"))
             .unwrap();
         assert_eq!(latest.graph_state.status, GraphStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn routes_to_an_error_edge_once_retries_are_exhausted_instead_of_failing_the_run() {
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("doomed"),
+            sync_handler(|_s| NodeOutput::failure_with_category("boom", FailureCategory::Permanent)),
+        );
+        nodes.register(
+            NodeId::from("handler"),
+            sync_handler(|_s| NodeOutput::update(upd(&[("handled", json!(true))]))),
+        );
+        let doomed = NodeDefinition {
+            retry_policy: Some(RetryPolicy {
+                max_attempts: 2,
+                backoff_ms: 0,
+            }),
+            ..node("doomed", NodeType::Action)
+        };
+        let def = graph(
+            vec![doomed, node("handler", NodeType::Action)],
+            vec![edge("e-error", "doomed", "handler", EdgeType::Error, None)],
+            "doomed",
+            vec![channel("handled", ChannelReducer::Replace)],
+        );
+        let runtime = GraphRuntime::new(def, nodes, InMemoryConditionRegistry::new());
+
+        let state = runtime
+            .start(RunId::from("run-error-edge"), BTreeMap::new())
+            .await
+            .unwrap();
+
+        assert_eq!(state.status, GraphStatus::Completed);
+        assert_eq!(state.channels.get("handled"), Some(&json!(true)));
+        let last_error = state.channels.get("__lastError").expect("__lastError set");
+        assert_eq!(last_error.get("category"), Some(&json!("permanent")));
+
+        let events = runtime.events().events();
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, RunEvent::RunFailed { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, RunEvent::NodeErrorRouted { .. })));
     }
 
     #[tokio::test]
