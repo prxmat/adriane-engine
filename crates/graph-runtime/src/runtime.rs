@@ -2254,7 +2254,9 @@ mod tests {
         let mut nodes = InMemoryNodeRegistry::new();
         nodes.register(
             NodeId::from("doomed"),
-            sync_handler(|_s| NodeOutput::failure_with_category("boom", FailureCategory::Permanent)),
+            sync_handler(|_s| {
+                NodeOutput::failure_with_category("boom", FailureCategory::Permanent)
+            }),
         );
         nodes.register(
             NodeId::from("handler"),

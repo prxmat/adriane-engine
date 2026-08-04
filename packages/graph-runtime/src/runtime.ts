@@ -1,17 +1,23 @@
-import {
-  FAILURE_CATEGORIES,
-  type ChannelDefinition,
-  type ChannelsSchema,
-  type Command,
-  type FailureCategory,
-  type GraphId,
-  type EdgeDefinition,
-  type GraphDefinition,
-  type GraphState,
-  type NodeDefinition,
-  type NodeId,
-  type RunId
+import type {
+  ChannelDefinition,
+  ChannelsSchema,
+  Command,
+  FailureCategory,
+  GraphId,
+  EdgeDefinition,
+  GraphDefinition,
+  GraphState,
+  NodeDefinition,
+  NodeId,
+  RunId
 } from "@adriane-ai/graph-core";
+
+/** Mirrors `@adriane-ai/graph-core`'s `FAILURE_CATEGORIES` runtime array. Duplicated rather than
+ * value-imported: every other `@adriane-ai/graph-core` import in this file is TYPE-ONLY (erased
+ * at build time), so this stays the sole runtime dependency-free of graph-core's actual module —
+ * the same "duplicated structurally, dependency-free" posture `graph-sdk` already uses for its
+ * own `@adriane-ai/contracts` carrier types. */
+const FAILURE_CATEGORY_VALUES: readonly FailureCategory[] = ["transient", "permanent", "unknown"];
 
 import type { Checkpointer, ConditionRegistry, EventBus, NodeRegistry } from "./interfaces.js";
 import { InMemoryStore } from "../../memory-store/src/in-memory-store.js";
@@ -55,7 +61,7 @@ const classifyFailure = (error: unknown): FailureCategory => {
     error !== null &&
     "failureCategory" in error &&
     typeof (error as { failureCategory?: unknown }).failureCategory === "string" &&
-    (FAILURE_CATEGORIES as readonly string[]).includes(
+    (FAILURE_CATEGORY_VALUES as readonly string[]).includes(
       (error as { failureCategory: string }).failureCategory
     )
   ) {

@@ -70,7 +70,9 @@ pub fn validate_graph(def: &GraphDefinition) -> Vec<ValidationError> {
     let mut error_edge_count_by_node: HashMap<&str, u32> = HashMap::new();
     for edge in &def.edges {
         if edge.edge_type == EdgeType::Error {
-            *error_edge_count_by_node.entry(edge.from.as_str()).or_insert(0) += 1;
+            *error_edge_count_by_node
+                .entry(edge.from.as_str())
+                .or_insert(0) += 1;
         }
     }
     for (node_id, count) in &error_edge_count_by_node {
