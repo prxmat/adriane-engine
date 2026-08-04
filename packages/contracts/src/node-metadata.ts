@@ -75,6 +75,16 @@ export const AgentNodeMetadataSchema = z.object({
    */
   mcpConnectionId: z.string().min(1).optional(),
   /**
+   * Issue #566 G19 — attach one or more governed action-tool connectors to this agent, mid-run.
+   * Keyed by provider id (e.g. `"slack"`), value is a tenant-owned `connector_connections` row id.
+   * Same resolution shape as `mcpConnectionId` (control plane resolves the connection, discovers
+   * that provider's action tools, merges them into `toolNames`/`approvalToolNames` before the run
+   * reaches this carrier — the Rust engine never resolves a connection itself), generalized to a
+   * map so adding the NEXT provider (Linear, Salesforce, ...) never needs another engine field/
+   * release — only a new product-side adapter keyed into the same map.
+   */
+  actionConnections: z.record(z.string().min(1), z.string().min(1)).optional(),
+  /**
    * ADR 0025 phase 3d — the resolved EFFICIENCY middleware list. A discriminated union of
    * efficiency-only kinds (compress / terse / contextBudget): a GOVERNANCE kind (redact /
    * approvalGate / fsPolicy) fails this schema BY CONSTRUCTION, so any consumer that runs it

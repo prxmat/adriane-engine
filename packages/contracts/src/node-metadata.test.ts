@@ -58,6 +58,19 @@ describe("@adriane-ai/contracts — AgentNodeMetadataSchema", () => {
     expect(AgentNodeMetadataSchema.safeParse({ mcpConnectionId: "" }).success).toBe(false);
   });
 
+  // Issue #566 G19 — governed action-tool connectors, generalized (keyed by provider id).
+  it("keeps actionConnections through a parse round-trip", () => {
+    const parsed = AgentNodeMetadataSchema.parse({
+      provider: "anthropic",
+      actionConnections: { slack: "conn-1" }
+    });
+    expect(parsed.actionConnections).toEqual({ slack: "conn-1" });
+  });
+
+  it("rejects an actionConnections entry with an empty value", () => {
+    expect(AgentNodeMetadataSchema.safeParse({ actionConnections: { slack: "" } }).success).toBe(false);
+  });
+
   // ADR 0025 phase 3d — the persisted resolvedMiddleware gate.
   it("keeps an efficiency-only resolvedMiddleware list through a parse round-trip", () => {
     const parsed = AgentNodeMetadataSchema.parse({
