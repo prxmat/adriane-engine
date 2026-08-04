@@ -77,6 +77,29 @@ describe("@adriane-ai/graph-sdk", () => {
     expect(reached).toEqual(["high"]);
   });
 
+  it("routes to a declared error edge once retries are exhausted, instead of failing the run (ADR 0076)", async () => {
+    const reached: string[] = [];
+    const app = createGraph({ name: "error-branch" })
+      .node("flaky", {
+        type: "action",
+        handler: async () => {
+          throw new Error("always fails");
+        },
+        retryPolicy: { maxAttempts: 2, backoffMs: 0 }
+      })
+      .node("handler", async () => {
+        reached.push("handler");
+        return {};
+      })
+      .errorEdge("flaky", "handler")
+      .compile();
+
+    const result = await app.run();
+
+    expect(result.status).toBe("completed");
+    expect(reached).toEqual(["handler"]);
+  });
+
   it("suspends at a human gate and resumes from the checkpoint", async () => {
     const app = createGraph({ name: "approval-flow" })
       .channel("approved", { type: "boolean", default: false })

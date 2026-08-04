@@ -295,6 +295,7 @@ fn edge_type_label(edge_type: &adriane_graph_core::EdgeType) -> &'static str {
     match edge_type {
         adriane_graph_core::EdgeType::Default => "default",
         adriane_graph_core::EdgeType::Conditional => "conditional",
+        adriane_graph_core::EdgeType::Error => "error",
     }
 }
 
@@ -323,6 +324,13 @@ fn format_event(event: &RunEvent) -> String {
         RunEvent::RunResumed { node_id, .. } => format!("run_resumed    {node_id}"),
         RunEvent::RunCompleted { .. } => "run_completed".to_owned(),
         RunEvent::RunFailed { error, .. } => format!("run_failed     {error}"),
+        // ADR 0076 — retries exhausted but an error edge rerouted instead of failing the run.
+        RunEvent::NodeErrorRouted {
+            node_id,
+            to_node_id,
+            category,
+            ..
+        } => format!("node_error_routed {node_id} -> {to_node_id} ({category:?})"),
         // ADR 0033 phase 13: observational per-token delta. Rendered compactly (and
         // only ever reachable here if a caller opts into streaming); never durable.
         RunEvent::TokenDelta {

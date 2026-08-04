@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use adriane_graph_core::{GraphState, NodeId, RunId};
+use adriane_graph_core::{FailureCategory, GraphState, NodeId, RunId};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -38,6 +38,11 @@ pub struct NodeOutput {
     /// advance, and the runtime retries per the node's `retryPolicy` (the TS
     /// analogue of a handler throwing).
     pub failure: Option<String>,
+    /// ADR 0076 — optional classification of `failure`, set via
+    /// `NodeOutput::failure_with_category`. `None` (the common case, e.g. plain
+    /// `NodeOutput::failure(reason)`) is treated as `FailureCategory::Unknown` at
+    /// emission time.
+    pub failure_category: Option<FailureCategory>,
     /// Durable timer: when set, the run applies this node's update, then SUSPENDS until
     /// an external scheduler resumes it — `wake_at` (an opaque deadline string, e.g.
     /// ISO-8601 / epoch-millis) is **data**, the engine never reads a clock or sleeps.
@@ -79,6 +84,16 @@ impl NodeOutput {
     pub fn failure(reason: impl Into<String>) -> Self {
         NodeOutput {
             failure: Some(reason.into()),
+            ..NodeOutput::default()
+        }
+    }
+
+    /// ADR 0076 — a failure the handler classifies itself (e.g. an HTTP-calling component
+    /// distinguishing a 429 as `Transient`). Any other failure defaults to `Unknown`.
+    pub fn failure_with_category(reason: impl Into<String>, category: FailureCategory) -> Self {
+        NodeOutput {
+            failure: Some(reason.into()),
+            failure_category: Some(category),
             ..NodeOutput::default()
         }
     }

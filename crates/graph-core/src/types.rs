@@ -22,6 +22,25 @@ pub enum NodeType {
 pub enum EdgeType {
     Default,
     Conditional,
+    /// ADR 0076 — routes from a node to a designated handler once its `retry_policy` is
+    /// exhausted, instead of failing the whole run. Absent (the common case): failure
+    /// behavior is unchanged. Mirrors the TS `EDGE_TYPES` addition byte-for-byte
+    /// (`"error"` on the wire).
+    Error,
+}
+
+/// ADR 0076 — coarse classification of why a node's handler failed, carried on
+/// `NodeFailed`/`NodeErrorRouted` events so a governed error path can react differently to
+/// a transient failure vs a permanent one. A handler opts in via
+/// `NodeOutput::failure_with_category`; absent, it defaults to `Unknown`. Mirrors the TS
+/// `FailureCategory` (kebab-case on the wire: `"transient" | "permanent" | "unknown"`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FailureCategory {
+    Transient,
+    Permanent,
+    #[default]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

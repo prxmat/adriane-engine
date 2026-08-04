@@ -157,6 +157,25 @@ export const validateGraph = (def: GraphDefinition): GraphValidationError[] => {
     }
   }
 
+  const errorEdgeCountByNode = new Map<string, number>();
+  for (const edge of def.edges) {
+    if (edge.type !== "error") {
+      continue;
+    }
+    errorEdgeCountByNode.set(edge.from, (errorEdgeCountByNode.get(edge.from) ?? 0) + 1);
+  }
+  for (const [nodeId, count] of errorEdgeCountByNode) {
+    if (count > 1) {
+      errors.push(
+        createError(
+          GRAPH_VALIDATION_ERROR_CODES.MULTIPLE_ERROR_EDGES,
+          `Node '${nodeId}' has ${count} outgoing error edges; at most one is allowed (ambiguous routing).`,
+          ["edges"]
+        )
+      );
+    }
+  }
+
   if (!nodeIds.has(def.entryNodeId)) {
     errors.push(
       createError(

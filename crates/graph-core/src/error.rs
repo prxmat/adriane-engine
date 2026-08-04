@@ -12,6 +12,8 @@ pub enum ValidationErrorCode {
     InvalidEdgeReference,
     CycleDetected,
     InvalidConditionFormat,
+    /// ADR 0076 — a node has more than one outgoing `"error"` edge (ambiguous routing).
+    MultipleErrorEdges,
 }
 
 /// A single graph validation failure. `validate_graph` returns a list of these

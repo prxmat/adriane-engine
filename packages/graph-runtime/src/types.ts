@@ -1,4 +1,4 @@
-import type { ChannelsSchema, GraphState, NodeId, RunId } from "@adriane-ai/graph-core";
+import type { ChannelsSchema, EdgeId, FailureCategory, GraphState, NodeId, RunId } from "@adriane-ai/graph-core";
 
 export type CheckpointId = string & { readonly __brand: "CheckpointId" };
 
@@ -24,6 +24,22 @@ export type RunEvent =
       nodeId: NodeId;
       error: string;
       attempt: number;
+      category: FailureCategory;
+      timestamp: string;
+    }
+  // ADR 0076 (product repo) — emitted instead of `run_failed` when `retryPolicy` is exhausted AND
+  // the failed node has an outgoing `"error"` edge: the run is rerouted to `toNodeId` rather than
+  // terminated. This is the auditable "governed error branch" signal — a retry alone (already
+  // covered by `node_failed`'s repeated emissions per attempt) stays silent-ish; an actual reroute
+  // of run control flow gets its own event so it's unambiguous in the journal which happened.
+  | {
+      type: "node_error_routed";
+      runId: RunId;
+      nodeId: NodeId;
+      errorEdgeId: EdgeId;
+      toNodeId: NodeId;
+      category: FailureCategory;
+      error: string;
       timestamp: string;
     }
   | {

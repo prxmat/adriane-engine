@@ -1,6 +1,6 @@
 //! Runtime value types: checkpoints and the run-event vocabulary.
 
-use adriane_graph_core::{GraphState, NodeId, RunId};
+use adriane_graph_core::{EdgeId, FailureCategory, GraphState, NodeId, RunId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -49,6 +49,22 @@ pub enum RunEvent {
         error: String,
         /// 1-based attempt number — one `NodeFailed` is emitted per failed attempt.
         attempt: u32,
+        /// ADR 0076. Defaults to `Unknown` when the handler didn't classify its failure.
+        #[serde(default)]
+        category: FailureCategory,
+        timestamp: String,
+    },
+    /// ADR 0076 — emitted instead of `RunFailed` when `retryPolicy` is exhausted AND the
+    /// failed node has an outgoing `"error"` edge: the run reroutes to `to_node_id` rather
+    /// than terminating. The auditable "governed error branch" signal — unambiguous in the
+    /// journal that a reroute happened, distinct from `NodeFailed`'s per-attempt emissions.
+    NodeErrorRouted {
+        run_id: RunId,
+        node_id: NodeId,
+        error_edge_id: EdgeId,
+        to_node_id: NodeId,
+        category: FailureCategory,
+        error: String,
         timestamp: String,
     },
     RunSuspended {
