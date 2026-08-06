@@ -31,7 +31,12 @@ export const KbSearchHitDtoSchema = z.object({
   title: z.string().optional()
 });
 
-/** Body for ingesting raw documents into a namespace — each is embedded then stored. */
+/**
+ * Body for ingesting raw documents into a namespace — each is embedded then stored. `.max(500)`
+ * (issue #453, security audit 2026-07-20 MEDIUM finding): the array itself had no upper bound,
+ * so a single request could enqueue an unbounded embedding workload. 500 comfortably covers a
+ * real batch ingest without leaving the endpoint effectively unbounded.
+ */
 export const IngestKbDocumentsDtoSchema = z.object({
   documents: z
     .array(
@@ -41,6 +46,7 @@ export const IngestKbDocumentsDtoSchema = z.object({
       })
     )
     .min(1)
+    .max(500)
 });
 
 /** One file of an OKF bundle: a bundle-relative path and its raw markdown contents. */
@@ -51,7 +57,9 @@ export const OkfFileSchema = z.object({
 
 /** Body for ingesting an OKF bundle — a set of markdown (+frontmatter) files. */
 export const IngestOkfBundleDtoSchema = z.object({
-  files: z.array(OkfFileSchema).min(1)
+  // Same unbounded-array gap as IngestKbDocumentsDtoSchema.documents (issue #453) — capped for
+  // the same reason: a client-supplied file array with no upper bound.
+  files: z.array(OkfFileSchema).min(1).max(500)
 });
 
 /** An OKF bundle returned by export — markdown files reconstructed from stored documents. */
