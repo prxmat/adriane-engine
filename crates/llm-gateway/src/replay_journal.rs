@@ -255,6 +255,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recording_gateway_journals_the_run_id_set_on_the_request() {
+        let rec = recording_over_mock(vec![resp("r1")]);
+        rec.complete(req_for_run("a", Some("run-1:node-1")))
+            .await
+            .unwrap();
+        let journal = rec.journal();
+        assert_eq!(
+            journal.calls[0].request.run_id.as_deref(),
+            Some("run-1:node-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_gateway_discriminates_identical_requests_by_run_id() {
+        // ADR 0043 D2: a parent run and its subgraph child can make byte-identical LLM
+        // calls (same content). Tagging each request with its own run_id (D1) lets the
+        // EXISTING request == request equality match in take_matching discriminate them
+        // — no separate journal-partitioning logic needed.
+        let journal = LlmJournal {
+            calls: vec![
+                RecordedCall {
+                    request: req_for_run("x", Some("run-1")),
+                    response: resp("parent-answer"),
+                },
+                RecordedCall {
+                    request: req_for_run("x", Some("run-1:node-1")),
+                    response: resp("child-answer"),
+                },
+            ],
+        };
+        let replay = ReplayGateway::new(journal);
+
+        assert_eq!(
+            replay
+                .complete(req_for_run("x", Some("run-1:node-1")))
+                .await
+                .unwrap()
+                .content,
+            "child-answer"
+        );
+        assert_eq!(
+            replay
+                .complete(req_for_run("x", Some("run-1")))
+                .await
+                .unwrap()
+                .content,
+            "parent-answer"
+        );
+        // An untagged request (run_id: None) matches neither run-tagged entry — proving
+        // discrimination is real, not a coincidence of consumption order.
+        match replay.complete(req("x")).await {
+            Err(LlmError::ReplayJournalMiss(_)) => {}
+            other => panic!("expected ReplayJournalMiss, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn replay_gateway_stream_reemits_recorded_content_as_one_delta() {
         let rec = recording_over_mock(vec![resp("hello world")]);
         rec.complete(req("a")).await.unwrap();
