@@ -165,6 +165,7 @@ async fn compress_short_term(
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         })
         .await?;
 

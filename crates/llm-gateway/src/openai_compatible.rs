@@ -819,6 +819,7 @@ mod tests {
             tools: None,
             max_tokens: None,
             temperature: None,
+            run_id: None,
             response_format: None,
         }
     }
@@ -1288,6 +1289,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         };
         let response = to_response(
             &request,
@@ -1323,6 +1325,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         };
         let response = to_response(
             &request,

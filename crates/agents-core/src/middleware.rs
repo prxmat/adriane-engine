@@ -769,6 +769,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         };
         let request = stack.before_model(request, &ctx).await.unwrap();
         let response = LlmResponse {
@@ -927,6 +928,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         }
     }
 

@@ -111,6 +111,7 @@ impl PlanExecuteAgent {
                 max_tokens: None,
                 temperature: None,
                 response_format: None,
+                run_id: None,
             })
             .await?;
         Ok(parse_plan(&response.content, objective))
