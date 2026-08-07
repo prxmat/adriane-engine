@@ -702,6 +702,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         }
     }
 
@@ -1040,6 +1041,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         };
         let response = to_response(&request, "gemini-2.0".to_owned(), raw);
         assert_eq!(response.content, "Hello");
@@ -1068,6 +1070,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         };
         let response = to_response(&request, "gemini-2.0".to_owned(), raw);
         let calls = response.tool_calls.expect("tool call assembled");

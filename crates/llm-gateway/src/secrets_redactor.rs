@@ -150,6 +150,7 @@ mod tests {
             tools: None,
             max_tokens: None,
             temperature: None,
+            run_id: None,
             response_format: None,
         }
     }

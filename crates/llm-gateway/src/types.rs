@@ -221,6 +221,14 @@ pub struct LlmRequest {
     /// adapter translates it to its provider wire form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+    /// The run (or subgraph child run, `{parent_run_id}:{node_id}` — same deterministic
+    /// convention as `subgraph_run_id`) that made this call (ADR 0043). Additive + optional:
+    /// `None` for any request built before this field existed. Set by the agent loop from its
+    /// own `state.run_id`; recorded verbatim onto `RecordedCall` (it's simply part of this
+    /// struct) so a recursive replay's existing `request == request` match also discriminates
+    /// by run, without any separate journal-partitioning logic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

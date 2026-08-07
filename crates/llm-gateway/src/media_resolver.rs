@@ -90,6 +90,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: None,
         }
     }
 

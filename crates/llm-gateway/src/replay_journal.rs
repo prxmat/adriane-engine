@@ -177,6 +177,12 @@ mod tests {
     use crate::types::{LlmMessage, LlmProvider, LlmResponse, LlmUsage};
 
     fn req(content: &str) -> LlmRequest {
+        req_for_run(content, None)
+    }
+
+    /// Same as [`req`], but tagged for a specific run (ADR 0043) — lets tests exercise the
+    /// run-scoped matching a recursive (subgraph) replay depends on.
+    fn req_for_run(content: &str, run_id: Option<&str>) -> LlmRequest {
         LlmRequest {
             provider: LlmProvider::Openai,
             model: "m".to_owned(),
@@ -191,6 +197,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             response_format: None,
+            run_id: run_id.map(str::to_owned),
         }
     }
 
