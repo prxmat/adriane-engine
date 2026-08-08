@@ -60,7 +60,7 @@ pub fn agent_node_handler(
                     &Value::Null,
                     &state.channels,
                     &approved,
-                    Some(state.run_id.as_str()),
+                    Some(logical_run_id(state.run_id.as_str())),
                 )
                 .await
             {
@@ -152,7 +152,14 @@ pub fn map_node_handler(
             // journal (and later replay-match) distinctly. Built upfront (not per-future) so
             // each borrowed `&str` outlives the awaited futures below.
             let spawn_run_ids: Vec<String> = (0..items.len())
-                .map(|index| format!("{}:{}:{}", state.run_id.as_str(), node_id, index))
+                .map(|index| {
+                    format!(
+                        "{}:{}:{}",
+                        logical_run_id(state.run_id.as_str()),
+                        node_id,
+                        index
+                    )
+                })
                 .collect();
             let futures = items.iter().enumerate().map(|(index, item)| {
                 agent.run_scoped(
@@ -190,6 +197,26 @@ pub fn map_node_handler(
     })
 }
 
+/// Strip a trailing `:fork:<n>` replay-fork suffix (ADR 0043) — repeated, for a fork of a
+/// fork. `GraphRuntime::replay_from` gives a replayed run a NEW `run_id` (`create_fork_run_id`,
+/// `runtime.rs`) so its checkpoint history never collides with the original's, but for LLM
+/// request journal-tagging purposes a replay's calls are logically the SAME run/subgraph as
+/// the record pass that produced the journal. Untagged, `ReplayGateway`'s request-equality
+/// match (which now includes `run_id`) would miss on every replay — this keeps tagging
+/// fork-invariant while leaving `state.run_id` itself (checkpoints, subgraph child ids, event
+/// routing) untouched everywhere else.
+fn logical_run_id(run_id: &str) -> &str {
+    let mut id = run_id;
+    while let Some((base, suffix)) = id.rsplit_once(":fork:") {
+        if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) {
+            id = base;
+        } else {
+            break;
+        }
+    }
+    id
+}
+
 /// Read the granted tool names from the channels — tolerant of an absent, `null`,
 /// or non-string-array channel (all mean "nothing granted").
 fn approved_tool_names(channels: &BTreeMap<String, Value>) -> HashSet<String> {
@@ -200,6 +227,17 @@ fn approved_tool_names(channels: &BTreeMap<String, Value>) -> HashSet<String> {
             .collect(),
         _ => HashSet::new(),
     }
+}
+
+#[test]
+fn logical_run_id_strips_one_or_several_fork_suffixes() {
+    assert_eq!(logical_run_id("run-1"), "run-1");
+    assert_eq!(logical_run_id("run-1:fork:7"), "run-1");
+    assert_eq!(logical_run_id("run-1:fork:7:fork:2"), "run-1");
+    // A node id that happens to contain "fork" but not the exact ":fork:<digits>" shape
+    // is left alone — this is a suffix strip, not a substring scrub.
+    assert_eq!(logical_run_id("run-1:forklift"), "run-1:forklift");
+    assert_eq!(logical_run_id("run-1:node-a"), "run-1:node-a");
 }
 
 #[cfg(test)]
