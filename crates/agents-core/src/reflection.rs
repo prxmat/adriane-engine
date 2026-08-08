@@ -121,6 +121,7 @@ pub async fn reflect_once(
     model: &str,
     draft: &str,
     score_threshold: f64,
+    run_id: Option<&str>,
 ) -> Result<(bool, Vec<String>), LlmError> {
     let response = gateway
         .complete(LlmRequest {
@@ -135,7 +136,7 @@ pub async fn reflect_once(
             max_tokens: None,
             temperature: None,
             response_format: None,
-            run_id: None,
+            run_id: run_id.map(str::to_owned),
         })
         .await?;
     Ok(requests_revision(&response.content, score_threshold))

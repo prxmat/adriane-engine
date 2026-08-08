@@ -55,7 +55,15 @@ pub fn agent_node_handler(
         let todos_channel = todos_channel.clone();
         Box::pin(async move {
             let approved = approved_tool_names(&state.channels);
-            match agent.run(&Value::Null, &state.channels, &approved).await {
+            match agent
+                .run(
+                    &Value::Null,
+                    &state.channels,
+                    &approved,
+                    Some(logical_run_id(state.run_id.as_str())),
+                )
+                .await
+            {
                 Ok(result) => {
                     let requires_review = result.requires_human_review;
                     // Capture the todo list before `result` is consumed by `to_value`.
@@ -117,12 +125,14 @@ pub fn agent_node_handler(
 ///   the whole node (parity with [`agent_node_handler`]).
 pub fn map_node_handler(
     agent: Arc<ReActAgent>,
+    node_id: String,
     over_channel: String,
     join_at: String,
     suspend_for_approval: bool,
 ) -> NodeHandler {
     Box::new(move |state: GraphState| {
         let agent = Arc::clone(&agent);
+        let node_id = node_id.clone();
         let over_channel = over_channel.clone();
         let join_at = join_at.clone();
         Box::pin(async move {
@@ -136,8 +146,29 @@ pub fn map_node_handler(
             // The `enumerate` index is the spawn id (ADR 0033 phase 13b): it equals the
             // deterministic merge order at `join_at`, so any token deltas a spawn streams
             // are demultiplexable by `spawnId` even though they arrive interleaved.
+            // Each spawn's run_id (ADR 0043) is `{run_id}:{node_id}:{index}` — same
+            // deterministic convention `subgraph_run_id`/the graph-runtime map fan-out use
+            // (`runtime.rs`) — so concurrent spawns making a byte-identical LLM call still
+            // journal (and later replay-match) distinctly. Built upfront (not per-future) so
+            // each borrowed `&str` outlives the awaited futures below.
+            let spawn_run_ids: Vec<String> = (0..items.len())
+                .map(|index| {
+                    format!(
+                        "{}:{}:{}",
+                        logical_run_id(state.run_id.as_str()),
+                        node_id,
+                        index
+                    )
+                })
+                .collect();
             let futures = items.iter().enumerate().map(|(index, item)| {
-                agent.run_scoped(item, &state.channels, &approved, Some(index as u32))
+                agent.run_scoped(
+                    item,
+                    &state.channels,
+                    &approved,
+                    Some(index as u32),
+                    Some(spawn_run_ids[index].as_str()),
+                )
             });
             let results = futures_util::future::join_all(futures).await;
 
@@ -166,6 +197,26 @@ pub fn map_node_handler(
     })
 }
 
+/// Strip a trailing `:fork:<n>` replay-fork suffix (ADR 0043) — repeated, for a fork of a
+/// fork. `GraphRuntime::replay_from` gives a replayed run a NEW `run_id` (`create_fork_run_id`,
+/// `runtime.rs`) so its checkpoint history never collides with the original's, but for LLM
+/// request journal-tagging purposes a replay's calls are logically the SAME run/subgraph as
+/// the record pass that produced the journal. Untagged, `ReplayGateway`'s request-equality
+/// match (which now includes `run_id`) would miss on every replay — this keeps tagging
+/// fork-invariant while leaving `state.run_id` itself (checkpoints, subgraph child ids, event
+/// routing) untouched everywhere else.
+fn logical_run_id(run_id: &str) -> &str {
+    let mut id = run_id;
+    while let Some((base, suffix)) = id.rsplit_once(":fork:") {
+        if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) {
+            id = base;
+        } else {
+            break;
+        }
+    }
+    id
+}
+
 /// Read the granted tool names from the channels — tolerant of an absent, `null`,
 /// or non-string-array channel (all mean "nothing granted").
 fn approved_tool_names(channels: &BTreeMap<String, Value>) -> HashSet<String> {
@@ -176,6 +227,17 @@ fn approved_tool_names(channels: &BTreeMap<String, Value>) -> HashSet<String> {
             .collect(),
         _ => HashSet::new(),
     }
+}
+
+#[test]
+fn logical_run_id_strips_one_or_several_fork_suffixes() {
+    assert_eq!(logical_run_id("run-1"), "run-1");
+    assert_eq!(logical_run_id("run-1:fork:7"), "run-1");
+    assert_eq!(logical_run_id("run-1:fork:7:fork:2"), "run-1");
+    // A node id that happens to contain "fork" but not the exact ":fork:<digits>" shape
+    // is left alone — this is a suffix strip, not a substring scrub.
+    assert_eq!(logical_run_id("run-1:forklift"), "run-1:forklift");
+    assert_eq!(logical_run_id("run-1:node-a"), "run-1:node-a");
 }
 
 #[cfg(test)]
@@ -422,6 +484,7 @@ mod tests {
             NodeId::from("fanner"),
             map_node_handler(
                 Arc::new(agent),
+                "fanner".to_owned(),
                 "items".to_owned(),
                 "report".to_owned(),
                 false,
@@ -461,6 +524,7 @@ mod tests {
             NodeId::from("fanner"),
             map_node_handler(
                 Arc::new(agent),
+                "fanner".to_owned(),
                 "items".to_owned(),
                 "report".to_owned(),
                 false,
@@ -475,6 +539,74 @@ mod tests {
         assert_eq!(
             done.channels.get("report").and_then(Value::as_array),
             Some(&vec![])
+        );
+    }
+
+    /// A gateway that records the `run_id` of every request it sees (ADR 0043).
+    #[derive(Default)]
+    struct RunIdCapturingGateway {
+        seen: std::sync::Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl adriane_llm_gateway::LlmGateway for RunIdCapturingGateway {
+        async fn complete(
+            &self,
+            request: adriane_llm_gateway::LlmRequest,
+        ) -> Result<LlmResponse, adriane_llm_gateway::LlmError> {
+            self.seen.lock().expect("lock").push(request.run_id);
+            Ok(LlmResponse {
+                content: "FINAL: done".to_owned(),
+                tool_calls: None,
+                stop_reason: Some("end_turn".to_owned()),
+                usage: LlmUsage::default(),
+                model: "mock".to_owned(),
+                provider: LlmProvider::Anthropic,
+                content_blocks: None,
+            })
+        }
+    }
+
+    /// Each `mapAgents` spawn's `LlmRequest.run_id` (ADR 0043) is the deterministic
+    /// `{run_id}:{node_id}:{index}` — the SAME convention `subgraph_run_id`/the
+    /// graph-runtime map fan-out use (`runtime.rs`) — so concurrent spawns making a
+    /// byte-identical LLM call still journal distinctly.
+    #[tokio::test]
+    async fn map_node_tags_each_spawns_request_with_its_deterministic_run_id() {
+        let gateway = Arc::new(RunIdCapturingGateway::default());
+        let agent = ReActAgent::new("worker", "sub-agent", gateway.clone());
+
+        let mut nodes = InMemoryNodeRegistry::new();
+        nodes.register(
+            NodeId::from("fanner"),
+            map_node_handler(
+                Arc::new(agent),
+                "fanner".to_owned(),
+                "items".to_owned(),
+                "report".to_owned(),
+                false,
+            ),
+        );
+
+        let runtime = GraphRuntime::new(map_graph(), nodes, InMemoryConditionRegistry::new());
+        runtime
+            .start(
+                RunId::from("run-map-ids"),
+                [("items".to_owned(), json!(["x", "y"]))]
+                    .into_iter()
+                    .collect(),
+            )
+            .await
+            .unwrap();
+
+        let mut seen: Vec<Option<String>> = gateway.seen.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                Some("run-map-ids:fanner:0".to_owned()),
+                Some("run-map-ids:fanner:1".to_owned()),
+            ]
         );
     }
 

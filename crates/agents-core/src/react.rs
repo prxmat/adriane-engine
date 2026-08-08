@@ -225,8 +225,9 @@ impl ReActAgent {
         input: &Value,
         channels: &BTreeMap<String, Value>,
         approved_tool_names: &HashSet<String>,
+        run_id: Option<&str>,
     ) -> Result<AgentResult, LlmError> {
-        self.run_scoped(input, channels, approved_tool_names, None)
+        self.run_scoped(input, channels, approved_tool_names, None, run_id)
             .await
     }
 
@@ -235,12 +236,18 @@ impl ReActAgent {
     /// interleaved streams of concurrent spawns. A top-level agent node passes `None`
     /// (via [`Self::run`]). Behaviourally identical to `run` apart from the delta tag; with
     /// no `event_sink` installed, `spawn_id` is unused.
+    ///
+    /// `run_id` (ADR 0043) is the run — or subgraph child run, `{parent_run_id}:{node_id}` —
+    /// this loop is executing for. Tagged onto every `LlmRequest` it builds so a recorded
+    /// journal can later discriminate a parent's calls from a recursively-replayed child's.
+    /// `None` is honest for a caller with no run context (e.g. a unit test).
     pub async fn run_scoped(
         &self,
         input: &Value,
         channels: &BTreeMap<String, Value>,
         approved_tool_names: &HashSet<String>,
         spawn_id: Option<u32>,
+        run_id: Option<&str>,
     ) -> Result<AgentResult, LlmError> {
         let mut trace: Vec<String> = Vec::new();
         let mut approval_requests: Vec<ApprovalRequestItem> = Vec::new();
@@ -292,6 +299,7 @@ impl ReActAgent {
                     iteration: 0,
                     approved_tool_names,
                     channels,
+                    run_id,
                 },
             )
             .await?
@@ -317,6 +325,7 @@ impl ReActAgent {
                 iteration,
                 approved_tool_names,
                 channels,
+                run_id,
             };
             // ADR 0025: `before_model` (fail-closed — an Err short-circuits the run).
             let request = self
@@ -331,7 +340,7 @@ impl ReActAgent {
                         max_tokens: None,
                         temperature: None,
                         response_format: None,
-                        run_id: None,
+                        run_id: run_id.map(str::to_owned),
                     },
                     &ctx,
                 )
@@ -471,6 +480,7 @@ impl ReActAgent {
                     iteration: self.max_iterations,
                     approved_tool_names,
                     channels,
+                    run_id,
                 },
             )
             .await?;
@@ -693,6 +703,52 @@ mod tests {
         Arc::new(gateway)
     }
 
+    /// A gateway that records the `run_id` of every request it sees (ADR 0043) — used to
+    /// prove the REAL value passed to `run`/`run_scoped` actually reaches the `LlmRequest`,
+    /// not just that the parameter compiles.
+    #[derive(Default)]
+    struct RunIdCapturingGateway {
+        seen: Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl LlmGateway for RunIdCapturingGateway {
+        async fn complete(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.seen.lock().expect("lock").push(request.run_id);
+            Ok(text("FINAL: done"))
+        }
+    }
+
+    #[tokio::test]
+    async fn run_tags_every_llm_request_with_the_given_run_id() {
+        let gateway = Arc::new(RunIdCapturingGateway::default());
+        let agent = ReActAgent::new("a", "t", gateway.clone());
+        agent
+            .run(
+                &json!({}),
+                &BTreeMap::new(),
+                &HashSet::new(),
+                Some("run-42"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            gateway.seen.lock().unwrap().as_slice(),
+            &[Some("run-42".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_with_no_run_id_tags_the_request_none() {
+        let gateway = Arc::new(RunIdCapturingGateway::default());
+        let agent = ReActAgent::new("a", "t", gateway.clone());
+        agent
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
+            .await
+            .unwrap();
+        assert_eq!(gateway.seen.lock().unwrap().as_slice(), &[None]);
+    }
+
     /// A test [`EventSink`] that records every observed token delta with its tags.
     #[derive(Default)]
     struct RecordingSink {
@@ -733,7 +789,7 @@ mod tests {
             "t",
             streaming_gateway_with(vec![text("FINAL: done")], script.clone()),
         )
-        .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+        .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
         .await
         .unwrap();
 
@@ -745,7 +801,7 @@ mod tests {
             streaming_gateway_with(vec![text("FINAL: done")], script),
         )
         .with_event_sink(sink.clone())
-        .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+        .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
         .await
         .unwrap();
 
@@ -775,7 +831,7 @@ mod tests {
         .with_event_sink(sink.clone());
 
         agent
-            .run_scoped(&json!({}), &BTreeMap::new(), &HashSet::new(), Some(3))
+            .run_scoped(&json!({}), &BTreeMap::new(), &HashSet::new(), Some(3), None)
             .await
             .unwrap();
 
@@ -815,7 +871,10 @@ mod tests {
         channels.insert("topic".to_owned(), json!("cats"));
         let approved = HashSet::new();
 
-        agent.run(&Value::Null, &channels, &approved).await.unwrap();
+        agent
+            .run(&Value::Null, &channels, &approved, None)
+            .await
+            .unwrap();
 
         let req = gateway
             .last
@@ -855,7 +914,10 @@ mod tests {
         channels.insert("topic".to_owned(), json!("cats"));
         let approved = HashSet::new();
 
-        agent.run(&Value::Null, &channels, &approved).await.unwrap();
+        agent
+            .run(&Value::Null, &channels, &approved, None)
+            .await
+            .unwrap();
 
         let req = gateway
             .last
@@ -895,7 +957,7 @@ mod tests {
     async fn final_stops_the_loop() {
         let agent = ReActAgent::new("a", "test agent", gateway_with(vec![text("FINAL: done")]));
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
         assert!(result.reasoning.contains("final:done"));
@@ -929,7 +991,7 @@ mod tests {
         let agent = ReActAgent::new("a", "test agent", gateway_with(vec![tool_turn, final_turn]))
             .with_tools(Arc::new(registry));
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
 
@@ -953,7 +1015,7 @@ mod tests {
         .with_tools(Arc::new(registry));
 
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -977,7 +1039,7 @@ mod tests {
         .with_tools(Arc::new(registry));
 
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1005,7 +1067,7 @@ mod tests {
 
         let approved: HashSet<String> = ["deploy".to_owned()].into_iter().collect();
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &approved)
+            .run(&json!({}), &BTreeMap::new(), &approved, None)
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1041,7 +1103,7 @@ mod tests {
         .with_tools(Arc::new(registry));
 
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
         assert_eq!(*seen.lock().expect("lock"), Some(json!({ "x": 1 })));
@@ -1057,7 +1119,7 @@ mod tests {
             gateway_with(vec![tool_use("missing"), text("FINAL: ok")]),
         );
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
         assert!(result
@@ -1091,7 +1153,7 @@ mod tests {
             gateway_with(vec![text("Here is the answer.\nFINAL: 42")]),
         );
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
         // The suffix after `FINAL:` is the answer; the prefix is dropped.
@@ -1115,7 +1177,7 @@ mod tests {
         let agent = ReActAgent::new("a", "test agent", gateway);
 
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
 
@@ -1189,7 +1251,7 @@ mod tests {
         .with_tools(Arc::new(registry));
 
         let result = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
 
@@ -1255,7 +1317,7 @@ mod tests {
             vec![guarded_call(input_a.clone()), text("FINAL: x")],
         );
         let r = agent
-            .run(&json!({}), &BTreeMap::new(), &HashSet::new())
+            .run(&json!({}), &BTreeMap::new(), &HashSet::new(), None)
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1274,7 +1336,7 @@ mod tests {
         );
         let approved: HashSet<String> = [key_a.clone()].into_iter().collect();
         let r = agent
-            .run(&json!({}), &BTreeMap::new(), &approved)
+            .run(&json!({}), &BTreeMap::new(), &approved, None)
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1288,7 +1350,7 @@ mod tests {
         );
         let approved: HashSet<String> = [key_a].into_iter().collect();
         let r = agent
-            .run(&json!({}), &BTreeMap::new(), &approved)
+            .run(&json!({}), &BTreeMap::new(), &approved, None)
             .await
             .unwrap();
         assert_eq!(
