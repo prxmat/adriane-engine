@@ -185,6 +185,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: approved,
             channels,
+            run_id: None,
         }
     }
 

@@ -1171,6 +1171,7 @@ fn build_map_agent_handler(
     )?;
     Ok(map_node_handler(
         agent,
+        node_id.to_owned(),
         map_spec.over_channel.clone(),
         map_spec.join_at.clone(),
         map_spec.suspend_for_approval,

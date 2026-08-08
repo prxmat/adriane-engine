@@ -68,6 +68,11 @@ pub struct RunCtx<'a> {
     pub iteration: usize,
     pub approved_tool_names: &'a HashSet<String>,
     pub channels: &'a BTreeMap<String, Value>,
+    /// The run (or subgraph child run, `{parent_run_id}:{node_id}`) this loop is executing
+    /// for (ADR 0043). `None` for a caller that hasn't threaded one through yet — every
+    /// existing construction predates this field and stays a no-op via `Default`-less
+    /// explicit `None`.
+    pub run_id: Option<&'a str>,
 }
 
 /// One composable agent middleware. Every hook has a pass-through default, so an impl
@@ -481,7 +486,7 @@ impl AgentMiddleware for ReflectionMiddleware {
     fn name(&self) -> &str {
         "reflection"
     }
-    async fn after_run(&self, result: &mut AgentResult, _ctx: &RunCtx<'_>) -> Result<(), LlmError> {
+    async fn after_run(&self, result: &mut AgentResult, ctx: &RunCtx<'_>) -> Result<(), LlmError> {
         // Fail-open: a critique-call failure must not sink an otherwise-good run. On a rejecting
         // critique, annotate the reasoning (a graph may route on the marker) — but never touch
         // `requires_human_review` (see the type doc: it would re-suspend forever on resume).
@@ -491,6 +496,7 @@ impl AgentMiddleware for ReflectionMiddleware {
             &self.model,
             &result.reasoning,
             self.score_threshold,
+            ctx.run_id,
         )
         .await
         {
@@ -679,6 +685,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: &approved,
             channels: &channels,
+            run_id: None,
         };
         // before_run does not stop, does not mutate.
         let mut conversation = vec![LlmMessage::text("user", "hi")];
@@ -759,6 +766,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: &approved,
             channels: &channels,
+            run_id: None,
         };
         let request = LlmRequest {
             provider: LlmProvider::Anthropic,
@@ -817,6 +825,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: &none,
             channels: &channels,
+            run_id: None,
         };
         assert!(matches!(
             stack.before_tool(&call, &ctx).await.unwrap(),
@@ -829,6 +838,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: &granted,
             channels: &channels,
+            run_id: None,
         };
         assert!(matches!(
             stack.before_tool(&call, &ctx).await.unwrap(),
@@ -869,6 +879,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: &none,
             channels: &channels,
+            run_id: None,
         };
         let key = match stack.before_tool(&call, &ctx).await.unwrap() {
             ToolControl::Gate(item) => {
@@ -886,6 +897,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: &granted,
             channels: &channels,
+            run_id: None,
         };
         assert!(matches!(
             stack.before_tool(&call, &ctx).await.unwrap(),
@@ -914,6 +926,7 @@ mod tests {
             iteration: 0,
             approved_tool_names: approved,
             channels,
+            run_id: None,
         }
     }
 
