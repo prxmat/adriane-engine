@@ -1,22 +1,19 @@
 # ADR 0043 — Recursive replay-as-evidence for subgraph-bearing runs
 
-- Status: **D1/D2/D3 shipped** (2026-08-09, PRs #198/#199/#200/#201). Mathieu chose the full fix
-  (Option A) over the cheaper, honest-gap alternative (Option B) proposed alongside it. Proven
-  end-to-end by `subgraph-replay.rust.test.ts`: a parent + subgraph-child run recorded then
-  replayed with `subgraphs` supplied reproduces BOTH the parent's and the child's LLM output
-  exactly, and omitting `subgraphs` on replay still fails loudly (`SubgraphNotFound`).
-  **A real, KNOWN, NOT-YET-FIXED gap remains**: the "Consequences" backward-compatibility bullet
-  below (backfilling `run_id: None` on historical journals) was never implemented. Any
-  `LlmJournal` recorded BEFORE this change — including a plain single-run journal with no
-  subgraph at all — now degrades on replay: every `RecordedCall` in it deserializes with
-  `run_id: None`, but the new replay code tags its reconstructed requests with `Some(<run_id>)`,
-  so `ReplayGateway`'s request-equality match (which now includes `run_id`) misses on EVERY
-  call, not just subgraph ones. **Confirmed empirically** (a real record → strip `runId` from
-  the journal → replay round-trip): the run does NOT throw and reports `status: "completed"` —
-  but the affected node's output silently degrades to `{"error": "replay journal has no
-  recorded response for this request: ..."}` instead of the real recorded answer. This is a
-  silent-ish regression for any already-persisted replay evidence, not just a missing feature —
-  do not treat old journals as safe to replay under this code until the backfill lands.
+- Status: **Shipped** — D1/D2/D3 + the backward-compat backfill (2026-08-09, PRs
+  #198/#199/#200/#201/#203). Mathieu chose the full fix (Option A) over the cheaper, honest-gap
+  alternative (Option B) proposed alongside it. Proven end-to-end by
+  `subgraph-replay.rust.test.ts`: a parent + subgraph-child run recorded then replayed with
+  `subgraphs` supplied reproduces BOTH the parent's and the child's LLM output exactly, and
+  omitting `subgraphs` on replay still fails loudly (`SubgraphNotFound`).
+  The backward-compat gap this status line previously flagged as open (a pre-fix `LlmJournal`
+  degrading on replay — every `RecordedCall` deserializing with `run_id: None` while the new
+  replay code tags reconstructed requests with `Some(<run_id>)`, so `ReplayGateway`'s
+  request-equality match missed on EVERY call) is now closed by PR #203:
+  `ReplayMode::resolve` backfills `run_id: None -> Some(top-level run id)` on every call in a
+  loaded journal before constructing the `ReplayGateway`. Confirmed both by a unit test and an
+  end-to-end empirical repro (record → strip `runId` → replay → now reproduces the exact
+  recorded answer instead of degrading to an error).
 - Date: 2026-08-07
 - Deciders: Mathieu (owner)
 - Follow-up to issue #184 (Tranche 2 of adriane#485/#512) — investigated and proposed via that
@@ -90,13 +87,12 @@ because the journal underneath it can actually support it.
 
 ## Consequences
 
-- **Backward compatibility for already-persisted journals**: an `LlmJournal` recorded BEFORE this
-  change has no `run_id` on its calls. `RecordedCall.run_id` should default/deserialize to the
-  TOP-level run's own id for historical journals (every pre-fix journal was single-run by
-  construction — no subgraphs were ever replay-capable, so every recorded call legitimately
-  belongs to the top-level run). A historical journal replayed under the NEW code should behave
-  identically to before: replaying the top level filters to "calls tagged with the top-level run
-  id," which is all of them.
+- **Backward compatibility for already-persisted journals — SHIPPED (PR #203)**: an `LlmJournal`
+  recorded BEFORE this change has no `run_id` on its calls. `ReplayMode::resolve` backfills every
+  `RecordedCall.run_id: None` to the TOP-level run's own id for historical journals (every
+  pre-fix journal was single-run by construction — no subgraphs were ever replay-capable, so
+  every recorded call legitimately belongs to the top-level run). A historical journal replayed
+  under the NEW code behaves identically to before.
 - **`verifyReplayDecisions`/`RunEvidenceView` (product side)**: once recursive replay is real,
   the "whole-tree `chainVerified`" work (Tranche 1, PR #519) and this recursive `replayVerified`
   need to agree on the SAME child-discovery mechanism (parent-run back-references) — not designed
