@@ -1,9 +1,22 @@
 # ADR 0043 — Recursive replay-as-evidence for subgraph-bearing runs
 
-- Status: **Accepted — Option A** (2026-08-07). Mathieu chose the full fix over the cheaper,
-  honest-gap alternative (Option B) proposed alongside it. No code shipped yet — the mechanism
-  below still needs review before implementation, per this repo's own rule for a public-API,
-  replay-as-evidence change (the product's stated moat).
+- Status: **D1/D2/D3 shipped** (2026-08-09, PRs #198/#199/#200/#201). Mathieu chose the full fix
+  (Option A) over the cheaper, honest-gap alternative (Option B) proposed alongside it. Proven
+  end-to-end by `subgraph-replay.rust.test.ts`: a parent + subgraph-child run recorded then
+  replayed with `subgraphs` supplied reproduces BOTH the parent's and the child's LLM output
+  exactly, and omitting `subgraphs` on replay still fails loudly (`SubgraphNotFound`).
+  **A real, KNOWN, NOT-YET-FIXED gap remains**: the "Consequences" backward-compatibility bullet
+  below (backfilling `run_id: None` on historical journals) was never implemented. Any
+  `LlmJournal` recorded BEFORE this change — including a plain single-run journal with no
+  subgraph at all — now degrades on replay: every `RecordedCall` in it deserializes with
+  `run_id: None`, but the new replay code tags its reconstructed requests with `Some(<run_id>)`,
+  so `ReplayGateway`'s request-equality match (which now includes `run_id`) misses on EVERY
+  call, not just subgraph ones. **Confirmed empirically** (a real record → strip `runId` from
+  the journal → replay round-trip): the run does NOT throw and reports `status: "completed"` —
+  but the affected node's output silently degrades to `{"error": "replay journal has no
+  recorded response for this request: ..."}` instead of the real recorded answer. This is a
+  silent-ish regression for any already-persisted replay evidence, not just a missing feature —
+  do not treat old journals as safe to replay under this code until the backfill lands.
 - Date: 2026-08-07
 - Deciders: Mathieu (owner)
 - Follow-up to issue #184 (Tranche 2 of adriane#485/#512) — investigated and proposed via that
