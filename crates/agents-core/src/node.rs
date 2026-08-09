@@ -55,12 +55,13 @@ pub fn agent_node_handler(
         let todos_channel = todos_channel.clone();
         Box::pin(async move {
             let approved = approved_tool_names(&state.channels);
+            let run_id = logical_run_id(state.run_id.as_str());
             match agent
                 .run(
                     &Value::Null,
                     &state.channels,
                     &approved,
-                    Some(logical_run_id(state.run_id.as_str())),
+                    Some(run_id.as_str()),
                 )
                 .await
             {
@@ -151,15 +152,9 @@ pub fn map_node_handler(
             // (`runtime.rs`) — so concurrent spawns making a byte-identical LLM call still
             // journal (and later replay-match) distinctly. Built upfront (not per-future) so
             // each borrowed `&str` outlives the awaited futures below.
+            let run_id = logical_run_id(state.run_id.as_str());
             let spawn_run_ids: Vec<String> = (0..items.len())
-                .map(|index| {
-                    format!(
-                        "{}:{}:{}",
-                        logical_run_id(state.run_id.as_str()),
-                        node_id,
-                        index
-                    )
-                })
+                .map(|index| format!("{run_id}:{node_id}:{index}"))
                 .collect();
             let futures = items.iter().enumerate().map(|(index, item)| {
                 agent.run_scoped(
@@ -197,24 +192,33 @@ pub fn map_node_handler(
     })
 }
 
-/// Strip a trailing `:fork:<n>` replay-fork suffix (ADR 0043) — repeated, for a fork of a
-/// fork. `GraphRuntime::replay_from` gives a replayed run a NEW `run_id` (`create_fork_run_id`,
-/// `runtime.rs`) so its checkpoint history never collides with the original's, but for LLM
-/// request journal-tagging purposes a replay's calls are logically the SAME run/subgraph as
-/// the record pass that produced the journal. Untagged, `ReplayGateway`'s request-equality
-/// match (which now includes `run_id`) would miss on every replay — this keeps tagging
+/// Strip every `fork:<n>` replay-fork segment (ADR 0043), wherever it falls in the id, not
+/// just at the end. `GraphRuntime::replay_from` gives a replayed TOP-level run a NEW `run_id`
+/// (`create_fork_run_id`, `runtime.rs`: `<run>:fork:<n>`), and a subgraph child's id is derived
+/// by APPENDING `:{node_id}` onto whatever run_id it's given (`subgraph_run_id`) — so a child of
+/// a replayed run reads `<run>:fork:<n>:<node_id>`, with the fork segment in the MIDDLE, not
+/// trailing. For LLM request journal-tagging purposes a replay's calls are logically the SAME
+/// run/subgraph as the record pass that produced the journal; untagged, `ReplayGateway`'s
+/// request-equality match (which now includes `run_id`) would miss. This keeps tagging
 /// fork-invariant while leaving `state.run_id` itself (checkpoints, subgraph child ids, event
 /// routing) untouched everywhere else.
-fn logical_run_id(run_id: &str) -> &str {
-    let mut id = run_id;
-    while let Some((base, suffix)) = id.rsplit_once(":fork:") {
-        if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) {
-            id = base;
+fn logical_run_id(run_id: &str) -> String {
+    let segments: Vec<&str> = run_id.split(':').collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(segments.len());
+    let mut i = 0;
+    while i < segments.len() {
+        let is_fork_pair = segments[i] == "fork"
+            && segments
+                .get(i + 1)
+                .is_some_and(|seq| !seq.is_empty() && seq.bytes().all(|b| b.is_ascii_digit()));
+        if is_fork_pair {
+            i += 2;
         } else {
-            break;
+            kept.push(segments[i]);
+            i += 1;
         }
     }
-    id
+    kept.join(":")
 }
 
 /// Read the granted tool names from the channels — tolerant of an absent, `null`,
@@ -234,6 +238,10 @@ fn logical_run_id_strips_one_or_several_fork_suffixes() {
     assert_eq!(logical_run_id("run-1"), "run-1");
     assert_eq!(logical_run_id("run-1:fork:7"), "run-1");
     assert_eq!(logical_run_id("run-1:fork:7:fork:2"), "run-1");
+    // The fork marker can fall in the MIDDLE of a subgraph child's id — subgraph_run_id
+    // appends `:{node_id}` onto whatever run_id it's given, fork suffix or not.
+    assert_eq!(logical_run_id("run-1:fork:7:sub"), "run-1:sub");
+    assert_eq!(logical_run_id("run-1:fork:7:sub:0"), "run-1:sub:0");
     // A node id that happens to contain "fork" but not the exact ":fork:<digits>" shape
     // is left alone — this is a suffix strip, not a substring scrub.
     assert_eq!(logical_run_id("run-1:forklift"), "run-1:forklift");
