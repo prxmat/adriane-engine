@@ -563,7 +563,10 @@ export const replayCatalogGraph = async (
   state: GraphState,
   checkpointId: string,
   replayJournal: string,
-  options: Pick<RunCatalogGraphOptions, "onEvent" | "providerKeys" | "fsPolicy" | "skills"> = {}
+  options: Pick<
+    RunCatalogGraphOptions,
+    "onEvent" | "providerKeys" | "fsPolicy" | "skills" | "subgraphs"
+  > = {}
 ): Promise<CatalogRunOutcome> => {
   if (!rustEngineAvailable()) {
     throw new RustEngineUnavailableError();
@@ -571,11 +574,15 @@ export const replayCatalogGraph = async (
   // No approval engine on replay — it is read-only EVIDENCE and must never open a new gate.
   // No host tools either (ADR 0041): a replay must never RE-EXECUTE a tool — bound names degrade
   // to stubs until E2 re-serves recorded tool results from the journal.
-  // No subgraphs either (ADR 0042): a replayed subgraph node would recursively re-execute its
-  // child's own LLM calls, and the record-mode journal is not yet proven to interleave a child's
-  // entries correctly for a recursive replay to feed back in deterministically — same caution as
-  // tools, not yet lifted. A subgraph-containing run replays its OWN nodes; a `subgraphId` node
-  // fails loudly (`SubgraphNotFound`) rather than silently diverging.
+  // Subgraphs (ADR 0042/0043 D3): a replayed subgraph node recurses via `execute_subgraph` exactly
+  // like a normal run, re-feeding each child's own LLM calls from the SAME journal. This depends on
+  // the journal being able to tell a parent's calls apart from a concurrent child's — which ADR 0043
+  // D1 (LlmRequest.run_id, tagged with the deterministic `{run_id}:{node_id}[:{index}]` convention)
+  // + D2 (ReplayGateway's existing request-equality match now discriminates by run_id for free) +
+  // the fork-invariant fix (a replay's forked run_id is normalized back to the record run_id before
+  // tagging) now provide. Previously this option was dropped here (`undefined`) specifically because
+  // that proof didn't exist yet; a `subgraphId` node with no `subgraphs` supplied still fails loudly
+  // (`SubgraphNotFound`) rather than silently diverging.
   const runner = tryCreateRustRunner<ChannelValues>(
     assembleParts(
       definition,
@@ -584,7 +591,7 @@ export const replayCatalogGraph = async (
       options.fsPolicy,
       options.skills,
       undefined,
-      undefined
+      options.subgraphs
     )
   );
   if (runner === null) {
