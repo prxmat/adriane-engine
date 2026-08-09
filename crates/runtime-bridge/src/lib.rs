@@ -133,8 +133,26 @@ impl ReplayMode {
             let raw = spec.replay_journal.as_deref().ok_or_else(|| {
                 "Entry::Replay requires `replay_journal` (the recorded run journal)".to_owned()
             })?;
-            let wire: ReplayJournalWire = serde_json::from_str(raw)
+            let mut wire: ReplayJournalWire = serde_json::from_str(raw)
                 .map_err(|error| format!("invalid replay_journal JSON: {error}"))?;
+            // ADR 0043: backfill `run_id` on a journal recorded BEFORE that field existed. Every
+            // pre-fix call legitimately belongs to the top-level run — subgraph replay was never
+            // possible then, so no pre-fix journal can contain a genuine child entry. Untagged,
+            // `ReplayGateway`'s request-equality match (which now includes `run_id`) would miss
+            // on EVERY call, not just subgraph ones: the run wouldn't throw, but the affected
+            // node's output would silently degrade to a replay-journal-miss error instead of the
+            // real recorded answer.
+            if let Some(top_level_run_id) = spec
+                .state
+                .as_ref()
+                .map(|state| state.run_id.as_str().to_owned())
+            {
+                for call in wire.decisions.calls.iter_mut() {
+                    if call.request.run_id.is_none() {
+                        call.request.run_id = Some(top_level_run_id.clone());
+                    }
+                }
+            }
             return Ok(ReplayMode::Replay {
                 gateway: Arc::new(ReplayGateway::new(wire.decisions)),
                 clock: wire.clock,
@@ -2912,6 +2930,113 @@ mod tests {
         assert_eq!(clock.now_string(), "7");
         assert_eq!(clock.now_string(), "8");
         assert_eq!(clock.now_string(), "8"); // clamps on exhaustion
+    }
+
+    #[tokio::test]
+    async fn resolve_backfills_run_id_on_a_pre_adr0043_journal() {
+        // A journal recorded BEFORE ADR 0043 added `run_id` — constructed with `run_id: None`,
+        // which is `skip_serializing_if`, so this serializes with NO `runId` key at all,
+        // byte-identical to a real pre-fix journal rather than merely a null value.
+        use adriane_llm_gateway::{LlmMessage, LlmRequest};
+        let legacy_request = LlmRequest {
+            provider: LlmProvider::Anthropic,
+            model: "m".to_owned(),
+            messages: vec![LlmMessage::text("user", "hi")],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            response_format: None,
+            run_id: None,
+        };
+        let wire = ReplayJournalWire {
+            decisions: LlmJournal {
+                calls: vec![RecordedCall {
+                    request: legacy_request.clone(),
+                    response: LlmResponse {
+                        content: "legacy answer".to_owned(),
+                        tool_calls: None,
+                        stop_reason: Some("end_turn".to_owned()),
+                        usage: LlmUsage::default(),
+                        model: "m".to_owned(),
+                        provider: LlmProvider::Anthropic,
+                        content_blocks: None,
+                    },
+                }],
+            },
+            clock: vec![],
+            tool_results: vec![],
+        };
+        let journal_json = serde_json::to_string(&wire).unwrap();
+        assert!(
+            !journal_json.contains("runId"),
+            "fixture must carry NO run_id at all — proving this is a genuinely legacy journal, \
+             not just a null value: {journal_json}"
+        );
+
+        let graph = GraphDefinition {
+            id: GraphId::from("g"),
+            version: "0.0.0".to_owned(),
+            name: "g".to_owned(),
+            recursion_limit: None,
+            channels: BTreeMap::new(),
+            nodes: vec![node("assistant", NodeType::Agent)],
+            edges: vec![],
+            entry_node_id: NodeId::from("assistant"),
+            metadata: None,
+        };
+        let spec = EngineSpec {
+            graph,
+            subgraphs: vec![],
+            inbox: BTreeMap::new(),
+            run_id: None,
+            stream_tokens: false,
+            initial_data: BTreeMap::new(),
+            state: Some(GraphState {
+                run_id: RunId::from("run-legacy"),
+                graph_id: GraphId::from("g"),
+                current_node_id: NodeId::from("assistant"),
+                status: GraphStatus::Running,
+                channels: BTreeMap::new(),
+                version: 0,
+                checkpoint_id: None,
+                created_at: "0".to_owned(),
+                updated_at: "0".to_owned(),
+            }),
+            replay_journal: Some(journal_json),
+            approved_tools: vec![],
+            agents: BTreeMap::new(),
+            component_nodes: BTreeMap::new(),
+            map_agents: BTreeMap::new(),
+            provider_keys: BTreeMap::new(),
+            fs_policy: vec![],
+            skills: vec![],
+            js_node_ids: vec![],
+            js_tool_names: vec![],
+        };
+
+        let mode = ReplayMode::resolve(
+            &spec,
+            &Entry::Replay {
+                checkpoint_id: "cp".to_owned(),
+            },
+        )
+        .expect("resolves");
+        let ReplayMode::Replay { gateway, .. } = mode else {
+            panic!("expected Replay mode");
+        };
+
+        // Exactly what the FIXED replay code now tags every reconstructed request with: the
+        // run's own (fork-stripped) id. Without the backfill this misses (None != Some(..)).
+        let tagged_request = LlmRequest {
+            run_id: Some("run-legacy".to_owned()),
+            ..legacy_request
+        };
+        let response = gateway
+            .complete(tagged_request)
+            .await
+            .expect("backfilled legacy entry matches the newly-tagged replay request");
+        assert_eq!(response.content, "legacy answer");
     }
 
     /// A host that serves every `kind:"tool"` call with a fixed JSON result.
