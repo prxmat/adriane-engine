@@ -347,6 +347,35 @@ describe("@adriane-ai/graph-sdk — components (TS fallback handlers)", () => {
     expect(hits[0]!.score).toBeGreaterThanOrEqual(hits[1]!.score);
   });
 
+  it("bm25Retriever attaches its own provenance step instead of a bare score (ADR 0044)", async () => {
+    const app = createGraph({ name: "bm25-provenance-ts" })
+      .channel("q", { type: "string", default: "" })
+      .channel("hits", { type: "json", default: [] })
+      .component(
+        "bm25",
+        components.bm25Retriever({
+          query: "q",
+          into: "hits",
+          k: 1,
+          k1: 1.5,
+          b: 0.6,
+          docs: [{ id: "d1", content: "cat" }]
+        })
+      )
+      .compile();
+
+    const result = await app.run({ q: "cat" });
+    const hits = (result.channels as Record<string, unknown>).hits as Array<{
+      score: number;
+      provenance: Array<{ stage: string; algorithm: string; algorithmVersion: string | null; score: number }>;
+    }>;
+    expect(hits[0]!.provenance).toHaveLength(1);
+    expect(hits[0]!.provenance[0]!.stage).toBe("bm25");
+    expect(hits[0]!.provenance[0]!.algorithm).toBe("bm25");
+    expect(hits[0]!.provenance[0]!.algorithmVersion).toBe("k1=1.5,b=0.6");
+    expect(hits[0]!.provenance[0]!.score).toBe(hits[0]!.score);
+  });
+
   it("keywordRetriever scores by query-term coverage", async () => {
     const app = createGraph({ name: "kw-ts" })
       .channel("q", { type: "string", default: "" })
@@ -465,6 +494,38 @@ describe("@adriane-ai/graph-sdk — components (TS fallback handlers)", () => {
     expect(fused[0]!.id).toBe("b");
     expect(fused).toHaveLength(3);
     expect(fused[0]!.score).toBeGreaterThan(0);
+  });
+
+  it("mergeRanker preserves BOTH legs' provenance for a doc seen in two channels (ADR 0044)", async () => {
+    type Step = { stage: string; algorithm: string; algorithmVersion: string | null; score: number };
+    const lexStep: Step = { stage: "bm25", algorithm: "bm25", algorithmVersion: null, score: 1.1 };
+    const vecStep: Step = { stage: "vector", algorithm: "cosine", algorithmVersion: null, score: 0.9 };
+
+    const app = createGraph({ name: "merge-provenance-ts" })
+      .channel("lex", { type: "json", default: [] as unknown[] })
+      .channel("vec", { type: "json", default: [] as unknown[] })
+      .channel("fused", { type: "json", default: [] as unknown[] })
+      .component("merge", components.mergeRanker({ fromChannels: ["lex", "vec"], into: "fused" }))
+      .compile();
+
+    const result = await app.run({
+      lex: [{ id: "b", content: "y", score: 1.1, provenance: [lexStep] }] as unknown[],
+      vec: [
+        { id: "b", content: "y", score: 0.9, provenance: [vecStep] },
+        { id: "c", content: "z", score: 0.5, provenance: [] }
+      ] as unknown[]
+    });
+    const fused = (result.channels as Record<string, unknown>).fused as Array<{
+      id: string;
+      provenance: Step[];
+    }>;
+    const b = fused.find((r) => r.id === "b")!;
+    // Both legs' steps survive, plus mergeRanker's own rrf step — none overwritten.
+    expect(b.provenance).toHaveLength(3);
+    expect(b.provenance.map((s) => s.stage)).toEqual(["bm25", "vector", "rrf"]);
+
+    const c = fused.find((r) => r.id === "c")!;
+    expect(c.provenance.map((s) => s.stage)).toEqual(["rrf"]);
   });
 
   it("evaluator scores token-F1 and sets the pass flag against a threshold", async () => {

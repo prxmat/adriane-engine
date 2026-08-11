@@ -1647,10 +1647,22 @@ fn build_bm25_retriever(params: &Value) -> Result<NodeHandler, ComponentError> {
         });
         scored.truncate(k);
 
+        // ADR 0044 (adriane#578): an additive provenance step, never an overwritten `score` — the
+        // top-level `score` still mirrors this stage's score for any caller that ignores lineage.
         let results: Vec<Value> = scored
             .into_iter()
             .map(|(score, _, doc)| {
-                json!({ "id": doc.id, "content": doc.content, "score": json_number(score) })
+                json!({
+                    "id": doc.id,
+                    "content": doc.content,
+                    "score": json_number(score),
+                    "provenance": [{
+                        "stage": "bm25",
+                        "algorithm": "bm25",
+                        "algorithmVersion": format!("k1={k1},b={b}"),
+                        "score": json_number(score)
+                    }]
+                })
             })
             .collect();
         NodeOutput::update(single(&into, Value::Array(results)))
@@ -2055,6 +2067,12 @@ fn build_merge_ranker(params: &Value) -> Result<NodeHandler, ComponentError> {
         let mut scores: BTreeMap<String, f64> = BTreeMap::new();
         let mut representative: BTreeMap<String, Value> = BTreeMap::new();
         let mut first_seen: BTreeMap<String, usize> = BTreeMap::new();
+        // ADR 0044 (adriane#578): a candidate seen in MULTIPLE `fromChannels` (e.g. both the
+        // vector and lexical leg) must keep every leg's provenance — `representative` above only
+        // ever kept whichever channel was processed FIRST, silently dropping every other leg's
+        // lineage. Accumulate provenance across ALL channels an id appears in, independent of
+        // which item ends up "representative" for id/content.
+        let mut provenance_by_id: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         let mut counter = 0usize;
 
         for name in channels.iter() {
@@ -2076,6 +2094,12 @@ fn build_merge_ranker(params: &Value) -> Result<NodeHandler, ComponentError> {
                     counter += 1;
                     c
                 });
+                if let Some(Value::Array(steps)) = item.get("provenance") {
+                    provenance_by_id
+                        .entry(id.clone())
+                        .or_default()
+                        .extend(steps.iter().cloned());
+                }
             }
         }
 
@@ -2098,6 +2122,14 @@ fn build_merge_ranker(params: &Value) -> Result<NodeHandler, ComponentError> {
                 let mut item = representative.get(&id).cloned().unwrap_or(Value::Null);
                 if let Value::Object(map) = &mut item {
                     map.insert("score".to_string(), json_number(score));
+                    let mut provenance = provenance_by_id.remove(&id).unwrap_or_default();
+                    provenance.push(json!({
+                        "stage": "rrf",
+                        "algorithm": "rrf",
+                        "algorithmVersion": format!("k={rrf_k}"),
+                        "score": json_number(score)
+                    }));
+                    map.insert("provenance".to_string(), Value::Array(provenance));
                 }
                 item
             })
@@ -3868,6 +3900,40 @@ mod tests {
     }
 
     #[test]
+    fn bm25_retriever_attaches_a_provenance_step_instead_of_a_bare_score() {
+        // ADR 0044 (adriane#578): score initial + algorithme/version must survive alongside the
+        // top-level `score`, not be the only record of how a candidate was scored.
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "bm25Retriever",
+                &json!({
+                    "query": "q",
+                    "into": "hits",
+                    "k": 1,
+                    "k1": 1.5,
+                    "b": 0.6,
+                    "docs": [{ "id": "d1", "content": "cat" }]
+                }),
+            )
+            .unwrap();
+        let out = run(&handler, channels(&[("q", json!("cat"))]));
+        let hits = out.update.get("hits").and_then(Value::as_array).unwrap();
+        let score = hits[0].get("score").and_then(Value::as_f64).unwrap();
+        let provenance = hits[0].get("provenance").and_then(Value::as_array).unwrap();
+        assert_eq!(provenance.len(), 1);
+        assert_eq!(provenance[0].get("stage").unwrap(), "bm25");
+        assert_eq!(provenance[0].get("algorithm").unwrap(), "bm25");
+        assert_eq!(
+            provenance[0].get("algorithmVersion").unwrap(),
+            "k1=1.5,b=0.6"
+        );
+        assert_eq!(
+            provenance[0].get("score").and_then(Value::as_f64).unwrap(),
+            score
+        );
+    }
+
+    #[test]
     fn bm25_retriever_is_deterministic_and_falls_back_to_literal_query() {
         let registry = ComponentRegistry::new();
         // No "q" channel: the literal `query` param is used.
@@ -4127,6 +4193,56 @@ mod tests {
         assert_eq!(fused[0].get("id").unwrap().as_str().unwrap(), "b");
         assert_eq!(fused.len(), 3);
         assert!(fused[0].get("score").and_then(Value::as_f64).unwrap() > 0.0);
+    }
+
+    #[test]
+    fn merge_ranker_preserves_both_legs_provenance_for_a_doc_seen_in_two_channels() {
+        // ADR 0044 (adriane#578): the pre-fix `representative` map kept only whichever channel was
+        // processed FIRST, silently dropping the other leg's lineage entirely for a doc present in
+        // both. Both legs' steps must survive, plus mergeRanker's own rrf step — none overwritten.
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "mergeRanker",
+                &json!({ "fromChannels": ["lex", "vec"], "into": "fused" }),
+            )
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[
+                (
+                    "lex",
+                    json!([
+                        { "id": "b", "content": "y", "score": 1.1,
+                          "provenance": [{ "stage": "bm25", "algorithm": "bm25", "algorithmVersion": null, "score": 1.1 }] }
+                    ]),
+                ),
+                (
+                    "vec",
+                    json!([
+                        { "id": "b", "content": "y", "score": 0.9,
+                          "provenance": [{ "stage": "vector", "algorithm": "cosine", "algorithmVersion": null, "score": 0.9 }] },
+                        { "id": "c", "content": "z", "score": 0.5, "provenance": [] }
+                    ]),
+                ),
+            ]),
+        );
+        let fused = out.update.get("fused").and_then(Value::as_array).unwrap();
+        let b = fused.iter().find(|r| r.get("id").unwrap() == "b").unwrap();
+        let b_provenance = b.get("provenance").and_then(Value::as_array).unwrap();
+        assert_eq!(b_provenance.len(), 3);
+        let stages: Vec<&str> = b_provenance
+            .iter()
+            .map(|s| s.get("stage").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(stages, vec!["bm25", "vector", "rrf"]);
+
+        let c = fused.iter().find(|r| r.get("id").unwrap() == "c").unwrap();
+        let c_provenance = c.get("provenance").and_then(Value::as_array).unwrap();
+        let c_stages: Vec<&str> = c_provenance
+            .iter()
+            .map(|s| s.get("stage").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(c_stages, vec!["rrf"]);
     }
 
     // --- evaluator -----------------------------------------------------------
