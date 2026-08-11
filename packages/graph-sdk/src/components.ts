@@ -1060,6 +1060,27 @@ const arrayChannel = (channels: Record<string, unknown>, name: string): unknown[
 /** A candidate document for the lexical retrievers. */
 export type LexicalDoc = { id: string; content: string };
 
+/** One stage's score in a candidate's retrieval lineage (ADR 0044, adriane-engine, issue #578) —
+ * additive: each retrieval/fusion/rerank stage APPENDS its own step instead of overwriting the
+ * top-level `score` it inherited, so a candidate's full history (which stage scored it what, with
+ * which algorithm/version) survives all the way to the prompt that gets templated from it. The
+ * top-level `score` field on a result still mirrors the LAST step's score, unchanged, for any
+ * caller that only cares about the current ranking. */
+export type ProvenanceStep = {
+  stage: string;
+  algorithm: string;
+  algorithmVersion: string | null;
+  score: number;
+};
+
+/** `item.provenance` when present and well-formed, else `[]` — every stage reads whatever lineage
+ * an upstream stage already attached (or none, if it's the first stage a candidate passes
+ * through) before appending its own step. */
+const priorProvenance = (item: unknown): ProvenanceStep[] =>
+  typeof item === "object" && item !== null && !Array.isArray(item) && Array.isArray((item as { provenance?: unknown }).provenance)
+    ? ((item as { provenance: unknown[] }).provenance as ProvenanceStep[])
+    : [];
+
 /** Params for {@link components.bm25Retriever}. */
 export type Bm25RetrieverParams = {
   /** Channel holding the query text (falls back to this literal when empty). */
@@ -1116,9 +1137,14 @@ const bm25RetrieverHandler =
     });
     scored.sort((a, b2) => (b2.score - a.score === 0 ? a.index - b2.index : b2.score - a.score));
 
-    const results = scored
-      .slice(0, k)
-      .map(({ doc, score }) => ({ id: doc.id, content: doc.content, score }));
+    const results = scored.slice(0, k).map(({ doc, score }) => ({
+      id: doc.id,
+      content: doc.content,
+      score,
+      provenance: [
+        { stage: "bm25", algorithm: "bm25", algorithmVersion: `k1=${k1},b=${b}`, score }
+      ] satisfies ProvenanceStep[]
+    }));
     return { [params.into]: results };
   };
 
@@ -1388,6 +1414,10 @@ const mergeRankerHandler =
     const scores = new Map<string, number>();
     const representative = new Map<string, unknown>();
     const firstSeen = new Map<string, number>();
+    // ADR 0044: a candidate seen in MULTIPLE `fromChannels` (e.g. both the vector and lexical leg)
+    // must keep every leg's provenance, not just whichever channel happened to be processed first
+    // (the pre-ADR-0044 `representative` map silently dropped every other leg's lineage).
+    const provenanceById = new Map<string, ProvenanceStep[]>();
     let counter = 0;
 
     for (const name of params.fromChannels) {
@@ -1406,6 +1436,8 @@ const mergeRankerHandler =
           firstSeen.set(id, counter);
           counter += 1;
         }
+        const existing = provenanceById.get(id) ?? [];
+        provenanceById.set(id, [...existing, ...priorProvenance(item)]);
       });
     }
 
@@ -1416,8 +1448,10 @@ const mergeRankerHandler =
 
     const results = limited.map(({ id, score }) => {
       const item = representative.get(id);
+      const step: ProvenanceStep = { stage: "rrf", algorithm: "rrf", algorithmVersion: `k=${rrfK}`, score };
+      const provenance = [...(provenanceById.get(id) ?? []), step];
       return typeof item === "object" && item !== null && !Array.isArray(item)
-        ? { ...item, score }
+        ? { ...item, score, provenance }
         : item;
     });
     return { [params.into]: results };
