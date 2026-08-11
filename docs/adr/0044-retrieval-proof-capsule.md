@@ -1,8 +1,9 @@
 # ADR 0044 — Retrieval Proof Capsule: capture the exact set that influenced the model
 
-- Status: **Proposed** — awaiting Mathieu's decision. No code yet, per this ADR's own scope rule
-  (product issue #578: "ouvrir d'abord une proposition ADR dans `adriane-engine` ; ne pas
-  bricoler ce contrat côté produit").
+- Status: **Accepted** (2026-08-11, Mathieu — "go ADR"). Open question #1 resolved per this ADR's
+  own recommendation (a separate `retrievalCapsule` event, not an extension of the existing
+  candidate-pool `retrievals` event). Implementation proceeds lot by lot (D1 → D2 → D3 → D4),
+  engine first, product last — per this ADR's own scope rule.
 - Date: 2026-08-11
 - Deciders: Mathieu (owner)
 - Follow-up to product issue #578 (Tranche of adriane#424), which documents the product-side
