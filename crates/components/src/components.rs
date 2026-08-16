@@ -902,17 +902,35 @@ fn build_reranker(params: &Value) -> Result<NodeHandler, ComponentError> {
             .collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
+        let algorithm = if query_vec.is_some() {
+            "cosine-mock"
+        } else {
+            "score-passthrough"
+        };
         let reordered: Vec<Value> = scored
             .into_iter()
             .map(|(score, mut item)| {
-                // Surface the (possibly recomputed) score back onto the item.
+                // Surface the (possibly recomputed) score back onto the item, and append a
+                // provenance step (ADR 0044, adriane#578) instead of silently overwriting `score`
+                // with no record — same fix as bm25Retriever/mergeRanker (D1) and the cross-encoder
+                // reranker (runtime-bridge's build_reranker_node), applied here for this component's
+                // deterministic-mock fallback path (no `ADRIANE_RERANK_ENDPOINT` configured).
                 if let Value::Object(map) = &mut item {
-                    map.insert(
-                        "score".to_string(),
-                        serde_json::Number::from_f64(score)
-                            .map(Value::Number)
-                            .unwrap_or(Value::Null),
-                    );
+                    let score_value = serde_json::Number::from_f64(score)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null);
+                    map.insert("score".to_string(), score_value.clone());
+                    let mut provenance = match map.get("provenance") {
+                        Some(Value::Array(steps)) => steps.clone(),
+                        _ => Vec::new(),
+                    };
+                    provenance.push(json!({
+                        "stage": "rerank",
+                        "algorithm": algorithm,
+                        "algorithmVersion": null,
+                        "score": score_value
+                    }));
+                    map.insert("provenance".to_string(), Value::Array(provenance));
                 }
                 item
             })
@@ -3473,6 +3491,37 @@ mod tests {
             .map(|r| r.get("id").unwrap().as_str().unwrap())
             .collect();
         assert_eq!(ids, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn reranker_appends_a_provenance_step_and_preserves_prior_lineage() {
+        // ADR 0044 (adriane#578): the mock-fallback reranker (no ADRIANE_RERANK_ENDPOINT) had the
+        // same score-overwrite-with-no-record gap as bm25Retriever/mergeRanker before D1.
+        let handler = ComponentRegistry::new()
+            .build_handler("reranker", &json!({ "from": "hits", "into": "ranked" }))
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[(
+                "hits",
+                json!([
+                    { "id": "a", "content": "x", "score": 0.9,
+                      "provenance": [{ "stage": "rrf", "algorithm": "rrf", "algorithmVersion": "k=60", "score": 0.9 }] }
+                ]),
+            )]),
+        );
+        let ranked = out.update.get("ranked").and_then(Value::as_array).unwrap();
+        let provenance = ranked[0]
+            .get("provenance")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(provenance.len(), 2);
+        let stages: Vec<&str> = provenance
+            .iter()
+            .map(|s| s.get("stage").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(stages, vec!["rrf", "rerank"]);
+        assert_eq!(provenance[1].get("algorithm").unwrap(), "score-passthrough");
     }
 
     #[test]
