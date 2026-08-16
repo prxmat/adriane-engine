@@ -1731,12 +1731,27 @@ fn build_reranker_node(
                     .filter_map(|result| {
                         by_id.get(&result.id).cloned().map(|mut item| {
                             if let Value::Object(map) = &mut item {
-                                map.insert(
-                                    "score".to_string(),
-                                    serde_json::Number::from_f64(result.score)
-                                        .map(Value::Number)
-                                        .unwrap_or(Value::Null),
-                                );
+                                let score_value = serde_json::Number::from_f64(result.score)
+                                    .map(Value::Number)
+                                    .unwrap_or(Value::Null);
+                                map.insert("score".to_string(), score_value.clone());
+                                // ADR 0044 (adriane#578): append this stage's provenance instead of
+                                // silently overwriting `score` with no record — flagged in the ADR's
+                                // own Consequences section as a follow-up to D1, done here. TEI is
+                                // the only reranker backend behind this seam (see cross_encoder.rs's
+                                // doc comment) — a real model identifier isn't available from the
+                                // client side, so `algorithmVersion` names the backend, not a model.
+                                let mut provenance = match map.get("provenance") {
+                                    Some(Value::Array(steps)) => steps.clone(),
+                                    _ => Vec::new(),
+                                };
+                                provenance.push(json!({
+                                    "stage": "rerank",
+                                    "algorithm": "cross-encoder",
+                                    "algorithmVersion": "tei",
+                                    "score": score_value
+                                }));
+                                map.insert("provenance".to_string(), Value::Array(provenance));
                             }
                             item
                         })
@@ -3174,6 +3189,77 @@ mod tests {
             .collect();
         // b (0.9) outranks a (0.1); the item objects are preserved, re-ordered.
         assert_eq!(ids, vec!["b", "a"]);
+    }
+
+    #[tokio::test]
+    async fn reranker_node_appends_a_provenance_step_instead_of_a_bare_score_overwrite() {
+        // ADR 0044 (adriane#578, Consequences): flagged as a D1 follow-up, done here — the reranker
+        // must not be the one stage left silently overwriting `score` with no lineage.
+        let reranker = Arc::new(CrossEncoderReranker::new(
+            Some("http://rerank".to_owned()),
+            Arc::new(FakeRerank {
+                scores: vec![0.1, 0.9],
+            }),
+        ));
+        let handler = build_reranker_node(
+            &json!({ "from": "hits", "into": "ranked", "query": "q" }),
+            reranker,
+        )
+        .expect("builds");
+        let out = handler(reranker_state()).await;
+        let ranked = out.update.get("ranked").unwrap().as_array().unwrap();
+        let winner = ranked
+            .iter()
+            .find(|item| item.get("id").unwrap() == "b")
+            .unwrap();
+        let provenance = winner.get("provenance").and_then(Value::as_array).unwrap();
+        assert_eq!(provenance.len(), 1);
+        assert_eq!(provenance[0].get("stage").unwrap(), "rerank");
+        assert_eq!(provenance[0].get("algorithm").unwrap(), "cross-encoder");
+        assert_eq!(provenance[0].get("algorithmVersion").unwrap(), "tei");
+        assert_eq!(
+            provenance[0].get("score").and_then(Value::as_f64).unwrap(),
+            winner.get("score").and_then(Value::as_f64).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn reranker_node_preserves_prior_provenance_from_an_earlier_stage() {
+        // ADR 0044 D1/D2 lineage (mergeRanker's bm25+rrf steps) must survive the rerank stage, not be
+        // clobbered by it — the whole point of the additive-provenance design.
+        let mut state = reranker_state();
+        state.channels.insert(
+            "hits".to_string(),
+            json!([
+                { "id": "a", "content": "alpha", "score": 0.5,
+                  "provenance": [{ "stage": "rrf", "algorithm": "rrf", "algorithmVersion": "k=60", "score": 0.5 }] },
+                { "id": "b", "content": "beta", "score": 0.5, "provenance": [] }
+            ]),
+        );
+        let reranker = Arc::new(CrossEncoderReranker::new(
+            Some("http://rerank".to_owned()),
+            Arc::new(FakeRerank {
+                scores: vec![0.9, 0.1],
+            }),
+        ));
+        let handler = build_reranker_node(
+            &json!({ "from": "hits", "into": "ranked", "query": "q" }),
+            reranker,
+        )
+        .expect("builds");
+        let out = handler(state).await;
+        let ranked = out.update.get("ranked").unwrap().as_array().unwrap();
+        let a = ranked
+            .iter()
+            .find(|item| item.get("id").unwrap() == "a")
+            .unwrap();
+        let provenance = a.get("provenance").and_then(Value::as_array).unwrap();
+        assert_eq!(provenance.len(), 2);
+        let stages: Vec<&str> = provenance
+            .iter()
+            .map(|s| s.get("stage").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(stages, vec!["rrf", "rerank"]);
     }
 
     #[tokio::test]
