@@ -376,6 +376,43 @@ describe("@adriane-ai/graph-sdk — components (TS fallback handlers)", () => {
     expect(hits[0]!.provenance[0]!.score).toBe(hits[0]!.score);
   });
 
+  it("bm25Retriever writes the rank>k loser to a discarded channel with a reason (ADR 0044 D2)", async () => {
+    const app = createGraph({ name: "bm25-discard-ts" })
+      .channel("q", { type: "string", default: "" })
+      .channel("hits", { type: "json", default: [] })
+      .channel("hitsDiscarded", { type: "json", default: [] })
+      .component(
+        "bm25",
+        components.bm25Retriever({
+          query: "q",
+          into: "hits",
+          k: 1,
+          docs: [
+            { id: "d1", content: "cat cat cat" },
+            { id: "d2", content: "cat" }
+          ]
+        })
+      )
+      .compile();
+
+    const result = await app.run({ q: "cat" });
+    const channels = result.channels as Record<string, unknown>;
+    const hits = channels.hits as Array<{ id: string }>;
+    const discarded = channels.hitsDiscarded as Array<{
+      id: string;
+      reason: string;
+      discardedAt: string;
+      provenance: Array<{ stage: string }>;
+    }>;
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.id).toBe("d1");
+    expect(discarded).toHaveLength(1);
+    expect(discarded[0]!.id).toBe("d2");
+    expect(discarded[0]!.reason).toBe("bm25_rank_below_k");
+    expect(typeof discarded[0]!.discardedAt).toBe("string");
+    expect(discarded[0]!.provenance[0]!.stage).toBe("bm25");
+  });
+
   it("keywordRetriever scores by query-term coverage", async () => {
     const app = createGraph({ name: "kw-ts" })
       .channel("q", { type: "string", default: "" })
@@ -526,6 +563,39 @@ describe("@adriane-ai/graph-sdk — components (TS fallback handlers)", () => {
 
     const c = fused.find((r) => r.id === "c")!;
     expect(c.provenance.map((s) => s.stage)).toEqual(["rrf"]);
+  });
+
+  it("mergeRanker writes RRF losers to a discarded channel with a reason (ADR 0044 D2)", async () => {
+    const app = createGraph({ name: "merge-discard-ts" })
+      .channel("lex", { type: "json", default: [] as unknown[] })
+      .channel("vec", { type: "json", default: [] as unknown[] })
+      .channel("fused", { type: "json", default: [] as unknown[] })
+      .channel("fusedDiscarded", { type: "json", default: [] as unknown[] })
+      .component("merge", components.mergeRanker({ fromChannels: ["lex", "vec"], into: "fused", k: 1 }))
+      .compile();
+
+    const result = await app.run({
+      lex: [{ id: "b", content: "y", score: 1.1, provenance: [] }] as unknown[],
+      vec: [
+        { id: "b", content: "y", score: 0.9, provenance: [] },
+        { id: "c", content: "z", score: 0.5, provenance: [] }
+      ] as unknown[]
+    });
+    const channels = result.channels as Record<string, unknown>;
+    const fused = channels.fused as Array<{ id: string }>;
+    const discarded = channels.fusedDiscarded as Array<{
+      id: string;
+      reason: string;
+      discardedAt: string;
+      provenance: Array<{ stage: string }>;
+    }>;
+    expect(fused).toHaveLength(1);
+    expect(fused[0]!.id).toBe("b");
+    expect(discarded).toHaveLength(1);
+    expect(discarded[0]!.id).toBe("c");
+    expect(discarded[0]!.reason).toBe("rrf_rank_below_k");
+    expect(typeof discarded[0]!.discardedAt).toBe("string");
+    expect(discarded[0]!.provenance.at(-1)!.stage).toBe("rrf");
   });
 
   it("evaluator scores token-F1 and sets the pass flag against a threshold", async () => {

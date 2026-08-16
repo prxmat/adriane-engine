@@ -257,6 +257,17 @@ fn single(channel: &str, value: Value) -> BTreeMap<String, Value> {
     update
 }
 
+/// Millis-since-epoch as a decimal string — same convention as
+/// `approval_engine::engine::now_string` (kept local here since `components` does not depend on
+/// `approval-engine`). Used to timestamp discarded-candidate records (ADR 0044 D2, adriane#578).
+fn now_millis_string() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+        .to_string()
+}
+
 // --- promptBuilder -----------------------------------------------------------
 
 /// `promptBuilder { template, into }` — render `{{var}}` placeholders from the
@@ -1645,27 +1656,49 @@ fn build_bm25_retriever(params: &Value) -> Result<NodeHandler, ComponentError> {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.1.cmp(&b.1))
         });
-        scored.truncate(k);
+        // ADR 0044 D2 (adriane#578): everything past `k` used to be dropped with zero trace —
+        // split instead of truncating, so the loser half survives on `{into}Discarded`.
+        let discarded_at = now_millis_string();
+        let (kept, discarded) = scored.split_at(scored.len().min(k));
 
-        // ADR 0044 (adriane#578): an additive provenance step, never an overwritten `score` — the
-        // top-level `score` still mirrors this stage's score for any caller that ignores lineage.
-        let results: Vec<Value> = scored
-            .into_iter()
+        // ADR 0044 D1 (adriane#578): an additive provenance step, never an overwritten `score` —
+        // the top-level `score` still mirrors this stage's score for any caller that ignores lineage.
+        let provenance_step = |score: f64| {
+            json!({
+                "stage": "bm25",
+                "algorithm": "bm25",
+                "algorithmVersion": format!("k1={k1},b={b}"),
+                "score": json_number(score)
+            })
+        };
+        let results: Vec<Value> = kept
+            .iter()
             .map(|(score, _, doc)| {
                 json!({
                     "id": doc.id,
                     "content": doc.content,
-                    "score": json_number(score),
-                    "provenance": [{
-                        "stage": "bm25",
-                        "algorithm": "bm25",
-                        "algorithmVersion": format!("k1={k1},b={b}"),
-                        "score": json_number(score)
-                    }]
+                    "score": json_number(*score),
+                    "provenance": [provenance_step(*score)]
                 })
             })
             .collect();
-        NodeOutput::update(single(&into, Value::Array(results)))
+        let discarded_results: Vec<Value> = discarded
+            .iter()
+            .map(|(score, _, doc)| {
+                json!({
+                    "id": doc.id,
+                    "content": doc.content,
+                    "score": json_number(*score),
+                    "provenance": [provenance_step(*score)],
+                    "discardedAt": discarded_at,
+                    "reason": "bm25_rank_below_k"
+                })
+            })
+            .collect();
+        NodeOutput::update(BTreeMap::from([
+            (into.clone(), Value::Array(results)),
+            (format!("{into}Discarded"), Value::Array(discarded_results)),
+        ]))
     }))
 }
 
@@ -2112,29 +2145,49 @@ fn build_merge_ranker(params: &Value) -> Result<NodeHandler, ComponentError> {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.1.cmp(&b.1))
         });
-        if let Some(limit) = k {
-            merged.truncate(limit);
-        }
+        // ADR 0044 D2 (adriane#578): the RRF losers past `k` used to be dropped with zero
+        // trace — split instead of truncating, so they survive on `{into}Discarded`.
+        let discarded_at = now_millis_string();
+        let split_at = k.unwrap_or(merged.len()).min(merged.len());
+        let (kept, discarded) = merged.split_at(split_at);
 
-        let results: Vec<Value> = merged
-            .into_iter()
-            .map(|(score, _, id)| {
-                let mut item = representative.get(&id).cloned().unwrap_or(Value::Null);
-                if let Value::Object(map) = &mut item {
-                    map.insert("score".to_string(), json_number(score));
-                    let mut provenance = provenance_by_id.remove(&id).unwrap_or_default();
-                    provenance.push(json!({
-                        "stage": "rrf",
-                        "algorithm": "rrf",
-                        "algorithmVersion": format!("k={rrf_k}"),
-                        "score": json_number(score)
-                    }));
-                    map.insert("provenance".to_string(), Value::Array(provenance));
+        let build_item = |score: f64, id: &str, extra_step: bool| {
+            let mut item = representative.get(id).cloned().unwrap_or(Value::Null);
+            if let Value::Object(map) = &mut item {
+                map.insert("score".to_string(), json_number(score));
+                let mut provenance = provenance_by_id.get(id).cloned().unwrap_or_default();
+                provenance.push(json!({
+                    "stage": "rrf",
+                    "algorithm": "rrf",
+                    "algorithmVersion": format!("k={rrf_k}"),
+                    "score": json_number(score)
+                }));
+                map.insert("provenance".to_string(), Value::Array(provenance));
+                if extra_step {
+                    map.insert(
+                        "discardedAt".to_string(),
+                        Value::String(discarded_at.clone()),
+                    );
+                    map.insert(
+                        "reason".to_string(),
+                        Value::String("rrf_rank_below_k".to_string()),
+                    );
                 }
-                item
-            })
+            }
+            item
+        };
+        let results: Vec<Value> = kept
+            .iter()
+            .map(|(score, _, id)| build_item(*score, id, false))
             .collect();
-        NodeOutput::update(single(&into, Value::Array(results)))
+        let discarded_results: Vec<Value> = discarded
+            .iter()
+            .map(|(score, _, id)| build_item(*score, id, true))
+            .collect();
+        NodeOutput::update(BTreeMap::from([
+            (into.clone(), Value::Array(results)),
+            (format!("{into}Discarded"), Value::Array(discarded_results)),
+        ]))
     }))
 }
 
@@ -3934,6 +3987,45 @@ mod tests {
     }
 
     #[test]
+    fn bm25_retriever_writes_the_rank_k_loser_to_a_discarded_channel_with_a_reason() {
+        // ADR 0044 D2 (adriane#578): everything past `k` used to be dropped with zero trace.
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "bm25Retriever",
+                &json!({
+                    "query": "q",
+                    "into": "hits",
+                    "k": 1,
+                    "docs": [
+                        { "id": "d1", "content": "cat cat cat" },
+                        { "id": "d2", "content": "cat" }
+                    ]
+                }),
+            )
+            .unwrap();
+        let out = run(&handler, channels(&[("q", json!("cat"))]));
+        let hits = out.update.get("hits").and_then(Value::as_array).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].get("id").unwrap(), "d1");
+
+        let discarded = out
+            .update
+            .get("hitsDiscarded")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(discarded.len(), 1);
+        assert_eq!(discarded[0].get("id").unwrap(), "d2");
+        assert_eq!(discarded[0].get("reason").unwrap(), "bm25_rank_below_k");
+        assert!(discarded[0].get("discardedAt").unwrap().is_string());
+        // The discarded item still carries its own provenance — not just a bare drop record.
+        let provenance = discarded[0]
+            .get("provenance")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(provenance[0].get("stage").unwrap(), "bm25");
+    }
+
+    #[test]
     fn bm25_retriever_is_deterministic_and_falls_back_to_literal_query() {
         let registry = ComponentRegistry::new();
         // No "q" channel: the literal `query` param is used.
@@ -4243,6 +4335,79 @@ mod tests {
             .map(|s| s.get("stage").unwrap().as_str().unwrap())
             .collect();
         assert_eq!(c_stages, vec!["rrf"]);
+    }
+
+    #[test]
+    fn merge_ranker_writes_rrf_losers_to_a_discarded_channel_with_a_reason() {
+        // ADR 0044 D2 (adriane#578): fused candidates past `k` used to be dropped with zero trace.
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "mergeRanker",
+                &json!({ "fromChannels": ["lex", "vec"], "into": "fused", "k": 1 }),
+            )
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[
+                (
+                    "lex",
+                    json!([
+                        { "id": "b", "content": "y", "score": 1.1, "provenance": [] }
+                    ]),
+                ),
+                (
+                    "vec",
+                    json!([
+                        { "id": "b", "content": "y", "score": 0.9, "provenance": [] },
+                        { "id": "c", "content": "z", "score": 0.5, "provenance": [] }
+                    ]),
+                ),
+            ]),
+        );
+        let fused = out.update.get("fused").and_then(Value::as_array).unwrap();
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].get("id").unwrap(), "b");
+
+        let discarded = out
+            .update
+            .get("fusedDiscarded")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(discarded.len(), 1);
+        assert_eq!(discarded[0].get("id").unwrap(), "c");
+        assert_eq!(discarded[0].get("reason").unwrap(), "rrf_rank_below_k");
+        assert!(discarded[0].get("discardedAt").unwrap().is_string());
+        // The discarded item still carries its own rrf provenance step.
+        let provenance = discarded[0]
+            .get("provenance")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(provenance.last().unwrap().get("stage").unwrap(), "rrf");
+    }
+
+    #[test]
+    fn merge_ranker_with_no_k_limit_discards_nothing() {
+        // No `k` means keep everything — the discarded channel is written but empty, not omitted,
+        // so a downstream reader can always rely on `{into}Discarded` existing.
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "mergeRanker",
+                &json!({ "fromChannels": ["lex"], "into": "fused" }),
+            )
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[(
+                "lex",
+                json!([{ "id": "a", "content": "x", "score": 1.0, "provenance": [] }]),
+            )]),
+        );
+        let discarded = out
+            .update
+            .get("fusedDiscarded")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(discarded.is_empty());
     }
 
     // --- evaluator -----------------------------------------------------------
