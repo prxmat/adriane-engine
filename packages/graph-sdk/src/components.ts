@@ -22,6 +22,8 @@
  * ```
  */
 
+import { createHash } from "node:crypto";
+
 import type { NodeHandler } from "@adriane-ai/graph-runtime";
 
 /** The component kinds the library knows, matching `ComponentRegistry::kinds()`. */
@@ -115,12 +117,27 @@ const channelsOf = (state: { channels: unknown }): Record<string, unknown> =>
 
 // --- promptBuilder -----------------------------------------------------------
 
+/** ADR 0044 D3 (adriane#578) capsule-assembly config for {@link components.promptBuilder}.
+ * `chunksFrom`/`queryFrom` are required, `discardedFrom` is optional (defaults to none) — a
+ * capsule-assembly node needs to be told explicitly which upstream channel holds the query and
+ * which channels hold this pipeline's discarded candidates (they can be scattered across several
+ * stages — D2's `{into}Discarded` channels are stage-local, not a single sibling of `chunksFrom`). */
+export type PromptBuilderCapsuleConfig = {
+  into: string;
+  chunksFrom: string;
+  queryFrom: string;
+  discardedFrom?: string[];
+};
+
 /** Params for {@link components.promptBuilder}. */
 export type PromptBuilderParams = {
   /** Template with `{{var}}` placeholders filled from the channels. */
   template: string;
   /** Channel the rendered string is written into. */
   into: string;
+  /** Optional retrieval-proof-capsule assembly (ADR 0044 D3) — captures the exact set that
+   * influenced the model, hashed at the ONE node that knows what text was actually templated. */
+  capsule?: PromptBuilderCapsuleConfig;
 };
 
 /**
@@ -133,9 +150,49 @@ const renderTemplate = (template: string, channels: Record<string, unknown>): st
     return name in channels ? valueToText(channels[name]) : "";
   });
 
+const sha256Hex = (input: string): string => createHash("sha256").update(input).digest("hex");
+
+/** Assemble the `RetrievalCapsule` (ADR 0044 D3). Mirrors `build_retrieval_capsule` in Rust. */
+const buildRetrievalCapsule = (
+  cfg: PromptBuilderCapsuleConfig,
+  channels: Record<string, unknown>,
+  rendered: string
+): unknown => {
+  const chunksArr = Array.isArray(channels[cfg.chunksFrom]) ? (channels[cfg.chunksFrom] as unknown[]) : [];
+  const asRecord = (item: unknown): Record<string, unknown> =>
+    typeof item === "object" && item !== null && !Array.isArray(item) ? (item as Record<string, unknown>) : {};
+  const order = chunksArr.map((item) => asRecord(item).id ?? null);
+  const chunks = chunksArr.map((item) => {
+    const record = asRecord(item);
+    return { id: record.id ?? null, provenance: record.provenance ?? [] };
+  });
+
+  const discarded = (cfg.discardedFrom ?? []).flatMap((name) =>
+    Array.isArray(channels[name]) ? (channels[name] as unknown[]) : []
+  );
+
+  const queryText = cfg.queryFrom in channels ? valueToText(channels[cfg.queryFrom]) : "";
+
+  return {
+    order,
+    chunks,
+    discarded,
+    renderedHash: sha256Hex(rendered),
+    queryHash: sha256Hex(queryText)
+  };
+};
+
 const promptBuilderHandler =
   (params: PromptBuilderParams): NodeHandler =>
-  async (_input, state) => ({ [params.into]: renderTemplate(params.template, channelsOf(state)) });
+  async (_input, state) => {
+    const channels = channelsOf(state);
+    const rendered = renderTemplate(params.template, channels);
+    const update: Record<string, unknown> = { [params.into]: rendered };
+    if (params.capsule !== undefined) {
+      update[params.capsule.into] = buildRetrievalCapsule(params.capsule, channels, rendered);
+    }
+    return update;
+  };
 
 // --- jsonValidator -----------------------------------------------------------
 

@@ -270,17 +270,144 @@ fn now_millis_string() -> String {
 
 // --- promptBuilder -----------------------------------------------------------
 
-/// `promptBuilder { template, into }` — render `{{var}}` placeholders from the
-/// channels into the `into` channel.
+/// `promptBuilder { template, into, capsule? }` — render `{{var}}` placeholders
+/// from the channels into the `into` channel, and (ADR 0044 D3, adriane#578)
+/// optionally assemble a `RetrievalCapsule` capturing the exact set that
+/// influenced the model: this is the ONE node that knows what text was
+/// actually templated, so it is the right place to hash it.
+///
+/// `capsule.chunksFrom`/`queryFrom` are required, `discardedFrom` is optional
+/// (defaults to none) — these three params are not literally named in the
+/// ADR's D3 sketch, which only sketched the OUTPUT shape; filled in here
+/// because a capsule-assembly node needs to be told explicitly which
+/// upstream channel holds the query and which channels hold this pipeline's
+/// discarded candidates (they can be scattered across several stages — D2's
+/// `{into}Discarded` channels are stage-local, not a single sibling of
+/// `chunksFrom`).
+struct CapsuleConfig {
+    into: String,
+    chunks_from: String,
+    query_from: String,
+    discarded_from: Vec<String>,
+}
+
 fn build_prompt_builder(params: &Value) -> Result<NodeHandler, ComponentError> {
     let kind = "promptBuilder";
     let template = require_string(kind, params, "template")?;
     let into = require_string(kind, params, "into")?;
+    let capsule = match params.get("capsule") {
+        None | Some(Value::Null) => None,
+        Some(c) => Some(CapsuleConfig {
+            into: require_string(kind, c, "into")?,
+            chunks_from: require_string(kind, c, "chunksFrom")?,
+            query_from: require_string(kind, c, "queryFrom")?,
+            discarded_from: optional_string_array(kind, c, "discardedFrom")?.unwrap_or_default(),
+        }),
+    };
 
     Ok(sync_handler(move |state: GraphState| {
         let rendered = render_template(&template, &state.channels);
-        NodeOutput::update(single(&into, Value::String(rendered)))
+        let mut update = single(&into, Value::String(rendered.clone()));
+        if let Some(cfg) = &capsule {
+            update.insert(
+                cfg.into.clone(),
+                build_retrieval_capsule(cfg, &state.channels, &rendered),
+            );
+        }
+        NodeOutput::update(update)
     }))
+}
+
+/// Read an optional array-of-strings param (absent or `null` -> `None`).
+fn optional_string_array(
+    kind: &str,
+    params: &Value,
+    key: &str,
+) -> Result<Option<Vec<String>>, ComponentError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                match item.as_str() {
+                    Some(s) => out.push(s.to_string()),
+                    None => {
+                        return Err(ComponentError::InvalidParam {
+                            kind: kind.to_string(),
+                            param: key.to_string(),
+                            reason: format!("entry {i} is not a string"),
+                        })
+                    }
+                }
+            }
+            Ok(Some(out))
+        }
+        Some(_) => Err(ComponentError::InvalidParam {
+            kind: kind.to_string(),
+            param: key.to_string(),
+            reason: "expected an array of strings".to_string(),
+        }),
+    }
+}
+
+/// Assemble the `RetrievalCapsule` (ADR 0044 D3): `order`/`chunks` from the surviving
+/// `chunksFrom` array (id + full provenance chain per chunk, D1), `discarded` concatenated
+/// from every `discardedFrom` channel (D2's per-stage discard records), and `renderedHash`/
+/// `queryHash` — sha256 over the EXACT rendered prompt text and the query text, respectively,
+/// not over the raw channel values (the point is "did this exact text reach the model").
+fn build_retrieval_capsule(
+    cfg: &CapsuleConfig,
+    channels: &BTreeMap<String, Value>,
+    rendered: &str,
+) -> Value {
+    let chunks_arr = match channels.get(&cfg.chunks_from) {
+        Some(Value::Array(items)) => items.clone(),
+        _ => Vec::new(),
+    };
+    let order: Vec<Value> = chunks_arr
+        .iter()
+        .map(|item| item.get("id").cloned().unwrap_or(Value::Null))
+        .collect();
+    let chunks: Vec<Value> = chunks_arr
+        .iter()
+        .map(|item| {
+            json!({
+                "id": item.get("id").cloned().unwrap_or(Value::Null),
+                "provenance": item.get("provenance").cloned().unwrap_or(Value::Array(Vec::new()))
+            })
+        })
+        .collect();
+
+    let mut discarded: Vec<Value> = Vec::new();
+    for name in &cfg.discarded_from {
+        if let Some(Value::Array(items)) = channels.get(name) {
+            discarded.extend(items.iter().cloned());
+        }
+    }
+
+    let query_text = channels
+        .get(&cfg.query_from)
+        .map(value_to_text)
+        .unwrap_or_default();
+
+    json!({
+        "order": order,
+        "chunks": chunks,
+        "discarded": discarded,
+        "renderedHash": sha256_hex(rendered),
+        "queryHash": sha256_hex(&query_text)
+    })
+}
+
+fn sha256_hex(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Replace every `{{ name }}` placeholder with the corresponding channel value
@@ -2949,6 +3076,131 @@ mod tests {
             out.update.get("p"),
             Some(&Value::String("[] count=3".to_string()))
         );
+    }
+
+    #[test]
+    fn prompt_builder_assembles_a_retrieval_capsule_when_configured() {
+        // ADR 0044 D3 (adriane#578): the exact set that influenced the model, captured at the
+        // node that actually templates the prompt.
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "promptBuilder",
+                &json!({
+                    "template": "Facts:\n{{reranked}}\n\nQuestion: {{question}}",
+                    "into": "prompt",
+                    "capsule": {
+                        "into": "capsule",
+                        "chunksFrom": "reranked",
+                        "queryFrom": "question",
+                        "discardedFrom": ["fusedDiscarded"]
+                    }
+                }),
+            )
+            .unwrap();
+        let out = run(
+            &handler,
+            channels(&[
+                ("question", json!("what is cat")),
+                (
+                    "reranked",
+                    json!([
+                        { "id": "d1", "content": "cat facts", "score": 0.9,
+                          "provenance": [{ "stage": "rerank", "algorithm": "cross-encoder", "algorithmVersion": null, "score": 0.9 }] }
+                    ]),
+                ),
+                (
+                    "fusedDiscarded",
+                    json!([
+                        { "id": "d2", "content": "unrelated", "score": 0.1,
+                          "provenance": [{ "stage": "rrf", "algorithm": "rrf", "algorithmVersion": "k=60", "score": 0.1 }],
+                          "discardedAt": "1700000000000", "reason": "rrf_rank_below_k" }
+                    ]),
+                ),
+            ]),
+        );
+
+        let prompt = out.update.get("prompt").and_then(Value::as_str).unwrap();
+        assert!(prompt.starts_with("Facts:\n"));
+        assert!(prompt.contains("cat facts"));
+        assert!(prompt.ends_with("Question: what is cat"));
+
+        let capsule = out.update.get("capsule").unwrap();
+        assert_eq!(capsule.get("order").unwrap(), &json!(["d1"]));
+        let chunks = capsule.get("chunks").and_then(Value::as_array).unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].get("id").unwrap(), "d1");
+        assert_eq!(
+            chunks[0]
+                .get("provenance")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            1
+        );
+        let discarded = capsule.get("discarded").and_then(Value::as_array).unwrap();
+        assert_eq!(discarded.len(), 1);
+        assert_eq!(discarded[0].get("id").unwrap(), "d2");
+        assert_eq!(discarded[0].get("reason").unwrap(), "rrf_rank_below_k");
+        // Both hashes are non-empty hex strings, and differ (different inputs).
+        let rendered_hash = capsule.get("renderedHash").and_then(Value::as_str).unwrap();
+        let query_hash = capsule.get("queryHash").and_then(Value::as_str).unwrap();
+        assert_eq!(rendered_hash.len(), 64);
+        assert_eq!(query_hash.len(), 64);
+        assert_ne!(rendered_hash, query_hash);
+    }
+
+    #[test]
+    fn prompt_builder_without_capsule_param_writes_only_the_rendered_prompt() {
+        // No `capsule` param -> unchanged behavior, no extra channel written.
+        let handler = ComponentRegistry::new()
+            .build_handler(
+                "promptBuilder",
+                &json!({ "template": "hi {{name}}", "into": "prompt" }),
+            )
+            .unwrap();
+        let out = run(&handler, channels(&[("name", json!("Ada"))]));
+        assert_eq!(out.update.len(), 1);
+        assert!(out.update.contains_key("prompt"));
+    }
+
+    #[test]
+    fn prompt_builder_capsule_hash_changes_with_the_rendered_text() {
+        // Proves renderedHash is over the ACTUAL interpolated output, not a static/raw value.
+        let spec = json!({
+            "template": "hi {{name}}",
+            "into": "prompt",
+            "capsule": { "into": "capsule", "chunksFrom": "chunks", "queryFrom": "q" }
+        });
+        let registry = ComponentRegistry::new();
+        let a = run(
+            &registry.build_handler("promptBuilder", &spec).unwrap(),
+            channels(&[
+                ("name", json!("Ada")),
+                ("q", json!("x")),
+                ("chunks", json!([])),
+            ]),
+        );
+        let b = run(
+            &registry.build_handler("promptBuilder", &spec).unwrap(),
+            channels(&[
+                ("name", json!("Bob")),
+                ("q", json!("x")),
+                ("chunks", json!([])),
+            ]),
+        );
+        let hash_a = a
+            .update
+            .get("capsule")
+            .and_then(|c| c.get("renderedHash"))
+            .and_then(Value::as_str)
+            .unwrap();
+        let hash_b = b
+            .update
+            .get("capsule")
+            .and_then(|c| c.get("renderedHash"))
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_ne!(hash_a, hash_b);
     }
 
     // --- jsonValidator -------------------------------------------------------
