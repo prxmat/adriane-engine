@@ -1137,15 +1137,30 @@ const bm25RetrieverHandler =
     });
     scored.sort((a, b2) => (b2.score - a.score === 0 ? a.index - b2.index : b2.score - a.score));
 
-    const results = scored.slice(0, k).map(({ doc, score }) => ({
+    // ADR 0044 D2 (adriane#578): everything past `k` used to be dropped with zero trace — split
+    // instead of slicing-and-discarding, so the loser half survives on `{into}Discarded`.
+    const discardedAt = String(Date.now());
+    const provenanceStep = (score: number): ProvenanceStep => ({
+      stage: "bm25",
+      algorithm: "bm25",
+      algorithmVersion: `k1=${k1},b=${b}`,
+      score
+    });
+    const kept = scored.slice(0, k).map(({ doc, score }) => ({
       id: doc.id,
       content: doc.content,
       score,
-      provenance: [
-        { stage: "bm25", algorithm: "bm25", algorithmVersion: `k1=${k1},b=${b}`, score }
-      ] satisfies ProvenanceStep[]
+      provenance: [provenanceStep(score)] satisfies ProvenanceStep[]
     }));
-    return { [params.into]: results };
+    const discarded = scored.slice(k).map(({ doc, score }) => ({
+      id: doc.id,
+      content: doc.content,
+      score,
+      provenance: [provenanceStep(score)] satisfies ProvenanceStep[],
+      discardedAt,
+      reason: "bm25_rank_below_k"
+    }));
+    return { [params.into]: kept, [`${params.into}Discarded`]: discarded };
   };
 
 // --- keywordRetriever --------------------------------------------------------
@@ -1444,17 +1459,25 @@ const mergeRankerHandler =
     const merged = [...scores.entries()]
       .map(([id, score]) => ({ id, score, order: firstSeen.get(id) ?? 0 }))
       .sort((a, b) => (b.score - a.score === 0 ? a.order - b.order : b.score - a.score));
-    const limited = params.k === undefined ? merged : merged.slice(0, params.k);
+    // ADR 0044 D2 (adriane#578): RRF losers past `k` used to be dropped with zero trace — split
+    // instead of slicing, so they survive on `{into}Discarded`.
+    const discardedAt = String(Date.now());
+    const splitAt = params.k === undefined ? merged.length : params.k;
+    const kept = merged.slice(0, splitAt);
+    const discarded = merged.slice(splitAt);
 
-    const results = limited.map(({ id, score }) => {
+    const buildItem = (id: string, score: number, extra: boolean) => {
       const item = representative.get(id);
       const step: ProvenanceStep = { stage: "rrf", algorithm: "rrf", algorithmVersion: `k=${rrfK}`, score };
       const provenance = [...(provenanceById.get(id) ?? []), step];
-      return typeof item === "object" && item !== null && !Array.isArray(item)
-        ? { ...item, score, provenance }
-        : item;
-    });
-    return { [params.into]: results };
+      if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
+      return extra
+        ? { ...item, score, provenance, discardedAt, reason: "rrf_rank_below_k" }
+        : { ...item, score, provenance };
+    };
+    const results = kept.map(({ id, score }) => buildItem(id, score, false));
+    const discardedResults = discarded.map(({ id, score }) => buildItem(id, score, true));
+    return { [params.into]: results, [`${params.into}Discarded`]: discardedResults };
   };
 
 // --- evaluator ---------------------------------------------------------------
