@@ -23,6 +23,70 @@ describe("@adriane-ai/graph-sdk — components (TS fallback handlers)", () => {
     expect((result.channels as Record<string, string>).prompt).toBe("Hello Ada, you are admin.");
   });
 
+  it("promptBuilder assembles a RetrievalCapsule when configured (ADR 0044 D3)", async () => {
+    const app = createGraph({ name: "prompt-capsule-ts" })
+      .channel("question", { type: "string", default: "" })
+      .channel("reranked", { type: "json", default: [] as unknown[] })
+      .channel("fusedDiscarded", { type: "json", default: [] as unknown[] })
+      .channel("prompt", { type: "string", default: "" })
+      .channel("capsule", { type: "json", default: null })
+      .component(
+        "build",
+        components.promptBuilder({
+          template: "Facts:\n{{reranked}}\n\nQuestion: {{question}}",
+          into: "prompt",
+          capsule: { into: "capsule", chunksFrom: "reranked", queryFrom: "question", discardedFrom: ["fusedDiscarded"] }
+        })
+      )
+      .compile();
+
+    const result = await app.run({
+      question: "what is cat",
+      reranked: [
+        {
+          id: "d1",
+          content: "cat facts",
+          score: 0.9,
+          provenance: [{ stage: "rerank", algorithm: "cross-encoder", algorithmVersion: null, score: 0.9 }]
+        }
+      ],
+      fusedDiscarded: [
+        {
+          id: "d2",
+          content: "unrelated",
+          score: 0.1,
+          provenance: [{ stage: "rrf", algorithm: "rrf", algorithmVersion: "k=60", score: 0.1 }],
+          discardedAt: "1700000000000",
+          reason: "rrf_rank_below_k"
+        }
+      ]
+    });
+
+    const channels = result.channels as Record<string, unknown>;
+    const prompt = channels.prompt as string;
+    expect(prompt.startsWith("Facts:\n")).toBe(true);
+    expect(prompt.includes("cat facts")).toBe(true);
+    expect(prompt.endsWith("Question: what is cat")).toBe(true);
+
+    const capsule = channels.capsule as {
+      order: string[];
+      chunks: Array<{ id: string; provenance: unknown[] }>;
+      discarded: Array<{ id: string; reason: string }>;
+      renderedHash: string;
+      queryHash: string;
+    };
+    expect(capsule.order).toEqual(["d1"]);
+    expect(capsule.chunks).toHaveLength(1);
+    expect(capsule.chunks[0]!.id).toBe("d1");
+    expect(capsule.chunks[0]!.provenance).toHaveLength(1);
+    expect(capsule.discarded).toHaveLength(1);
+    expect(capsule.discarded[0]!.id).toBe("d2");
+    expect(capsule.discarded[0]!.reason).toBe("rrf_rank_below_k");
+    expect(capsule.renderedHash).toHaveLength(64);
+    expect(capsule.queryHash).toHaveLength(64);
+    expect(capsule.renderedHash).not.toBe(capsule.queryHash);
+  });
+
   it("jsonValidator reports missing keys and type mismatch", async () => {
     const app = createGraph({ name: "validate-ts" })
       .channel("payload", { type: "json" })
